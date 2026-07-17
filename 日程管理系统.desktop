@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=日程管理
+Comment=TackList Schedule Management System
+Exec=bash -c 'cd "$(dirname "%k")" && ./tacklist.sh open'
+Icon=accessories-text-editor
+Terminal=false
+Categories=Office;
+StartupNotify=false
+SingleMainWindow=true

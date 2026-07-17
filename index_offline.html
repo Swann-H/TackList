@@ -1,0 +1,2915 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日程管理</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <script>window._WEB_VERSION = 'offline';</script>
+    <script src="offline_assets/tailwindcss.js"></script>
+    <link rel="stylesheet" href="offline_assets/css/all.min.css">
+    <style>
+        /* 番茄倒计时专用字体 */
+        @font-face {
+            font-family: 'Oswald';
+            font-style: normal;
+            font-weight: 700;
+            src: url('/offline_assets/fonts/Oswald-700-latin.woff2') format('woff2');
+        }
+        @font-face {
+            font-family: 'Barlow Condensed';
+            font-style: normal;
+            font-weight: 700;
+            src: url('/offline_assets/fonts/BarlowCondensed-700-latin.woff2') format('woff2');
+        }
+        
+        .pomodoro-timer-font {
+            font-family: 'DIN Alternate', 'Barlow Condensed', 'Oswald', sans-serif;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        * {
+            font-family: var(--app-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol");
+        }
+
+        :root {
+            --bg-primary: #f9fafb;
+            --bg-primary-rgb: 249,250,251;
+            --bg-secondary: #ffffff;
+            --bg-secondary-rgb: 255,255,255;
+            --bg-tertiary: #f3f4f6;
+            --bg-tertiary-rgb: 243,244,246;
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --text-muted: #78716c;
+            --border-color: #e5e7eb;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --accent-secondary: #60a5fa;
+            --accent-bg: #eff6ff;
+            --accent-bg-strong: #dbeafe;
+            --accent-text-dark: #2563eb;
+            --accent-light: #60a5fa;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --view-bg-default: #f9fafb;
+            --view-bg-focus: #f4f7fc;
+            --view-bg-break: #f2fbf5;
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #111827;
+            --bg-primary-rgb: 17,24,39;
+            --bg-secondary: #1f2937;
+            --bg-secondary-rgb: 31,41,55;
+            --bg-tertiary: #374151;
+            --bg-tertiary-rgb: 55,65,81;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --text-muted: #a8a29e;
+            --border-color: #374151;
+            --accent-color: #60a5fa;
+            --accent-hover: #3b82f6;
+            --accent-secondary: #93c5fd;
+            --accent-bg: rgba(59,130,246,0.15);
+            --accent-bg-strong: rgba(59,130,246,0.25);
+            --accent-text-dark: #93c5fd;
+            --accent-light: #93c5fd;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4);
+            --view-bg-default: #111827;
+            --view-bg-focus: #0f172a;
+            --view-bg-break: #0b1f14;
+        }
+
+        /* 主题色全局覆盖：让常用 Tailwind blue 类跟随 --accent-* 变量 */
+        /* 用 !important 确保优先级高于 Tailwind CDN 运行时注入的样式 */
+        /* 背景 */
+        .bg-blue-500 { background-color: var(--accent-color) !important; }
+        .bg-blue-600 { background-color: var(--accent-hover) !important; }
+        .hover\:bg-blue-600:hover { background-color: var(--accent-hover) !important; }
+        .hover\:bg-blue-50:hover { background-color: var(--accent-bg) !important; }
+        .bg-blue-50 { background-color: var(--accent-bg) !important; }
+        .bg-blue-100 { background-color: var(--accent-bg-strong) !important; }
+        /* 文字 */
+        .text-blue-500 { color: var(--accent-color) !important; }
+        .text-blue-600 { color: var(--accent-text-dark) !important; }
+        .text-blue-700 { color: var(--accent-text-dark) !important; }
+        .text-blue-400 { color: var(--accent-light) !important; }
+        .hover\:text-blue-500:hover { color: var(--accent-color) !important; }
+        .hover\:text-blue-600:hover { color: var(--accent-hover) !important; }
+        /* 边框 */
+        .border-blue-500 { border-color: var(--accent-color) !important; }
+        .border-blue-600 { border-color: var(--accent-hover) !important; }
+        .border-blue-300 { border-color: var(--accent-light) !important; }
+        .border-blue-400 { border-color: var(--accent-secondary) !important; }
+        .hover\:border-blue-600:hover { border-color: var(--accent-hover) !important; }
+        .hover\:border-blue-300:hover { border-color: var(--accent-secondary) !important; }
+        /* ring（环形边框，用于今天日期高亮等） */
+        .ring-blue-500 { --tw-ring-color: var(--accent-color) !important; }
+        .ring-blue-400 { --tw-ring-color: var(--accent-secondary) !important; }
+        /* 焦点态 */
+        .focus\:border-blue-500:focus { border-color: var(--accent-color) !important; }
+        .focus\:ring-blue-500:focus { --tw-ring-color: var(--accent-color) !important; }
+        /* 开关（peer-checked 机制） */
+        .peer:checked ~ .peer-checked\:bg-blue-500 { background-color: var(--accent-color) !important; }
+        .peer:checked ~ .peer-checked\:bg-blue-600 { background-color: var(--accent-hover) !important; }
+        /* 深色模式下的 blue 覆盖 */
+        [data-theme="dark"] .dark\:text-blue-300 { color: var(--accent-secondary) !important; }
+        [data-theme="dark"] .dark\:text-blue-400 { color: var(--accent-light) !important; }
+        [data-theme="dark"] .dark\:border-blue-300 { border-color: var(--accent-secondary) !important; }
+        [data-theme="dark"] .dark\:border-blue-400 { border-color: var(--accent-secondary) !important; }
+        [data-theme="dark"] .dark\:bg-blue-900\/20 { background-color: var(--accent-bg) !important; }
+        [data-theme="dark"] .dark\:bg-blue-900\/30 { background-color: var(--accent-bg-strong) !important; }
+        [data-theme="dark"] .dark\:bg-blue-900\/40 { background-color: var(--accent-bg-strong) !important; }
+        [data-theme="dark"] .dark\:hover\:bg-blue-900\/20:hover { background-color: var(--accent-bg) !important; }
+        [data-theme="dark"] .dark\:hover\:bg-blue-900\/30:hover { background-color: var(--accent-bg-strong) !important; }
+        [data-theme="dark"] .dark\:hover\:text-blue-400:hover { color: var(--accent-light) !important; }
+        [data-theme="dark"] .dark\:hover\:border-blue-300:hover { border-color: var(--accent-secondary) !important; }
+        .dark\:hover\:border-blue-300:hover { border-color: var(--accent-secondary) !important; }
+        /* 渐变（任务详情进度条等） */
+        .from-blue-500 { --tw-gradient-from: var(--accent-color) !important; --tw-gradient-to: rgb(255 255 255 / 0); --tw-gradient-stops: var(--accent-color), var(--accent-secondary) !important; }
+
+        /* 例外：四象限视图的分类颜色固定为默认主题色，不跟随动态主题配色 */
+        #quadrants-container .bg-blue-50 { background-color: #eff6ff !important; }
+        #quadrants-container .border-blue-300 { border-color: #93c5fd !important; }
+        #quadrants-container .text-blue-600 { color: #2563eb !important; }
+        [data-theme="dark"] #quadrants-container .bg-blue-50 { background-color: rgba(30,58,138,0.3) !important; }
+        [data-theme="dark"] #quadrants-container .border-blue-300 { border-color: #1d4ed8 !important; }
+        [data-theme="dark"] #quadrants-container .text-blue-600 { color: #60a5fa !important; }
+        [data-theme="dark"] #quadrants-container .dark\:bg-blue-900\/30 { background-color: rgba(30,58,138,0.3) !important; }
+        [data-theme="dark"] #quadrants-container .dark\:border-blue-600 { border-color: #1d4ed8 !important; }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 500ms ease-in-out, color 500ms ease-in-out;
+        }
+
+        #main-content {
+            background-color: var(--view-bg-default);
+            transition: background-color 500ms ease-in-out;
+        }
+        #main-content.view-focus {
+            background-color: var(--view-bg-focus);
+        }
+        #main-content.view-break {
+            background-color: var(--view-bg-break);
+        }
+
+        /* 背景图片模式：所有区域透明以显示背景图片 */
+        body.has-bg-image {
+            background-color: transparent !important;
+        }
+        body.has-bg-image #app-container {
+            background-color: transparent !important;
+        }
+        body.has-bg-image #sidebar {
+            background-color: transparent !important;
+        }
+        body.has-bg-image #main-content,
+        body.has-bg-image #main-content.view-focus,
+        body.has-bg-image #main-content.view-break {
+            background-color: transparent !important;
+        }
+
+        /* 背景图片模式：毛玻璃效果 */
+        body.has-bg-image .bg-theme-secondary {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.55) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        /* 例外：设置面板内部容器不透明，以增强可读性（外层遮罩仍保留毛玻璃） */
+        body.has-bg-image #settings-modal .bg-theme-secondary,
+        body.has-bg-image #settings-modal.bg-theme-secondary {
+            background-color: var(--bg-secondary, #ffffff) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        body.has-bg-image #settings-modal .bg-theme-tertiary {
+            background-color: var(--bg-tertiary, #f3f4f6) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        /* 背景图片模式：主内容区和任务详情栏去掉底色，仅保留毛玻璃 */
+        body.has-bg-image #main-content .bg-theme-secondary,
+        body.has-bg-image #task-detail-panel .bg-theme-secondary,
+        body.has-bg-image #task-detail-panel.bg-theme-secondary {
+            background-color: transparent !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .bg-theme-tertiary {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
+        body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
+        body.has-bg-image #sidebar-all-tasks-btn.bg-theme-tertiary,
+        body.has-bg-image #sidebar-next7days-btn.bg-theme-tertiary,
+        body.has-bg-image #sidebar-summary-btn.bg-theme-tertiary {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .view-btn-active {
+            background-color: rgba(59, 130, 246, 0.35) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            color: white !important;
+        }
+        body.has-bg-image #task-detail-panel {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.55) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        /* 任务详情面板时间选择下拉框：提高不透明度增强文字可读性 */
+        body.has-bg-image #task-detail-panel #detail-task-date-picker,
+        body.has-bg-image #task-detail-panel #detail-task-time-picker,
+        body.has-bg-image #task-detail-panel #detail-task-end-date-picker,
+        body.has-bg-image #task-detail-panel #detail-task-end-time-picker,
+        body.has-bg-image #task-detail-panel #detail-reminder-picker,
+        body.has-bg-image #task-detail-panel #detail-repeat-picker {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.85) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .week-header-sticky {
+            background-color: rgba(var(--bg-primary-rgb, 255,255,255), 0.55) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        .week-header-sticky {
+            background: var(--bg-primary, white);
+        }
+        body.has-bg-image .calendar-day {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.45) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .quadrant-card {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.45) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .schedule-task-card {
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .task-list-item {
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .summary-view-toggle-active {
+            background-color: rgba(59, 130, 246, 0.35) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            color: white !important;
+        }
+        /* 下拉选择器选项：跟随主题色，避免深色模式下白底白字 */
+        select option {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        /* 摘要左栏：今日完成率——彗星脉冲（JS rAF 驱动，长度动态变化） */
+        .pulse-comet {
+            opacity: 0;
+        }
+        /* 100% 完成时整环呼吸发光 */
+        @keyframes ringCompleteBreath {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
+        }
+        .ring-complete-glow .progress-ring-fill {
+            animation: ringCompleteBreath 3s ease-in-out infinite;
+        }
+        /* 周视图周末背景：深色模式统一配色 */
+        [data-theme="dark"] .week-weekend-bg {
+            background-color: rgba(156, 163, 175, 0.08) !important;
+        }
+        /* 深色模式Toast底色：使用bg-theme-tertiary配色，与任务列表分组底色一致 */
+        [data-theme="dark"] .quest-toast {
+            background-color: #374151 !important;
+        }
+        [data-theme="dark"] .quest-toast:hover {
+            background-color: #4b5563 !important;
+        }
+        /* 周视图周末背景：有背景图片时浅色模式也统一 */
+        body.has-bg-image .week-weekend-bg {
+            background-color: rgba(156, 163, 175, 0.08) !important;
+        }
+        body.has-bg-image .week-task-item {
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image .month-task-item {
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+
+        .schedule-task-card {
+            position: relative;
+        }
+
+        .schedule-task-item:hover .schedule-focus-btn {
+            opacity: 1;
+        }
+
+        #background-image {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            transition: opacity 0.3s ease;
+        }
+
+        /* 深色主题下背景图片不再额外降低亮度，由背景透明度控制 */
+
+        .mobile-menu-btn {
+            display: none;
+        }
+
+        .sidebar {
+            height: 100vh;
+            min-height: 100vh;
+            max-height: 100vh;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
+        }
+
+        .sidebar-bottom-buttons {
+            padding: 1rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+
+        .sidebar-bottom-buttons button {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .sidebar-action-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+        }
+
+        .sidebar-action-btn {
+            width: 2.25rem;
+            height: 2.25rem;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            background: transparent;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .sidebar-action-btn:hover {
+            color: white;
+        }
+
+        /* 任务详情栏标签芯片：删除按钮叠加在右上角，胶囊间预留空隙避免布局位移 */
+        .detail-tag-chip { position: relative; margin-right: 0.5rem; }
+        .detail-tag-chip .tag-remove-btn {
+            position: absolute;
+            top: -0.25rem;
+            right: -0.375rem;
+            visibility: hidden;
+        }
+        .detail-tag-chip:hover .tag-remove-btn { visibility: visible; }
+
+        /* 标签选择器药丸按钮 */
+        .detail-tag-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.625rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            border: 1.5px solid var(--tag-color);
+            color: var(--tag-color);
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .detail-tag-pill:hover {
+            background-color: var(--tag-color);
+            color: white;
+        }
+        .detail-tag-pill-selected {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.625rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            border: 1.5px solid var(--tag-color);
+            background-color: var(--tag-color);
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .detail-tag-pill-selected:hover { opacity: 0.85; }
+        .detail-tag-pill-disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .holiday-countdown-box {
+            border: 1.5px dashed var(--border-color);
+            border-radius: 0.75rem;
+            padding: 0.75rem 0.5rem;
+            text-align: center;
+            position: relative;
+            background: transparent;
+        }
+
+        .holiday-countdown-box::before,
+        .holiday-countdown-box::after {
+            content: '';
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 1.5px solid var(--border-color);
+            background: var(--bg-primary);
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .holiday-countdown-box::before {
+            left: -5px;
+        }
+
+        .holiday-countdown-box::after {
+            right: -5px;
+        }
+
+        .holiday-countdown-label {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.05em;
+        }
+
+        .holiday-countdown-number {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.1;
+            color: var(--text-primary);
+        }
+
+        .holiday-countdown-unit {
+            font-family: sans-serif;
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            margin-left: 1px;
+        }
+
+        .holiday-countdown-date {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: -260px;
+                width: 260px;
+                height: 100vh;
+                z-index: 50;
+                transition: left 0.3s ease;
+            }
+
+            .sidebar.open {
+                left: 0;
+            }
+
+            .main-content {
+                margin-left: 0 !important;
+            }
+
+            .mobile-menu-btn {
+                display: block !important;
+            }
+        }
+
+        .card-hover {
+            transition: all 0.2s ease;
+        }
+
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .dragging {
+            opacity: 0.5;
+            transform: scale(1.02);
+        }
+
+        .drag-over {
+            border: 2px dashed var(--accent-color);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .task-complete {
+            opacity: 0.55;
+        }
+
+        .pomodoro-timer {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+        }
+
+        .fade-in {
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        @keyframes fadeOut {
+            from { opacity: 1; transform: scale(1); }
+            to { opacity: 0; transform: scale(0.95); }
+        }
+
+        .slide-up {
+            animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .quest-toast {
+            pointer-events: auto;
+            clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+            animation: questPopIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+            overflow: hidden;
+            position: relative;
+        }
+
+        @keyframes questPopIn {
+            0% { opacity: 0; transform: translateY(30px) scale(0.85); }
+            50% { transform: translateY(-5px) scale(1.02); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .quest-toast-out {
+            animation: questOut 0.4s cubic-bezier(0.55, 0.085, 0.68, 0.53) forwards;
+        }
+
+        @keyframes questOut {
+            0% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+            100% { opacity: 0; transform: translateY(-20px) scale(0.9); filter: blur(4px); }
+        }
+
+        @keyframes progressShrink {
+            from { width: 100%; }
+            to { width: 0%; }
+        }
+
+        .quest-toast::after {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 30%; height: 100%;
+            background: linear-gradient(to right, transparent, rgba(255,255,255,0.18), transparent);
+            transform: skewX(-20deg);
+            animation: shine 2.5s infinite;
+            pointer-events: none;
+        }
+
+        @keyframes shine {
+            0% { left: -100%; }
+            20% { left: 200%; }
+            100% { left: 200%; }
+        }
+
+        .tag-badge {
+            font-size: 0.75rem;
+            padding: 0.125rem 0.5rem;
+            border-radius: 9999px;
+        }
+
+        .list-color-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .quadrant-card {
+            min-height: 200px;
+        }
+
+        .task-name-input {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .task-details-input {
+            font-size: 1rem;
+        }
+
+        .task-inline-edit {
+            transition: all 0.2s ease;
+        }
+
+        .task-inline-edit:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .delete-confirm-btn {
+            animation: fadeIn 0.2s ease;
+        }
+
+        .calendar-day {
+            transition: all 0.2s ease;
+        }
+
+        .calendar-day:hover:not(.disabled) {
+            background: var(--bg-tertiary);
+        }
+
+        .calendar-day.selected {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        .calendar-day.today {
+            border: 2px solid var(--accent-color);
+        }
+
+        .drop-zone-active {
+            background: rgba(59, 130, 246, 0.1);
+            border: 2px dashed var(--accent-color);
+        }
+
+        .bg-theme-primary {
+            background-color: var(--bg-primary);
+        }
+
+        .bg-theme-secondary {
+            background-color: var(--bg-secondary);
+        }
+
+        .bg-theme-tertiary {
+            background-color: var(--bg-tertiary);
+        }
+
+        .text-theme-primary {
+            color: var(--text-primary);
+        }
+
+        .text-theme-secondary {
+            color: var(--text-secondary);
+        }
+
+        .text-theme-muted {
+            color: var(--text-muted);
+        }
+
+        .border-theme {
+            border-color: var(--border-color);
+        }
+
+        .shadow-theme {
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* 自定义滚动条样式 */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: transparent transparent;
+        }
+        
+        *::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        *::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        *::-webkit-scrollbar-thumb {
+            background-color: transparent;
+            border-radius: 4px;
+        }
+        
+        *::-webkit-scrollbar-thumb:hover {
+            background-color: var(--text-muted);
+        }
+        
+        .scrollbar-visible {
+            scrollbar-color: var(--border-color) transparent;
+        }
+        
+        .scrollbar-visible::-webkit-scrollbar-thumb {
+            background-color: var(--border-color);
+        }
+
+        /* ==================== 方案1：背景动画改造 ==================== */
+        /* 原 background-position 动画每帧触发 paint（无法 GPU 合成）。
+           改为 ::before 伪元素持有大尺寸渐变 + transform 动画，走 GPU 合成层，零 paint。 */
+        .pomodoro-focus-bg,
+        .pomodoro-break-bg,
+        .pomodoro-longbreak-bg {
+            position: relative;
+            overflow: hidden;
+            background: #0A1628; /* 兜底色，避免动画启动前空白 */
+            isolation: isolate;  /* 创建 stacking context，确保 ::before z-index: -1 在本元素内部 */
+        }
+
+        .pomodoro-break-bg,
+        .pomodoro-longbreak-bg {
+            background: #184A36;
+        }
+
+        /* ::before 伪元素：放大 2 倍以容纳 transform 位移，渐变在元素内部"流动" */
+        .pomodoro-focus-bg::before,
+        .pomodoro-break-bg::before,
+        .pomodoro-longbreak-bg::before {
+            content: '';
+            position: absolute;
+            inset: -50%;
+            background-size: 100% 100%;
+            will-change: transform;
+            z-index: -1;                  /* 在所有内容之下，避免覆盖按钮 */
+            pointer-events: none;
+        }
+
+        .pomodoro-focus-bg::before {
+            background-image: linear-gradient(135deg, #0A1628 0%, #122543 14%, #1A3562 28%, #234780 42%, #2F5A9C 57%, #3D6DB5 71%, #4B7EC9 85%, #3D6DB5 100%);
+            animation: pomodoro-bg-flow 25s ease-in-out infinite alternate;
+        }
+
+        .pomodoro-break-bg::before {
+            background-image: linear-gradient(135deg, #184A36 0%, #1F5A43 14%, #266950 28%, #2D795C 42%, #348869 57%, #3C9876 71%, #40A37F 85%, #3C9876 100%);
+            animation: pomodoro-bg-flow 15s ease-in-out infinite alternate;
+        }
+
+        /* 长休息背景 - 渐变速度更慢(30s) */
+        .pomodoro-longbreak-bg::before {
+            background-image: linear-gradient(135deg, #184A36 0%, #1F5A43 14%, #266950 28%, #2D795C 42%, #348869 57%, #3C9876 71%, #40A37F 85%, #3C9876 100%);
+            animation: pomodoro-bg-flow 30s ease-in-out infinite alternate;
+        }
+
+        /* 专注完成等待休息 - 静态绿色背景（不播放动画，等开始休息后才播放） */
+        .pomodoro-completed-break-bg {
+            background: linear-gradient(135deg, #1F5A43 0%, #266950 25%, #2D795C 50%, #348869 75%, #3C9876 100%);
+            background-size: 100% 100%;
+        }
+
+        .pomodoro-completed-longbreak-bg {
+            background: linear-gradient(135deg, #1F5A43 0%, #266950 25%, #2D795C 50%, #348869 75%, #3C9876 100%);
+            background-size: 100% 100%;
+        }
+
+        /* 统一的背景流动 keyframes：transform 走 GPU 合成层 */
+        @keyframes pomodoro-bg-flow {
+            0%   { transform: translate(-15%, -8%); }
+            100% { transform: translate(15%, 8%); }
+        }
+
+        /* ==================== 开关1：强背景流动效果（background-position 方案，视觉更明显但性能消耗大） ==================== */
+        /* body.bg-flow-strong 时覆盖 ::before 为 background-position 动画，色标实际移动 300% 元素宽度 */
+        body.bg-flow-strong .pomodoro-focus-bg::before,
+        body.bg-flow-strong .pomodoro-break-bg::before,
+        body.bg-flow-strong .pomodoro-longbreak-bg::before {
+            inset: 0;                    /* 不再放大 2 倍 */
+            background-size: 400% 400%;  /* 400% 渐变，配合 background-position 实现大幅流动 */
+            will-change: auto;
+            transform: none;             /* 移除 transform 位移 */
+        }
+        body.bg-flow-strong .pomodoro-focus-bg::before {
+            animation: pomodoro-focus-flow-strong 25s ease-in-out infinite;
+        }
+        body.bg-flow-strong .pomodoro-break-bg::before {
+            animation: pomodoro-break-flow-strong 15s ease-in-out infinite;
+        }
+        body.bg-flow-strong .pomodoro-longbreak-bg::before {
+            animation: pomodoro-break-flow-strong 30s ease-in-out infinite;
+        }
+        @keyframes pomodoro-focus-flow-strong {
+            0%   { background-position: 0% 50%; }
+            50%  { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        @keyframes pomodoro-break-flow-strong {
+            0%   { background-position: 0% 50%; }
+            50%  { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* ==================== 开关2：高级粒子动画隐藏 ==================== */
+        /* body.no-particles 时隐藏所有粒子/星云/光束/气泡/萤火虫容器，JS 也会跳过创建 */
+        body.no-particles .focus-flow-container,
+        body.no-particles .longbreak-float-container,
+        body.no-particles .shortbreak-effect-container {
+            display: none !important;
+        }
+
+        /* ==================== 番茄专注右栏 - 与左栏分离，各自独立渐变背景 ==================== */
+        /* 左右栏分离方案：右栏自带渐变背景（与左栏同步），无需 backdrop-filter，彻底消除粒子动画卡顿 */
+        #pomodoro-right-panel {
+            color: rgba(255, 255, 255, 0.88);
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+        /* 右栏背景伪元素不播放动画：左右栏伪元素尺寸不同（flex-[7] vs flex-[3]），
+           transform 百分比位移的像素量不同，且两个独立合成层无法保证帧同步，
+           导致交界处渐变颜色每帧错位，形成"线左右抖动"。右栏改为静态完整渐变即可消除。 */
+        #pomodoro-right-panel::before {
+            animation: none !important;
+            transform: none !important;
+            will-change: auto !important;
+            inset: 0 !important;
+            background-size: 100% 100% !important;
+            background-position: 50% 50% !important;
+        }
+        /* 暗色叠加层改用 ::after，避免与 .pomodoro-focus-bg::before 背景层冲突 */
+        #pomodoro-right-panel::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.18);
+            pointer-events: none;
+            z-index: 1;
+        }
+        /* 右栏内容置于 ::after 之上 */
+        #pomodoro-right-panel > * {
+            position: relative;
+            z-index: 2;
+        }
+        /* 在深色渐变背景上覆盖主题文字色，保证可读性 */
+        #pomodoro-right-panel .text-theme-primary { color: #ffffff; }
+        #pomodoro-right-panel .text-theme-secondary { color: rgba(255, 255, 255, 0.72); }
+        #pomodoro-right-panel .text-theme-muted { color: rgba(255, 255, 255, 0.5); }
+
+        /* 统计卡片 / 历史记录条目：仅半透明底色，不自带 backdrop-filter */
+        .pomodoro-glass-card {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+        .pomodoro-glass-card:hover {
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        .pomodoro-glass-item {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+        .pomodoro-glass-item:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        /* 右栏滚动条在深色渐变上使用浅色 */
+        #pomodoro-right-panel *::-webkit-scrollbar-thumb {
+            background-color: rgba(255, 255, 255, 0.18);
+        }
+        #pomodoro-right-panel *::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(255, 255, 255, 0.32);
+        }
+
+        /* 关联任务弹窗 - 选中项反色设计 (浅色模式选中变深色，深色模式选中变浅色) */
+        .pomodoro-task-selected {
+            background-color: #1f2937 !important;
+        }
+        .pomodoro-task-selected .text-theme-primary { color: #f9fafb !important; }
+        .pomodoro-task-selected .text-theme-secondary { color: #d1d5db !important; }
+        .pomodoro-task-selected .text-theme-muted { color: #a8a29e !important; }
+        [data-theme="dark"] .pomodoro-task-selected {
+            background-color: #f9fafb !important;
+        }
+        [data-theme="dark"] .pomodoro-task-selected .text-theme-primary { color: #111827 !important; }
+        [data-theme="dark"] .pomodoro-task-selected .text-theme-secondary { color: #6b7280 !important; }
+        [data-theme="dark"] .pomodoro-task-selected .text-theme-muted { color: #78716c !important; }
+
+        /* ==================== 长休息动画 (Deep Zenith) ==================== */
+        .longbreak-float-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            overflow: hidden; pointer-events: none; z-index: 0;
+            background: radial-gradient(circle at center, rgba(0,0,0,0) 0%, rgba(0,0,0,0.15) 100%);
+            contain: layout style paint;
+        }
+
+        /* 星云柔光：大面积、极度模糊的色块，缓慢交替呼吸，仿佛在深海或太空 */
+        .nebula-cloud {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.08);
+            filter: blur(50px);
+            opacity: 0;
+            will-change: transform, opacity;
+            transform: translateZ(0);
+        }
+
+        /* 空灵气泡：大而圆润，极其缓慢地上升，不带任何急促感 */
+        .zenith-orb {
+            position: absolute;
+            bottom: -10%;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.25), rgba(255,255,255,0.02));
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 0 15px rgba(255,255,255,0.08);
+            opacity: 0;
+            will-change: transform, opacity;
+            transform: translateZ(0);
+        }
+
+        /* ==================== 短休息动画样式 (灵动流光) ==================== */
+
+        /* 容器：绝对定位，置于底层，不影响鼠标交互 */
+        .shortbreak-effect-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 1;
+            animation: fadeInContainer 1s ease-in;
+            contain: layout style paint;
+        }
+
+        /* 能量脉冲背景：从中心向外扩散的微弱呼吸光 */
+        .shortbreak-ambient-pulse {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 150%;
+            height: 150%;
+            transform: translate(-50%, -50%);
+            background: radial-gradient(circle, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 60%);
+            animation: ambientPulseAnim 4s infinite alternate ease-in-out;
+        }
+
+        @keyframes ambientPulseAnim {
+            0% { transform: translate(-50%, -50%) scale(0.9); opacity: 0.5; }
+            100% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+        }
+
+        /* 流光射线：垂直向上的光束，水平交替移动 */
+        .light-ray {
+            position: absolute;
+            bottom: -10%;
+            height: 120%;
+            background: linear-gradient(to top, rgba(255,255,255,0) 0%, rgba(255,255,255,1) 50%, rgba(255,255,255,0) 100%);
+            filter: blur(15px);
+            opacity: 0;
+            transform: skewX(-15deg) translateZ(0);
+            will-change: transform, opacity;
+        }
+
+        /* 灵动萤火：S型不规则上升轨迹，伴随呼吸缩放 */
+        .zen-firefly {
+            position: absolute;
+            bottom: -5%;
+            background-color: #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 10px 2px rgba(255, 255, 255, 0.5);
+            opacity: 0;
+            will-change: transform, opacity;
+            transform: translateZ(0);
+        }
+
+        @keyframes fadeInContainer {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeOutDown {
+            from { opacity: 1; transform: translateY(0); }
+            to { opacity: 0; transform: translateY(20px); }
+        }
+
+        /* ==================== 专注心流场动画 (Deep Flow Matrix) ==================== */
+        .focus-flow-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            overflow: hidden; pointer-events: none; z-index: 0;
+            contain: layout style paint;
+        }
+
+        /* 向心粒子：从四周缓缓飘向中心，引导视线集中在计时器上 */
+        .focus-particle {
+            position: absolute;
+            background: #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 6px 1px rgba(255, 255, 255, 0.5);
+            opacity: 0;
+            will-change: transform, opacity;
+            transform: translateZ(0);
+        }
+
+        /* 暂停番茄页面所有动画（含 ::before 背景伪元素，CSS 选择器 * 不匹配伪元素，需显式列出） */
+        .pomodoro-animations-paused,
+        .pomodoro-animations-paused *,
+        .pomodoro-animations-paused .pomodoro-focus-bg::before,
+        .pomodoro-animations-paused .pomodoro-break-bg::before,
+        .pomodoro-animations-paused .pomodoro-longbreak-bg::before {
+            animation-play-state: paused !important;
+        }
+
+        /* ==================== 统一圆环发光效果 (Unified Halo) ==================== */
+        /* 去除原本生硬的drop-shadow，采用多层柔和阴影叠加，呈现高级弥散光 */
+        @keyframes pomodoro-halo-focus {
+            0%, 100% { filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.4)) drop-shadow(0 0 20px rgba(59, 130, 246, 0.3)); }
+            50% { filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.6)) drop-shadow(0 0 40px rgba(59, 130, 246, 0.6)); }
+        }
+        @keyframes pomodoro-halo-break {
+            0%, 100% { filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.4)) drop-shadow(0 0 20px rgba(52, 168, 83, 0.3)); }
+            50% { filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.6)) drop-shadow(0 0 40px rgba(52, 168, 83, 0.6)); }
+        }
+        #pomodoro-progress.running-focus {
+            animation: pomodoro-halo-focus 4s ease-in-out infinite;
+        }
+        #pomodoro-progress.running-break {
+            animation: pomodoro-halo-break 4s ease-in-out infinite;
+        }
+        
+        .answer-book-container {
+            width: 320px;
+            height: 220px;
+            margin: 0 auto;
+            position: relative;
+            perspective: 800px;
+        }
+        
+        .answer-book-page {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 50%, #fef3c7 100%);
+            border-radius: 8px;
+            border: 1px solid #e5d5a0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        
+        .answer-book-page::before {
+            content: '';
+            position: absolute;
+            left: 12px;
+            top: 0;
+            height: 100%;
+            width: 1px;
+            background: #d4c587;
+        }
+        
+        .answer-book-cover {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            transform-origin: left center;
+            z-index: 10;
+            cursor: pointer;
+            backface-visibility: hidden;
+        }
+        
+        .answer-book-cover-inner {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #d97706 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 4px 4px 12px rgba(0,0,0,0.2);
+            position: relative;
+        }
+        
+        .answer-book-cover-spine {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 12px;
+            height: 100%;
+            background: linear-gradient(to right, #92400e, #b45309);
+            border-radius: 8px 0 0 8px;
+        }
+        
+        .answer-book-cover:hover .answer-book-cover-inner {
+            box-shadow: 6px 6px 16px rgba(0,0,0,0.3);
+        }
+        
+        .answer-book-cover.flipping {
+            animation: flipBook 0.8s ease forwards;
+        }
+        
+        .answer-book-cover.closing {
+            animation: closeBook 0.6s ease forwards;
+        }
+        
+        @keyframes flipBook {
+            0% { transform: rotateY(0deg); }
+            100% { transform: rotateY(-170deg); }
+        }
+        
+        @keyframes closeBook {
+            0% { transform: rotateY(-170deg); }
+            100% { transform: rotateY(0deg); }
+        }
+        
+        .answer-book-answer {
+            animation: fadeInAnswer 0.5s ease 0.3s both;
+        }
+        
+        @keyframes fadeInAnswer {
+            0% { opacity: 0; transform: translateY(8px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+        
+        .stats-bar {
+            transition: height 0.3s ease;
+            border-radius: 4px 4px 0 0;
+        }
+        
+        .stats-heatmap-cell {
+            width: 14px;
+            height: 14px;
+            border-radius: 2px;
+            transition: transform 0.1s;
+        }
+        
+        .stats-heatmap-cell:hover {
+            transform: scale(1.5);
+            z-index: 10;
+        }
+        
+        .stats-timeline-bar {
+            height: 18px;
+            border-radius: 3px;
+            position: absolute;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        
+        .stats-timeline-bar:hover {
+            opacity: 1;
+        }
+        
+        .stats-tooltip {
+            position: absolute;
+            background: #1f2937;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            white-space: nowrap;
+            z-index: 100;
+        }
+        .task-list-item {
+            margin-bottom: 2px;
+            transition: background-color 0.15s ease;
+        }
+        .task-list-color-bar {
+            position: absolute;
+            left: 0;
+            top: -1px;
+            bottom: -1px;
+            width: 4px;
+            border-radius: 0;
+            z-index: 1;
+        }
+        .task-list-group-header:hover {
+            opacity: 0.8;
+        }
+
+        /* 隐藏时间输入框的原生时钟图标，使用自定义15分钟步进选择器替代 */
+        input[type="time"]::-webkit-calendar-picker-indicator {
+            display: none;
+            -webkit-appearance: none;
+        }
+        input[type="time"] {
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        .subtask-drop-zone {
+            height: 0;
+            transition: height 0.15s ease, background-color 0.15s ease;
+            border-radius: 4px;
+        }
+        .subtask-drop-zone.active {
+            height: 12px;
+        }
+        .subtask-drop-zone.active.drag-over {
+            height: 50px;
+            background-color: rgba(59, 130, 246, 0.15);
+            border: 2px dashed rgba(59, 130, 246, 0.5);
+        }
+        /* 开始专注按钮：默认显示描边时钟图标，hover时切换为实心填充图标 */
+        .pomodoro-focus-btn .pf-icon-outline { display: inline-block; }
+        .pomodoro-focus-btn .pf-icon-solid { display: none; }
+        .pomodoro-focus-btn:hover .pf-icon-outline { display: none; }
+        .pomodoro-focus-btn:hover .pf-icon-solid { display: inline-block; }
+
+        /* 节假日管理页面 */
+        #holiday-page { background: var(--bg-primary, #f9fafb); }
+        .holiday-group { transition: border-color 0.2s; }
+        .holiday-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; align-items: start; }
+        .holiday-col > * + * { margin-top: 0.5rem; }
+        @media (max-width: 640px) { .holiday-cols { grid-template-columns: 1fr; } }
+        /* 日期等宽对齐 */
+        .hd-seg { display: inline-block; min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; }
+        .hd-sep { display: inline-block; width: 1.2em; text-align: center; color: var(--text-secondary, #6b7280); }
+        /* ==================== 设置面板左侧快速导航 ==================== */
+        .settings-nav-item.settings-nav-active {
+            background-color: var(--accent-color, #3b82f6);
+            color: #fff;
+        }
+        .settings-nav-item.settings-nav-active:hover {
+            background-color: var(--accent-color, #3b82f6);
+            opacity: 0.9;
+        }
+        /* 滚动时目标 section 顶部留出间距，避免标题被遮挡 */
+        #settings-content-scroll > div > div[id^="settings-section-"] {
+            scroll-margin-top: 16px;
+        }
+        /* 调色板预览色条 */
+        .palette-color-bar {
+            height: 32px;
+            border-radius: 4px;
+            display: flex;
+            overflow: hidden;
+        }
+        .palette-color-bar > span {
+            flex: 1;
+        }
+        .palette-card.palette-active {
+            border-color: var(--accent-color, #3b82f6);
+            background-color: rgba(59, 130, 246, 0.08);
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div id="background-image" class="hidden"></div>
+
+    <div class="flex min-h-screen" id="app-container">
+        <aside id="sidebar" class="sidebar bg-theme-secondary border-r border-theme flex flex-col" style="width: 260px; min-height: 100vh;">
+            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-calendar-check text-blue-500"></i>
+                    <h1 class="text-xl font-bold text-theme-primary">日程管理</h1>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4">
+                <div class="space-y-2">
+                    <button onclick="filterAllTasks()" id="sidebar-all-tasks-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2">
+                        <i class="fas fa-tasks w-5"></i>
+                        <span class="sidebar-text flex-1">所有任务</span>
+                        <span class="sidebar-count w-5 text-right text-xs text-theme-muted" id="sidebar-all-tasks-count"></span>
+                    </button>
+
+                    <!-- 最近7天 -->
+                    <button onclick="filterNext7Days()" id="sidebar-next7days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2">
+                        <i class="fas fa-calendar-week w-5"></i>
+                        <span class="sidebar-text flex-1">最近7天</span>
+                        <span class="sidebar-count w-5 text-right text-xs text-theme-muted" id="sidebar-next7days-count"></span>
+                    </button>
+
+                    <!-- 摘要 -->
+                    <button onclick="currentListId=null;currentFilter=null;currentTagIds=[];currentFilterId=null;switchView('summary')" id="sidebar-summary-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2">
+                        <i class="fas fa-file-text w-5"></i>
+                        <span class="sidebar-text flex-1">摘要</span>
+                    </button>
+                </div>
+
+                <!-- 清单分组 -->
+                <div class="mt-4">
+                    <div class="group flex items-center justify-between mb-2">
+                        <span class="text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">清单</span>
+                        <button onclick="event.stopPropagation(); showAddListInput()" class="w-5 text-center flex items-center justify-center text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm" title="新建清单">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    <div class="space-y-1">
+                        <div id="lists-container" class="space-y-1">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 标签分组 -->
+                <div id="sidebar-tags-section" class="mt-4">
+                    <div class="group flex items-center justify-between mb-2">
+                        <span class="text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">标签</span>
+                        <button onclick="event.stopPropagation(); showAddTagInput()" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm" title="新建标签">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    <div id="sidebar-tags-container" class="space-y-1">
+                    </div>
+                </div>
+
+                <!-- 过滤器分组 -->
+                <div id="sidebar-filters-section" class="mt-4">
+                    <div class="group flex items-center justify-between mb-2">
+                        <span class="text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">过滤器</span>
+                        <button onclick="showAddFilterInput()" class="w-5 text-center flex items-center justify-center text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm" title="新建过滤器">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    <div id="sidebar-filters-container" class="space-y-1">
+                    </div>
+                </div>
+            </div>
+
+            <div id="sidebar-bottom-buttons" class="sidebar-bottom-buttons flex-shrink-0 border-t border-theme">
+                <!-- 假期倒计时 -->
+                <div id="holiday-countdown" class="holiday-countdown-box">
+                    <div class="holiday-countdown-label" id="holiday-countdown-label">距—还有</div>
+                    <div>
+                        <span class="holiday-countdown-number" id="holiday-countdown-number">-</span>
+                        <span class="holiday-countdown-unit">天</span>
+                    </div>
+                    <div class="holiday-countdown-date" id="holiday-countdown-date">-</div>
+                </div>
+
+                <!-- 功能按钮行 -->
+                <div class="sidebar-action-row">
+                    <button onclick="switchToPomodoroPage()" id="sidebar-pomodoro-btn" class="sidebar-action-btn border-2 border-green-500 text-green-500 hover:bg-green-500" title="番茄专注">
+                        <i class="fas fa-clock"></i>
+                    </button>
+                    <button onclick="openBoringModal()" id="sidebar-boring-btn" class="sidebar-action-btn border-2 border-purple-500 text-purple-500 hover:bg-purple-500" title="正念小事">
+                        <i class="fas fa-leaf"></i>
+                    </button>
+                    <button onclick="openAnswerBookModal()" id="sidebar-answer-book-btn" class="sidebar-action-btn border-2 border-amber-500 text-amber-500 hover:bg-amber-500" title="答案之书">
+                        <i class="fas fa-book-open"></i>
+                    </button>
+                </div>
+
+                <button onclick="openSettingsModal()" class="w-full px-3 py-2 rounded-lg hover:bg-theme-tertiary text-theme-primary flex items-center justify-center gap-2 transition">
+                    <i class="fas fa-cog"></i>
+                    <span class="sidebar-text flex-1">设置</span>
+                </button>
+            </div>
+
+            <div id="sidebar-pomodoro" onclick="switchToPomodoroPage()" class="hidden p-4 border-t border-theme cursor-pointer hover:opacity-80 transition">
+                <div class="text-center">
+                    <div id="sidebar-pomodoro-time" class="text-2xl font-bold text-white pomodoro-timer-font">25:00</div>
+                    <div id="sidebar-pomodoro-task" class="text-xs text-white/80 mt-1 truncate">-</div>
+                </div>
+            </div>
+        </aside>
+
+        <main id="main-content" class="flex-1 main-content p-6 flex flex-col h-screen overflow-hidden">
+            <header class="flex items-center justify-between mb-6 flex-shrink-0">
+                <div class="flex items-center gap-4">
+                    <div class="flex gap-2 bg-theme-secondary rounded-lg p-1">
+                        <button onclick="switchView('task')" id="view-btn-task" data-view="task" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">任务</button>
+                        <button onclick="switchView('schedule')" id="view-btn-schedule" data-view="schedule" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">日程</button>
+                        <button onclick="switchView('week')" id="view-btn-week" data-view="week" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">周</button>
+                        <button onclick="switchView('month')" id="view-btn-month" data-view="month" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">月</button>
+                        <button onclick="switchView('quadrant')" id="view-btn-quadrant" data-view="quadrant" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">四象限</button>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition group relative" title="今天">
+                        <i class="fas fa-calendar-day"></i>
+                    </button>
+                    <button onclick="togglePlanPanel()" id="plan-btn" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition group relative" title="计划">
+                        <i class="fas fa-clipboard-list"></i>
+                    </button>
+                    <button onclick="postponeOverdueTasks()" id="postpone-btn" class="hidden w-10 h-10 rounded-full border-2 border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-500 hover:text-white transition group relative" title="顺延任务">
+                        <i class="fas fa-forward"></i>
+                    </button>
+                    <button onclick="openAddTaskModal()" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div id="view-container" class="flex-1 min-h-0">
+            </div>
+        </main>
+
+        <aside id="plan-panel" class="hidden w-96 bg-theme-secondary border-l border-theme flex flex-col h-screen" style="transition: transform 0.3s ease;">
+            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
+                <h3 class="text-base font-semibold text-theme-primary">计划任务</h3>
+                <button onclick="togglePlanPanel()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
+                    <i class="fas fa-times text-theme-muted"></i>
+                </button>
+            </div>
+            <div id="plan-panel-content" class="flex-1 overflow-y-auto p-4">
+            </div>
+        </aside>
+
+        <aside id="task-detail-panel" class="hidden w-96 bg-theme-secondary border-l border-theme flex flex-col h-screen relative z-40" style="transition: transform 0.3s ease;">
+            <!-- 顶部工具栏 -->
+            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
+                <button type="button" onclick="toggleDetailTimeMenu()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-theme-primary hover:bg-theme-tertiary transition">
+                    <span id="detail-time-btn-text">设置时间</span>
+                    <i class="fas fa-chevron-down text-xs"></i>
+                </button>
+                <div class="flex items-center gap-2">
+                    <button onclick="toggleTaskMode(event)" class="p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" id="toggle-mode-btn" title="切换任务模式">
+                        <i class="fas fa-list-ul"></i>
+                    </button>
+                    <button onclick="closeTaskDetailPanel()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
+                        <i class="fas fa-times text-theme-muted"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 时间设定二级菜单（内联展开） -->
+            <div id="detail-time-menu" class="hidden border-b border-theme p-4 space-y-3 flex-shrink-0">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-theme-secondary">时间</span>
+                    <div class="flex items-center gap-3">
+                        <button id="time-toggle-btn" onclick="toggleTimeRange()" class="text-xs px-2 py-1 rounded border border-theme text-theme-secondary hover:bg-theme-tertiary transition">
+                            时间段
+                        </button>
+                        <button onclick="clearTaskTime()" class="text-xs px-2 py-1 rounded border border-theme text-theme-secondary hover:bg-theme-tertiary transition">
+                            清除时间
+                        </button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="relative">
+                        <input type="date" id="detail-task-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openDatePicker(this, 'detail-task-date-picker')">
+                        <div id="detail-task-date-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                    </div>
+                    <div class="relative">
+                        <input type="time" id="detail-task-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openTimePicker(this, 'detail-task-time-picker')">
+                        <div id="detail-task-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                    </div>
+                </div>
+                <div id="detail-end-time-container" class="hidden grid grid-cols-2 gap-2">
+                    <div class="relative">
+                        <input type="date" id="detail-task-end-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openDatePicker(this, 'detail-task-end-date-picker')">
+                        <div id="detail-task-end-date-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                    </div>
+                    <div class="relative">
+                        <input type="time" id="detail-task-end-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openTimePicker(this, 'detail-task-end-time-picker')">
+                        <div id="detail-task-end-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="relative">
+                        <button type="button" onclick="toggleDetailReminderPicker()" class="w-full px-3 py-1.5 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-tertiary flex items-center justify-between">
+                            <span><i class="fas fa-bell mr-2"></i><span id="detail-reminder-text">不提醒</span></span>
+                            <i class="fas fa-chevron-down text-xs"></i>
+                        </button>
+                        <div id="detail-reminder-picker" class="hidden absolute left-0 right-0 mt-1 p-2 bg-theme-tertiary rounded-lg border border-theme space-y-1 z-10 shadow-lg">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary">
+                                <input type="radio" name="detail-reminder" value="0" class="detail-reminder-option" checked onchange="updateDetailReminderText()"> 不提醒
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary">
+                                <input type="radio" name="detail-reminder" value="5" class="detail-reminder-option" onchange="updateDetailReminderText()"> 提前5分钟
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary">
+                                <input type="radio" name="detail-reminder" value="1440" class="detail-reminder-option" onchange="updateDetailReminderText()"> 提前1天
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary">
+                                <input type="radio" name="detail-reminder" value="custom" class="detail-reminder-option" onchange="updateDetailReminderText()"> 自定义
+                            </label>
+                            <input type="number" id="detail-custom-reminder" class="hidden w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="分钟数" onchange="updateDetailReminderText()">
+                        </div>
+                    </div>
+                    <div class="relative">
+                        <button type="button" onclick="toggleDetailRepeatPicker()" class="w-full px-3 py-1.5 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-tertiary flex items-center justify-between">
+                            <span><i class="fas fa-redo mr-2"></i><span id="detail-repeat-text">不重复</span></span>
+                            <i class="fas fa-chevron-down text-xs"></i>
+                        </button>
+                        <div id="detail-repeat-picker" class="hidden absolute left-0 right-0 mt-1 p-2 bg-theme-tertiary rounded-lg border border-theme z-10 shadow-lg" style="max-height: 360px; overflow-y: auto;">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                <input type="radio" name="detail-repeat" value="" class="detail-repeat-option" checked onchange="updateDetailRepeatText()"> 不重复
+                            </label>
+                            <div class="repeat-group">
+                                <div class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" onclick="toggleRepeatSubmenu(this)">
+                                    <i class="fas fa-chevron-right text-[10px] transition-transform duration-200 repeat-submenu-arrow"></i>
+                                    <span>每天</span>
+                                </div>
+                                <div class="hidden pl-5 repeat-submenu space-y-0">
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="daily" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每天
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="dailyWorkday" class="detail-repeat-option" data-repeat-props='{"type":"daily","workdayOnly":true}' onchange="updateDetailRepeatText()"> 每个工作日
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="repeat-group">
+                                <div class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" onclick="toggleRepeatSubmenu(this)">
+                                    <i class="fas fa-chevron-right text-[10px] transition-transform duration-200 repeat-submenu-arrow"></i>
+                                    <span>每周</span>
+                                </div>
+                                <div class="hidden pl-5 repeat-submenu space-y-0">
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="weekly" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每周
+                                    </label>
+                                    <div class="border-t border-theme my-1"></div>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="weeklyFirstWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每周首个工作日
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="weeklyLastWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每周最后一个工作日
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="repeat-group">
+                                <div class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" onclick="toggleRepeatSubmenu(this)">
+                                    <i class="fas fa-chevron-right text-[10px] transition-transform duration-200 repeat-submenu-arrow"></i>
+                                    <span>每月</span>
+                                </div>
+                                <div class="hidden pl-5 repeat-submenu space-y-0">
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="monthly" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每月
+                                    </label>
+                                    <div class="border-t border-theme my-1"></div>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="monthlyFirstWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每月首个工作日
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="monthlyLastWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每月最后一个工作日
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="repeat-group">
+                                <div class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" onclick="toggleRepeatSubmenu(this)">
+                                    <i class="fas fa-chevron-right text-[10px] transition-transform duration-200 repeat-submenu-arrow"></i>
+                                    <span>每年</span>
+                                </div>
+                                <div class="hidden pl-5 repeat-submenu space-y-0">
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="yearly" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 每年
+                                    </label>
+                                    <div class="border-t border-theme my-1"></div>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                        <input type="radio" name="detail-repeat" value="yearlyBeforeHoliday" class="detail-repeat-option" data-repeat-props='{"type":"yearly","beforeHoliday":true}' onchange="updateDetailRepeatText()"> 每个节假日前一天
+                                    </label>
+                                </div>
+                            </div>
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                <input type="radio" name="detail-repeat" value="custom" class="detail-repeat-option" onchange="updateDetailRepeatText()"> 自定义
+                            </label>
+                            <div id="detail-custom-repeat-container" class="hidden space-y-2 pl-5">
+                                <input type="number" id="detail-custom-repeat-interval" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="间隔" onchange="updateDetailRepeatText()">
+                                <select id="detail-custom-repeat-unit" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" onchange="updateDetailRepeatText()">
+                                    <option value="days">天</option>
+                                    <option value="weeks">周</option>
+                                    <option value="months">月</option>
+                                    <option value="years">年</option>
+                                </select>
+                            </div>
+                            <div id="detail-repeat-mode-container" class="border-t border-theme pt-2 mt-2 space-y-1">
+                                <label class="text-xs font-medium text-theme-secondary">重复方式</label>
+                                <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary">
+                                    <input type="radio" name="detail-repeat-mode" value="startTime" class="detail-repeat-mode-option" checked onchange="updateDetailRepeatText()"> 按设定时间
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary">
+                                    <input type="radio" name="detail-repeat-mode" value="completeTime" class="detail-repeat-mode-option" onchange="updateDetailRepeatText()"> 按完成时间
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 border-b border-theme flex items-start gap-3 flex-shrink-0">
+                <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-blue-500 dark:border-white flex items-center justify-center transition hover:border-blue-600 dark:hover:border-blue-300 flex-shrink-0 mt-1" id="detail-task-complete-btn">
+                    <i class="fas fa-check text-xs hidden"></i>
+                </button>
+                <textarea id="detail-task-title" placeholder="任务标题" rows="1" class="flex-1 text-xl font-medium bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" style="min-height: 32px; max-height: 120px;"></textarea>
+            </div>
+
+            <div class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col">
+                <textarea id="detail-task-notes" placeholder="任务详情描述" class="w-full flex-1 bg-transparent border-none outline-none resize-none text-theme-primary min-h-[120px]"></textarea>
+                <div id="subtasks-container" class="hidden space-y-2"></div>
+            </div>
+
+            <!-- 任务标签显示（进度上方） -->
+            <div id="detail-tags-display" class="px-4 pt-3 pb-2 border-t border-theme flex flex-wrap flex-shrink-0 min-h-0">
+            </div>
+            
+            <!-- 任务进度设置 -->
+            <div class="relative border-t border-theme p-2 cursor-pointer flex-shrink-0 select-none" id="progress-container" onmousedown="startProgressDrag(event)">
+                <div class="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500" id="progress-bar" style="width: 0%;"></div>
+                <div class="flex items-center justify-between text-xs">
+                    <div id="detail-focus-duration" class="flex items-center gap-1 text-theme-secondary">
+                        <i class="fas fa-stopwatch text-red-500"></i>
+                        <span id="focus-duration-text">0m</span>
+                    </div>
+                    <div class="flex items-center gap-1 text-theme-secondary">
+                        <i class="fas fa-flag mr-1"></i>
+                        <span id="progress-text">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部快捷按钮 -->
+            <div class="p-4 border-t border-theme flex-shrink-0">
+                <div class="flex gap-2 mb-3">
+                    <button type="button" id="detail-task-important" onclick="toggleDetailImportant()" title="重要" class="flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition">
+                        <i class="fas fa-star text-yellow-500"></i>
+                    </button>
+                    <button type="button" id="detail-task-urgent" onclick="toggleDetailUrgent()" title="紧急" class="flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition">
+                        <i class="fas fa-fire text-red-500"></i>
+                    </button>
+                    <button type="button" onclick="toggleDetailTagPicker()" title="标签" class="flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition">
+                        <i class="fas fa-tag text-green-500"></i>
+                    </button>
+                    <button type="button" onclick="toggleDetailListPicker()" title="所属清单" class="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition text-sm max-w-[160px] truncate">
+                        <i id="detail-list-icon" class="fas fa-folder flex-shrink-0"></i>
+                        <span id="detail-list-name" class="truncate"></span>
+                    </button>
+                </div>
+                <!-- 清单选择内联展开 -->
+                <div id="detail-list-picker" class="hidden mb-3 p-2 bg-theme-tertiary rounded-lg border border-theme">
+                    <div id="detail-list-pills" class="flex flex-wrap gap-1.5"></div>
+                </div>
+                <!-- 标签选择内联展开 -->
+                <div id="detail-tag-picker" class="hidden mb-3 p-2 bg-theme-tertiary rounded-lg border border-theme">
+                    <div id="detail-tag-pills" class="flex flex-wrap gap-1.5"></div>
+                    <div id="detail-new-tag-form" class="hidden gap-2 mt-2 pt-2 border-t border-theme">
+                        <input type="text" id="detail-new-tag-name" placeholder="新标签名称" maxlength="20" class="flex-1 px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary">
+                        <input type="color" id="detail-new-tag-color" value="#10b981" class="w-8 h-8 rounded cursor-pointer">
+                        <button onclick="createTagFromDetail()" class="px-3 py-1 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600">创建</button>
+                    </div>
+                </div>
+                <!-- 原清单信息 -->
+                <div id="detail-previous-list" class="hidden mb-3 text-sm text-theme-muted">
+                    <i class="fas fa-info-circle mr-1"></i>原清单：<span id="detail-previous-list-name"></span>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="deleteTaskFromDetail()" id="detail-delete-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition text-sm">删除任务</button>
+                    <button onclick="startPomodoroForTaskFromDetail()" id="detail-focus-btn" class="flex-1 px-4 py-2 border border-green-500 text-green-500 rounded-lg hover:bg-green-50 transition text-sm">
+                        <i class="fas fa-stopwatch mr-1"></i>开始专注
+                    </button>
+                    <button onclick="saveTaskDetail()" class="flex-1 px-4 py-2 border border-blue-500 text-blue-500 rounded-lg hover:bg-blue-50 transition text-sm">保存</button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <div id="toast-container" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex flex-col-reverse items-center gap-4 pointer-events-none w-[90%] max-w-sm">
+    </div>
+
+    <div id="add-task-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center overflow-y-auto py-8">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-lg mx-4 fade-in shadow-2xl">
+            <div class="p-6 border-b border-theme">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-bold text-theme-primary" id="task-modal-title">添加任务</h2>
+                    <button onclick="closeAddTaskModal()" class="text-theme-muted hover:text-theme-primary">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="p-6">
+                <form id="task-form">
+                    <input type="hidden" id="task-id">
+                    <div class="space-y-4">
+                        <div>
+                            <input type="text" id="task-title" required maxlength="100" class="task-name-input w-full border-0 border-b-2 border-theme bg-transparent focus:border-accent focus:ring-0 outline-none transition pb-2 text-theme-primary" placeholder="任务名称" autofocus>
+                        </div>
+
+                        <div id="task-details-section" class="hidden">
+                            <textarea id="task-notes" rows="3" class="task-details-input w-full border-0 border-b-2 border-theme bg-transparent focus:border-accent focus:ring-0 outline-none transition pb-2 resize-none text-theme-primary" placeholder="添加详情..."></textarea>
+                        </div>
+
+                        <div class="flex flex-wrap gap-2 pt-2">
+                            <button type="button" onclick="toggleTimePicker()" id="time-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary">
+                                <i class="fas fa-clock"></i>
+                                <span id="time-btn-text">设置时间</span>
+                            </button>
+
+                            <button type="button" onclick="toggleImportantUrgent()" id="priority-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary">
+                                <i class="fas fa-star"></i>
+                                <span id="priority-btn-text">重要/紧急</span>
+                            </button>
+
+                            <button type="button" onclick="toggleListPicker()" id="list-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary">
+                                <i class="fas fa-folder"></i>
+                                <span id="list-btn-text">选择清单</span>
+                            </button>
+                        </div>
+
+                        <div id="time-picker" class="hidden bg-theme-tertiary rounded-xl p-4 space-y-4">
+                            <div class="flex gap-2 mb-3">
+                                <button type="button" onclick="setTimeMode('single')" class="time-mode-btn px-4 py-2 rounded-lg" style="background-color: var(--accent-color); color: white;" data-mode="single">时间</button>
+                                <button type="button" onclick="setTimeMode('range')" class="time-mode-btn px-4 py-2 rounded-lg bg-gray-200 text-gray-700" data-mode="range">时间段</button>
+                            </div>
+
+                            <div id="calendar-container" class="grid grid-cols-7 gap-1 mb-3">
+                            </div>
+
+                            <div class="flex gap-3">
+                                <div class="flex-1">
+                                    <label class="text-xs text-theme-secondary">开始时间</label>
+                                    <input type="time" id="task-start-time" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                                </div>
+                                <div id="end-time-container" class="flex-1 hidden">
+                                    <label class="text-xs text-theme-secondary">结束时间</label>
+                                    <input type="time" id="task-end-time" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                                </div>
+                            </div>
+
+                            <div class="border-t border-theme pt-3">
+                                <div class="flex flex-col lg:flex-row gap-4">
+                                    <div class="flex-1">
+                                        <button type="button" onclick="toggleReminderPicker()" class="w-full px-3 py-2 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-secondary flex items-center justify-between">
+                                            <span><i class="fas fa-bell mr-2"></i><span id="reminder-text">提醒</span></span>
+                                            <i class="fas fa-chevron-down text-xs"></i>
+                                        </button>
+                                        <div id="reminder-picker" class="hidden mt-2 p-3 bg-theme-secondary rounded-lg border space-y-2">
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="reminder" value="5" class="reminder-option" onchange="updateReminderText()"> 提前5分钟
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="reminder" value="1440" class="reminder-option" onchange="updateReminderText()"> 提前1天
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="reminder" value="custom" class="reminder-option" onchange="updateReminderText()"> 自定义
+                                            </label>
+                                            <input type="number" id="custom-reminder" class="hidden w-full px-2 py-1 border border-theme rounded bg-theme-tertiary text-theme-primary" placeholder="分钟数" onchange="updateReminderText()">
+                                        </div>
+                                    </div>
+                                    <div class="flex-1">
+                                        <button type="button" onclick="toggleRepeatPicker()" class="w-full px-3 py-2 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-secondary flex items-center justify-between">
+                                            <span><i class="fas fa-redo mr-2"></i><span id="repeat-text">重复</span></span>
+                                            <i class="fas fa-chevron-down text-xs"></i>
+                                        </button>
+                                        <div id="repeat-picker" class="hidden mt-2 p-3 bg-theme-secondary rounded-lg border space-y-2">
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="repeat" value="" class="repeat-option" checked onchange="updateRepeatText()"> 不重复
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="repeat" value="daily" class="repeat-option" onchange="updateRepeatText()"> 每天
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="repeat" value="weekly" class="repeat-option" onchange="updateRepeatText()"> 每周
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="repeat" value="monthly" class="repeat-option" onchange="updateRepeatText()"> 每月
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="repeat" value="yearly" class="repeat-option" onchange="updateRepeatText()"> 每年
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary">
+                                                <input type="radio" name="repeat" value="custom" class="repeat-option" onchange="updateRepeatText()"> 自定义
+                                            </label>
+                                            <div id="custom-repeat-container" class="hidden space-y-2">
+                                                <input type="number" id="custom-repeat-interval" class="w-full px-2 py-1 border border-theme rounded bg-theme-tertiary text-theme-primary" placeholder="间隔" onchange="updateRepeatText()">
+                                                <select id="custom-repeat-unit" class="w-full px-2 py-1 border border-theme rounded bg-theme-tertiary text-theme-primary" onchange="updateRepeatText()">
+                                                    <option value="days">天</option>
+                                                    <option value="weeks">周</option>
+                                                    <option value="months">月</option>
+                                                    <option value="years">年</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="priority-picker" class="hidden bg-theme-tertiary rounded-xl p-4 space-y-3">
+                            <label class="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-theme-secondary text-theme-primary">
+                                <input type="checkbox" id="task-important" class="w-5 h-5 text-yellow-500 rounded">
+                                <i class="fas fa-star text-yellow-500"></i>
+                                <span class="font-medium">重要</span>
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-theme-secondary text-theme-primary">
+                                <input type="checkbox" id="task-urgent" class="w-5 h-5 text-red-500 rounded">
+                                <i class="fas fa-fire text-red-500"></i>
+                                <span class="font-medium">紧急</span>
+                            </label>
+                        </div>
+
+                        <div id="list-picker" class="hidden bg-theme-tertiary rounded-xl p-4">
+                            <select id="task-list" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                            </select>
+                        </div>
+                    </div>
+
+                    <input type="hidden" id="task-selected-date">
+                    <input type="hidden" id="task-reminder">
+                    <input type="hidden" id="task-repeat">
+
+                    <div class="flex gap-3 mt-6">
+                        <button type="button" onclick="closeAddTaskModal()" class="flex-1 px-4 py-2 border border-theme text-theme-secondary rounded-lg hover:bg-theme-tertiary transition">取消</button>
+                        <button type="submit" class="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition" style="background-color: var(--accent-color)">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div id="pomodoro-page" class="fixed inset-0 bg-white z-40 hidden">
+        <div id="pomodoro-bg-container" class="flex h-full">
+            <div id="pomodoro-left-panel" class="flex-[7] flex flex-col items-center justify-center p-8 relative transition-all duration-500 pomodoro-focus-bg">
+                <button onclick="closePomodoroPage()" id="pomodoro-back-btn" class="absolute top-4 left-4 text-white hover:text-gray-200">
+                    <i class="fas fa-arrow-left mr-2"></i>返回
+                </button>
+                <button onclick="openPomodoroStats()" id="pomodoro-stats-btn" class="absolute bottom-4 right-40 text-white hover:text-gray-200 p-2" title="番茄统计">
+                    <i class="fas fa-chart-pie text-xl"></i>
+                </button>
+                <button onclick="openPomodoroSettings()" id="pomodoro-settings-btn" class="absolute bottom-4 right-28 text-white hover:text-gray-200 p-2" title="番茄专注设置">
+                    <i class="fas fa-cog text-xl"></i>
+                </button>
+                <button onclick="togglePomodoroRightPanel()" id="pomodoro-toggle-panel-btn" class="absolute bottom-4 right-16 text-white hover:text-gray-200 p-2" title="收起概况">
+                    <i id="pomodoro-toggle-panel-icon" class="fas fa-angles-right text-xl"></i>
+                </button>
+                <button onclick="togglePomodoroFullscreen()" class="absolute bottom-4 right-4 text-white hover:text-gray-200 p-2" title="全屏">
+                    <i class="fas fa-expand text-xl"></i>
+                </button>
+
+                <div class="text-center">
+                    <div id="pomodoro-phase" class="text-2xl font-medium text-white mb-2 opacity-90 flex items-center justify-center gap-2" style="min-height: 1.5em;">
+                        <i id="pomodoro-phase-icon" class="fas fa-bullseye"></i>
+                        <span id="pomodoro-phase-text">专注时间</span>
+                    </div>
+                    
+                    <!-- 任务名称：默认纯文本，hover显示按钮样式 -->
+                    <div id="pomodoro-task-selector" class="mb-6" style="min-height: 1.5em;">
+                        <span id="pomodoro-select-task-text" class="text-white/50 text-sm cursor-pointer hover:text-white/80 transition" onclick="openPomodoroTaskPanel()">一般专注</span>
+                        <span id="pomodoro-current-task-display" class="hidden text-white/70 text-sm cursor-pointer group" onclick="openPomodoroTaskPanel()">
+                            <span id="pomodoro-current-task-text"></span>
+                            <i class="fas fa-chevron-right ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                        </span>
+                    </div>
+                    
+                    <div id="pomodoro-circle" class="relative w-80 h-80 mx-auto mb-8">
+                        <svg class="w-full h-full transform -rotate-90" style="overflow: visible;">
+                            <circle cx="160" cy="160" r="150" stroke="rgba(255,255,255,0.3)" stroke-width="8" fill="none"/>
+                            <circle id="pomodoro-progress" cx="160" cy="160" r="150" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" stroke-dasharray="942" stroke-dashoffset="0" style="transition: stroke-dashoffset 0.3s ease;"/>
+                        </svg>
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <div id="pomodoro-time" class="text-7xl font-bold text-white pomodoro-timer-font">25:00</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 按钮区域 - 根据状态显示不同按钮 -->
+                    <div id="pomodoro-buttons" class="flex flex-col items-center gap-3 mb-4">
+                        <!-- 主操作按钮行 -->
+                        <div id="pomodoro-main-btns" class="flex justify-center gap-3">
+                            <!-- Idle: 开始专注 -->
+                            <button onclick="handleStartFocus()" id="btn-start-focus" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg" style="color: var(--accent-color)">
+                                <i class="fas fa-play mr-2"></i>开始专注
+                            </button>
+                            <!-- Focusing: 暂停 -->
+                            <button onclick="handlePause()" id="btn-pause" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg hidden" style="color: var(--accent-color)">
+                                <i class="fas fa-pause mr-2"></i>暂停
+                            </button>
+                            <!-- Pause: 恢复专注 -->
+                            <button onclick="handleResume()" id="btn-resume" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg hidden" style="color: var(--accent-color)">
+                                <i class="fas fa-play mr-2"></i>恢复专注
+                            </button>
+                            <!-- Pause/Resting: 结束 -->
+                            <button onclick="handleClickEnd()" id="btn-end" class="px-6 py-3 bg-white/20 text-white rounded-full font-medium hover:bg-white/30 transition hidden">
+                                <i class="fas fa-stop mr-2"></i>结束
+                            </button>
+                            <!-- Completed: 开始休息 -->
+                            <button onclick="handleClickRest()" id="btn-start-rest" class="px-5 py-2.5 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg text-sm hidden" style="color: #2D795C">
+                                <i class="fas fa-mug-hot mr-1"></i>开始休息
+                            </button>
+                            <!-- Completed/Resting: 跳过休息 -->
+                            <button onclick="handleSkipRest()" id="btn-skip-rest" class="px-5 py-2.5 bg-white/20 text-white rounded-full font-medium hover:bg-white/30 transition text-sm hidden">
+                                <i class="fas fa-forward mr-1"></i>跳过休息
+                            </button>
+                        </div>
+                        <!-- End_Settlement: 结算按钮组 -->
+                        <div id="pomodoro-settlement-btns" class="hidden flex flex-col items-center gap-2 w-full max-w-xs">
+                            <p id="settlement-info-text" class="text-white/70 text-sm mb-1"></p>
+                            <button onclick="handleSaveTime()" id="btn-save-time" class="w-full px-4 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition text-sm font-medium hidden">
+                                <i class="fas fa-check mr-2"></i>计入任务并结束
+                            </button>
+                            <button onclick="handleDropAll()" id="btn-drop-all" class="w-full px-4 py-2.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm font-medium">
+                                <i class="fas fa-trash mr-2"></i>直接作废
+                            </button>
+                            <button onclick="handleCancelSettlement()" id="btn-cancel-settlement" class="text-white/60 hover:text-white text-sm transition mt-1">
+                                <i class="fas fa-arrow-left mr-1"></i>继续专注 <span class="opacity-50 text-xs">(Esc)</span>
+                            </button>
+                        </div>
+                    </div>
+                    
+                </div>
+            </div>
+
+            <div id="pomodoro-right-panel" class="flex-[3] p-8 overflow-hidden flex flex-col pomodoro-focus-bg">
+                <div class="w-full mx-auto flex flex-col flex-1 min-h-0">
+                    <h2 class="text-lg font-semibold text-theme-primary mb-3">专注概况</h2>
+
+                    <div class="grid grid-cols-2 gap-3 mb-6">
+                        <div class="pomodoro-glass-card rounded-lg p-3 text-center">
+                            <div id="today-pomodoros" class="text-xl font-bold text-white">0</div>
+                            <div class="text-xs text-theme-muted mt-0.5">今日专注</div>
+                        </div>
+                        <div class="pomodoro-glass-card rounded-lg p-3 text-center">
+                            <div id="today-minutes" class="text-xl font-bold text-white">0</div>
+                            <div class="text-xs text-theme-muted mt-0.5">今日时长</div>
+                        </div>
+                        <div class="pomodoro-glass-card rounded-lg p-3 text-center">
+                            <div id="total-pomodoros" class="text-xl font-bold text-theme-secondary">0</div>
+                            <div class="text-xs text-theme-muted mt-0.5">总专注数</div>
+                        </div>
+                        <div class="pomodoro-glass-card rounded-lg p-3 text-center">
+                            <div id="total-minutes" class="text-xl font-bold text-theme-secondary">0</div>
+                            <div class="text-xs text-theme-muted mt-0.5">总专注时长</div>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col flex-1 min-h-0">
+                        <div class="flex items-center justify-between mb-3 group">
+                            <h3 class="text-lg font-semibold text-theme-primary">历史记录</h3>
+                            <button onclick="openPomodoroStatsRecords()" class="text-xs text-theme-muted hover:text-white transition opacity-0 group-hover:opacity-100" title="查看更多">
+                                查看更多 <i class="fas fa-arrow-right ml-0.5"></i>
+                            </button>
+                        </div>
+                        <div id="pomodoro-history" class="space-y-2 overflow-y-auto flex-1 min-h-0">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="pomodoro-task-panel-overlay" class="fixed inset-0 z-40 hidden" onclick="closePomodoroTaskPanel()"></div>
+
+        <div id="pomodoro-task-panel" class="fixed top-0 right-0 w-96 h-full bg-theme-secondary shadow-2xl z-50 transform translate-x-full transition-transform duration-300">
+            <div class="p-4 border-b border-theme flex items-center justify-between">
+                <h3 id="pomodoro-task-panel-title" class="text-lg font-bold text-theme-primary">专注任务</h3>
+                <button onclick="closePomodoroTaskPanel()" class="text-theme-muted hover:text-theme-primary">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+            <div class="p-3 overflow-y-auto" style="height: calc(100% - 57px)">
+                <div id="pomodoro-task-list" class="space-y-1">
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 番茄专注统计页面 -->
+    <div id="pomodoro-stats-page" class="fixed inset-0 bg-theme-primary z-50 hidden flex flex-col">
+        <!-- 固定标题栏 -->
+        <div class="flex items-center justify-between px-6 py-3 bg-theme-primary flex-shrink-0 border-b border-theme">
+            <div class="flex items-center gap-2">
+                <button onclick="closePomodoroStats()" class="text-theme-secondary hover:text-theme-primary p-1">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1 class="text-lg font-semibold text-theme-primary">番茄专注统计</h1>
+            </div>
+            <div class="flex items-center gap-3">
+                <select id="stats-period" onchange="renderPomodoroStats()" class="px-3 py-1.5 border border-theme rounded-lg text-sm bg-theme-secondary text-theme-primary">
+                    <option value="week">本周</option>
+                    <option value="last_week">上周</option>
+                    <option value="month">本月</option>
+                    <option value="last_month">上月</option>
+                    <option value="year">本年</option>
+                </select>
+            </div>
+        </div>
+        <!-- 可滚动内容区 -->
+        <div class="flex-1 overflow-y-auto">
+        <div class="max-w-5xl mx-auto p-6 pt-4">
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="stats-overview">
+                <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                    <div class="text-sm text-theme-muted mb-1">今日番茄</div>
+                    <div class="text-3xl font-bold text-rose-500" id="stats-today-count">0</div>
+                    <div class="text-xs mt-2" id="stats-today-count-diff"></div>
+                </div>
+                <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                    <div class="text-sm text-theme-muted mb-1">总番茄数</div>
+                    <div class="text-3xl font-bold text-purple-500" id="stats-total-count">0</div>
+                    <div class="text-xs text-theme-muted mt-2">累计完成</div>
+                </div>
+                <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                    <div class="text-sm text-theme-muted mb-1">今日专注</div>
+                    <div class="text-3xl font-bold text-blue-500" id="stats-today-time">0h0m</div>
+                    <div class="text-xs mt-2" id="stats-today-time-diff"></div>
+                </div>
+                <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                    <div class="text-sm text-theme-muted mb-1">总专注时长</div>
+                    <div class="text-3xl font-bold text-emerald-500" id="stats-total-time">0h0m</div>
+                    <div class="text-xs text-theme-muted mt-2">累计时长</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-theme-primary">专注趋势</h3>
+                        <span class="text-xs text-theme-muted" id="stats-trend-period">周 · 本周</span>
+                    </div>
+                    <div id="stats-trend-chart" class="h-48"></div>
+                    <div class="text-xs text-theme-muted mt-2 text-center" id="stats-trend-avg">每日平均：0m</div>
+                </div>
+
+                <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-theme-primary">最佳专注时间</h3>
+                        <span class="text-xs text-theme-muted" id="stats-best-time-period">本周</span>
+                    </div>
+                    <div id="stats-best-time-chart" class="h-48"></div>
+                </div>
+            </div>
+
+            <div class="bg-theme-secondary rounded-xl p-5 shadow-theme mb-6">
+                <h3 class="font-semibold text-theme-primary mb-4">专注时间线 <span class="text-sm text-theme-muted font-normal" id="stats-timeline-period">本周</span></h3>
+                <div id="stats-timeline-chart" class="overflow-x-auto"></div>
+            </div>
+
+            <div class="bg-theme-secondary rounded-xl p-5 shadow-theme mb-6">
+                <h3 class="font-semibold text-theme-primary mb-4">年度热力图</h3>
+                <div id="stats-heatmap" class="overflow-x-auto"></div>
+            </div>
+
+            <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold text-theme-primary">专注记录</h3>
+                    <div class="flex items-center gap-2" id="stats-date-nav"></div>
+                </div>
+                <div id="stats-records" class="max-h-96 overflow-y-auto"></div>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <div id="boring-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center" onclick="closeBoringModal()">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-lg mx-4 fade-in shadow-2xl" onclick="event.stopPropagation()">
+            <div class="p-6 border-b border-theme">
+                <h2 class="text-xl font-bold text-theme-primary text-center"><i class="fas fa-leaf text-purple-500 mr-2"></i>正念小事</h2>
+            </div>
+            <div class="p-8" id="boring-content">
+            </div>
+        </div>
+    </div>
+    
+    <!-- 答案之书弹窗 -->
+    <div id="answer-book-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center" onclick="closeAnswerBookModal()">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-lg mx-4 fade-in shadow-2xl" onclick="event.stopPropagation()">
+            <div class="p-6 border-b border-theme">
+                <h2 class="text-xl font-bold text-theme-primary text-center"><i class="fas fa-book-open text-amber-500 mr-2"></i>答案之书</h2>
+            </div>
+            <div class="p-8" id="answer-book-content">
+                <div class="answer-book-container mx-auto mb-6">
+                    <div class="answer-book-page">
+                        <p id="answer-book-text" class="answer-book-answer text-xl font-medium text-amber-800 px-8 py-6 text-center"></p>
+                    </div>
+                    <div id="answer-book-cover" class="answer-book-cover" onclick="flipAnswerBook()">
+                        <div class="answer-book-cover-inner">
+                            <div class="answer-book-cover-spine"></div>
+                            <i class="fas fa-question text-4xl text-amber-300"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="h-[72px] flex flex-col items-center justify-center">
+                    <p id="answer-book-hint" class="text-theme-secondary text-lg text-center">心中默念一个问题，然后点击书本翻开</p>
+                    <p id="answer-book-revealed" class="text-theme-muted text-sm text-center mb-3 hidden">答案之书已为你揭示</p>
+                    <div id="answer-book-buttons" class="flex gap-3 justify-center hidden">
+                        <button onclick="askAgain()" class="px-6 py-2 border-2 border-amber-500 text-amber-600 rounded-xl font-medium hover:bg-amber-50 transition">
+                            <i class="fas fa-redo mr-2"></i>再问一次
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col mx-4 shadow-2xl">
+            <div class="p-6 border-b border-theme flex items-center justify-between flex-shrink-0 bg-theme-secondary">
+                <div class="flex items-center gap-2">
+                    <h2 class="text-xl font-bold text-theme-primary"><i class="fas fa-cog text-theme-muted"></i></h2>
+                    <h2 class="text-xl font-bold text-theme-primary">设置</h2>
+                </div>
+                <button onclick="closeSettingsModal()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
+                    <i class="fas fa-times text-theme-muted"></i>
+                </button>
+            </div>
+            <div class="flex-1 flex overflow-hidden">
+                <!-- 左侧快速导航：窄屏（md 以下）隐藏 -->
+                <nav id="settings-nav" class="w-52 border-r border-theme p-3 overflow-y-auto hidden md:block flex-shrink-0">
+                    <div class="space-y-4">
+                        <div>
+                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">外观</div>
+                            <ul class="space-y-1">
+                                <li><a data-target="settings-section-theme" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">主题设置</a></li>
+                                <li><a data-target="settings-section-view" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">视图偏好</a></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">任务习惯</div>
+                            <ul class="space-y-1">
+                                <li><a data-target="settings-section-defaults" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">新建任务默认值</a></li>
+                                <li><a data-target="settings-section-command" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">命令面板</a></li>
+                                <li><a data-target="settings-section-shortcuts" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">快捷键</a></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">番茄专注</div>
+                            <ul class="space-y-1">
+                                <li><a data-target="settings-section-pomodoro" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">番茄计时设置</a></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">通知与日历</div>
+                            <ul class="space-y-1">
+                                <li><a data-target="settings-section-notification" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">通知设置</a></li>
+                                <li><a data-target="settings-section-holiday" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">节假日与调休</a></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">辅助功能</div>
+                            <ul class="space-y-1">
+                                <li><a data-target="settings-section-mindful" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">正念小事</a></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">数据与系统</div>
+                            <ul class="space-y-1">
+                                <li><a data-target="settings-section-sync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">数据同步</a></li>
+                                <li><a data-target="settings-section-network" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">网络配置</a></li>
+                                <li><a data-target="settings-section-data" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">数据管理</a></li>
+                            </ul>
+                        </div>
+                    </div>
+                </nav>
+                <!-- 右侧内容滚动区 -->
+                <div id="settings-content-scroll" class="flex-1 overflow-y-auto p-6">
+                <div class="space-y-6">
+                    <div id="settings-section-theme">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">主题设置</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">主题</label>
+                                <div class="flex gap-3">
+                                    <button onclick="setTheme('light')" id="theme-light-btn" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+                                        <i class="fas fa-sun mr-2"></i>浅色
+                                    </button>
+                                    <button onclick="setTheme('dark')" id="theme-dark-btn" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+                                        <i class="fas fa-moon mr-2"></i>深色
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">背景图片</label>
+                                <div class="flex gap-2">
+                                    <label for="bg-image-upload" class="flex-1 px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary cursor-pointer hover:bg-theme-secondary transition text-center">
+                                        <i class="fas fa-upload mr-2"></i>选择图片
+                                    </label>
+                                    <input type="file" id="bg-image-upload" accept="image/*" class="hidden" onchange="handleBgImageUpload(event)">
+                                    <button onclick="clearBgImage()" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-red-50 hover:text-red-500 transition">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2">支持 JPG、PNG、GIF 等图片格式</p>
+                                <div id="bg-image-preview" class="mt-3 hidden">
+                                    <img id="bg-preview-img" class="max-h-32 w-full object-contain rounded-lg border border-theme" />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">背景透明度: <span id="bg-opacity-value">30</span>%</label>
+                                <input type="range" id="settings-bg-opacity" min="0" max="100" value="30" class="w-full" onchange="updateBgOpacity()">
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">毛玻璃强度: <span id="bg-blur-value">12</span>px</label>
+                                <input type="range" id="settings-bg-blur" min="0" max="30" value="12" class="w-full" onchange="updateBgBlur()">
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">主题配色</label>
+
+                                <!-- 内置配色（适配深色/浅色模式） -->
+                                <p class="text-xs text-theme-muted mb-1">内置配色</p>
+                                <div class="grid grid-cols-3 gap-2 mb-3">
+                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:blue" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="builtin-blue"></div>
+                                        <div class="text-xs text-theme-secondary">蓝色</div>
+                                    </button>
+                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:green" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="builtin-green"></div>
+                                        <div class="text-xs text-theme-secondary">绿色</div>
+                                    </button>
+                                    <button onmousedown="startPalettePreview('builtin:rose')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:rose" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="builtin-rose"></div>
+                                        <div class="text-xs text-theme-secondary">玫红</div>
+                                    </button>
+                                </div>
+
+                                <!-- 自定义主题色 -->
+                                <p class="text-xs text-theme-muted mb-1">自定义主题色</p>
+                                <div class="flex gap-2 items-center mb-3">
+                                    <input type="color" id="custom-accent-input" value="#3b82f6" onchange="syncCustomAccentInputs('color')" class="w-10 h-9 rounded cursor-pointer border-2 border-theme bg-theme-tertiary" title="选择颜色">
+                                    <input type="text" id="custom-accent-text" placeholder="#3b82f6" oninput="syncCustomAccentInputs('text')" class="flex-1 px-3 py-1.5 text-sm border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" title="输入十六进制颜色">
+                                    <button onclick="applyCustomAccent()" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap">
+                                        <i class="fas fa-check mr-1"></i>应用
+                                    </button>
+                                </div>
+
+                                <!-- 背景图取色 -->
+                                <p class="text-xs text-theme-muted mb-1">背景图取色</p>
+                                <div class="flex gap-2 mb-2">
+                                    <button onclick="generatePalettePreview()" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition">
+                                        <i class="fas fa-magic mr-1"></i>提取调色板
+                                    </button>
+                                    <button onclick="regeneratePalettePreview()" id="palette-regenerate-btn" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition">
+                                        <i class="fas fa-dice mr-1"></i>重新生成配色
+                                    </button>
+                                </div>
+                                <div id="palette-preview-container" class="grid grid-cols-3 gap-2 hidden">
+                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" data-palette-key="vibrant" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="vibrant"></div>
+                                        <div class="text-xs text-theme-secondary">鲜艳</div>
+                                    </button>
+                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" data-palette-key="muted" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="muted"></div>
+                                        <div class="text-xs text-theme-secondary">柔和</div>
+                                    </button>
+                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" data-palette-key="dark" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="dark"></div>
+                                        <div class="text-xs text-theme-secondary">深色</div>
+                                    </button>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2 hidden" id="palette-hint-text">短按应用，长按预览（松开恢复）</p>
+                                <button onclick="selectThemePalette('none')" id="palette-none-btn" class="mt-2 text-xs text-theme-muted hover:text-blue-500 transition">恢复默认主题色</button>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">字体</label>
+                                <div class="flex gap-2 items-start">
+                                    <div class="flex-1 relative" id="font-combobox-wrapper">
+                                        <input type="text" id="settings-font-family-input" placeholder="点击选择或输入字体名" autocomplete="off" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500">
+                                        <button type="button" id="font-combobox-toggle" onclick="toggleFontDropdown(event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-theme-muted hover:text-theme-primary px-1 py-0.5" title="展开字体列表">
+                                            <i class="fas fa-chevron-down text-xs"></i>
+                                        </button>
+                                        <div id="font-dropdown-list" class="hidden absolute left-0 right-0 mt-1 max-h-64 overflow-y-auto border border-theme rounded-lg bg-theme-secondary shadow-lg z-50"></div>
+                                    </div>
+                                    <label for="font-file-upload" class="px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition cursor-pointer whitespace-nowrap" title="上传 TTF 字体文件">
+                                        <i class="fas fa-upload"></i>
+                                    </label>
+                                    <input type="file" id="font-file-upload" accept=".ttf,.otf,.woff,.woff2" class="hidden" onchange="handleFontFileUpload(event)">
+                                    <button type="button" id="font-clear-btn" onclick="clearUploadedFont()" class="hidden px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition cursor-pointer whitespace-nowrap" title="清除已上传字体">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2" id="font-hint-text">可手动输入或点击右侧箭头选择已安装字体；也可上传 TTF 字体文件</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="settings-section-view">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">视图偏好</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">默认首页视图</label>
+                                <select id="settings-default-view" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="task">任务</option>
+                                    <option value="schedule">日程</option>
+                                    <option value="week">周</option>
+                                    <option value="month">月</option>
+                                    <option value="quadrant">四象限</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">周开始于</label>
+                                <select id="settings-week-start" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="monday">周一</option>
+                                    <option value="sunday">周日</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">显示已完成任务</label>
+                                    <p class="text-xs text-theme-secondary">在视图中显示已完成的任务（灰色样式）</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-show-completed" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">显示农历</label>
+                                    <p class="text-xs text-theme-secondary">在月、周、日程视图中显示农历日期</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-show-lunar" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">侧边栏节假日倒计时</label>
+                                    <p class="text-xs text-theme-secondary">在侧边栏显示距下个假期的倒计时</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-show-holiday-countdown" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">侧边栏功能按钮</label>
+                                    <p class="text-xs text-theme-secondary">显示「正念小事」和「答案之书」按钮</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-show-sidebar-extras" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">彩蛋效果</label>
+                                    <p class="text-xs text-theme-secondary">达成条件时显示趣味彩蛋提示与动画</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-easter-egg" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">使用优先级设置任务底色</label>
+                                    <p class="text-xs text-theme-secondary">任务按优先级使用不同底色区分任务重要紧急程度</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-priority-task-bg" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">显示"开始专注"按钮</label>
+                                    <p class="text-xs text-theme-secondary">在任务列表、四象限、日程视图中显示快捷专注按钮</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-show-focus-button" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="settings-section-defaults">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">新建任务默认值</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">默认清单分组</label>
+                                <select id="settings-default-list" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                </select>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-theme-secondary">默认重要</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-default-important" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-yellow-500"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-theme-secondary">默认紧急</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-default-urgent" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                                </label>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">默认持续时长</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="settings-default-duration" min="5" max="480" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" placeholder="30">
+                                    <span class="text-sm text-theme-secondary">分钟</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 命令面板 -->
+                    <div id="settings-section-command">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">命令面板</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">创建任务时移除时间文本</label>
+                                    <p class="text-xs text-theme-secondary">从标题中删去已解析的日期/时间文字（如"7月7日 下午2点"）</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-cmd-remove-time" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                </label>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">未识别日期时的默认日期</label>
+                                <p class="text-xs text-theme-muted mb-2">当输入中未包含任何日期信息时，任务的默认日期</p>
+                                <select id="settings-cmd-default-date" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="none">无日期</option>
+                                    <option value="today">今天</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 快捷键 -->
+                    <div id="settings-section-shortcuts">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">快捷键</h3>
+                        <div class="space-y-3" id="shortcuts-settings-container">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+
+                    <div id="settings-section-pomodoro">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">番茄计时设置</h3>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">专注时长 (分钟)</label>
+                                <input type="number" id="settings-focus-duration" min="1" max="60" value="25" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">短休息时长 (分钟)</label>
+                                <input type="number" id="settings-short-break-duration" min="1" max="30" value="5" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">长休息时长 (分钟)</label>
+                                <input type="number" id="settings-long-break-duration" min="1" max="60" value="15" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">长休息间隔 (番茄数)</label>
+                                <input type="number" id="settings-long-break-interval" min="2" max="10" value="4" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                        </div>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-theme-primary">自动休息</label>
+                                    <p class="text-xs text-theme-secondary">专注倒计时结束后，自动进入休息倒计时</p>
+                                </div>
+                                <input type="checkbox" id="settings-auto-break" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-theme-primary">自动专注</label>
+                                    <p class="text-xs text-theme-secondary">休息倒计时结束后，自动开始专注倒计时</p>
+                                </div>
+                                <input type="checkbox" id="settings-auto-focus" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-theme-primary">背景流动效果</label>
+                                    <p class="text-xs text-theme-secondary">开启后使用更强的背景渐变流动动画（性能消耗较大）</p>
+                                </div>
+                                <input type="checkbox" id="settings-bg-flow-effect" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-theme-primary">高级粒子动画</label>
+                                    <p class="text-xs text-theme-secondary">显示粒子、星云、光束、气泡、萤火虫等附加动画效果</p>
+                                </div>
+                                <input type="checkbox" id="settings-advanced-particle" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="settings-section-notification">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">通知设置</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">消息自动消失时间 (秒)</label>
+                                <input type="number" id="settings-toast-duration" min="1" max="30" value="5" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">稍后提醒延迟 (分钟)</label>
+                                <p class="text-xs text-theme-muted mb-2">点击"稍后提醒"后，间隔多少分钟再次弹出提醒</p>
+                                <input type="number" id="settings-snooze-delay" min="1" max="120" value="15" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">系统桌面通知</label>
+                                    <p class="text-xs text-theme-muted">通过系统通知服务发送桌面提醒，无需浏览器权限</p>
+                                </div>
+                                <button id="settings-notification-perm-btn" class="px-4 py-2 text-sm border border-theme rounded-lg text-theme-secondary hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer" onclick="testNotification()">
+                                    通知测试
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 节假日与调休 -->
+                    <div id="settings-section-holiday">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">节假日与调休</h3>
+                        <div class="space-y-3">
+                            <p class="text-sm text-theme-secondary">管理各年份的法定节假日和调休日数据，确保日程计算准确。</p>
+                            <button onclick="switchToHolidayPage()" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
+                                <i class="fas fa-calendar-alt"></i>设置节假日与调休
+                            </button>
+
+                            <div class="border-t border-theme pt-3 mt-3">
+                                <label class="block text-sm font-medium text-theme-primary mb-2">自动抓取调休数据</label>
+                                <p class="text-xs text-theme-muted mb-2">从在线 API 抓取当年调休安排并自动写入 holiday_data.json（需互联网）</p>
+                                <div class="flex gap-2 mb-2">
+                                    <input type="number" id="settings-holiday-fetch-year" min="2020" max="2099" class="w-24 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" placeholder="年份">
+                                    <button onclick="fetchHolidayData()" id="holiday-fetch-btn" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition text-sm">
+                                        <i class="fas fa-download mr-1"></i>立即抓取
+                                    </button>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-theme-muted mb-1">自定义 API 地址（留空则使用 timor.tech → jiejiari 顺序）</label>
+                                    <input type="text" id="settings-holiday-api-url" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm" placeholder="https://your-api.example.com/holidays">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="settings-section-mindful">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">正念小事</h3>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-theme-secondary">接受后自动创建任务</span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="settings-auto-create" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="settings-section-sync">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据同步</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">数据刷新间隔 (秒)</label>
+                                <p class="text-xs text-theme-muted mb-2">多标签页或多人协作时，自动从服务器同步数据的间隔时间</p>
+                                <input type="number" id="settings-refresh-interval" min="5" max="300" value="30" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 网络配置 -->
+                    <div id="settings-section-network">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">网络配置</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-theme-primary mb-2">网页模式</label>
+                                <div class="flex gap-2">
+                                    <select id="settings-web-mode" onchange="onWebModeChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500">
+                                        <option value="offline">离线版（本地资源，推荐内网使用）</option>
+                                        <option value="online">在线版（CDN 资源，需互联网）</option>
+                                    </select>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2">离线版使用本地 Tailwind/FontAwesome 资源，无需互联网连接；在线版使用 CDN 资源，切换前会检测网络连通性。</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-primary mb-2">访问地址</label>
+                                <div class="flex gap-2">
+                                    <select id="settings-bind-address" onchange="onBindAddressChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500">
+                                        <option value="127.0.0.1">仅本机 (127.0.0.1)</option>
+                                        <option value="0.0.0.0">局域网共享 (0.0.0.0)</option>
+                                    </select>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2">选择"局域网共享"后，同一网络下的其他设备可通过IP地址访问本系统。</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-primary mb-2">服务端口</label>
+                                <div class="flex gap-2">
+                                    <input type="number" id="settings-port" min="1024" max="65535" value="14438" onchange="onPortChange()" oninput="onPortChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500 font-mono" placeholder="14438">
+                                </div>
+                                <p class="text-xs text-theme-muted mt-1">推荐范围：1024-65535，建议使用 10000-65535 中不常见的端口号。</p>
+                                <p id="port-warning" class="text-xs text-red-500 mt-1 hidden"></p>
+                            </div>
+                            <div id="network-info-container" class="hidden">
+                                <label class="block text-sm font-medium text-theme-primary mb-2">局域网访问地址</label>
+                                <div class="flex items-center gap-2">
+                                    <code id="lan-access-url" class="flex-1 px-3 py-2 bg-theme-tertiary border border-theme rounded-lg text-sm text-blue-500 font-mono select-all"></code>
+                                    <button onclick="copyLanUrl()" class="px-3 py-2 border border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm" title="复制">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2">其他设备在浏览器中打开此地址即可访问。修改访问地址后需重启服务生效。</p>
+                            </div>
+                            <div id="localhost-info-container">
+                                <label class="block text-sm font-medium text-theme-primary mb-2">本机访问地址</label>
+                                <div class="flex items-center gap-2">
+                                    <code id="localhost-access-url" class="flex-1 px-3 py-2 bg-theme-tertiary border border-theme rounded-lg text-sm text-blue-500 font-mono select-all"></code>
+                                    <button onclick="copyLocalhostUrl()" class="px-3 py-2 border border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm" title="复制">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="network-restart-hint" class="hidden px-3 py-2">
+                                <p class="text-xs text-amber-600 dark:text-amber-400"><i class="fas fa-exclamation-triangle mr-1"></i>网络配置已更改，点击底部「重启服务」按钮即可生效（无需单独保存）。</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="settings-section-data">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.3.3</span></h3>
+                        <div class="space-y-4">
+                            <div class="flex gap-3">
+                                <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
+                                    <i class="fas fa-download"></i>导入数据
+                                </label>
+                                <button onclick="exportData()" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2">
+                                    <i class="fas fa-upload"></i>导出数据
+                                </button>
+                                <input type="file" id="import-data" accept=".json" class="hidden" onchange="importData(this.files[0])">
+                            </div>
+                            
+                            <div class="border-t border-theme pt-4">
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="flex items-center gap-2 text-sm font-medium text-theme-primary">
+                                        <input type="checkbox" id="backup-enabled" onchange="toggleAutoBackup()" class="w-4 h-4 rounded">
+                                        <span>启用自动备份</span>
+                                    </label>
+                                </div>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-sm text-theme-secondary mb-1">备份周期（天）</label>
+                                        <input type="number" id="backup-interval" min="1" max="365" value="7" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" onchange="updateBackupSettings()">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-theme-secondary mb-1">数据保留周期（天）</label>
+                                        <div class="flex gap-3">
+                                            <input type="number" id="retention-period" min="0" max="365" value="30" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" onchange="updateBackupSettings()">
+                                            <button onclick="setRetentionToForever()" class="px-4 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm">永久保存</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-2">开启后，系统将按设定周期自动备份数据到服务器 backups 目录，无需手动操作。数据保留周期到期后自动清理旧备份，设置为0天表示永久保存。</p>
+                                <p class="text-xs text-theme-muted mt-1">备份目录：<span id="backup-dir-path">加载中...</span></p>
+                            </div>
+
+                            <p class="text-xs text-theme-muted">数据将导出为 JSON 格式文件，包含所有任务、清单和配置信息。导入时请选择之前导出的 JSON 文件。</p>
+                            
+                            <div class="border-t border-theme pt-4 mt-4">
+                                <div class="flex items-center justify-between">
+                                    <label class="flex items-center gap-2 text-sm font-medium text-theme-primary">
+                                        <i class="fas fa-rocket text-theme-muted"></i>
+                                        <span>开机自动启动</span>
+                                    </label>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="settings-autostart" onchange="toggleAutoStart()" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:bg-gray-600 peer-checked:bg-blue-600"></div>
+                                    </label>
+                                </div>
+                                <p class="text-xs text-theme-muted mt-1">开启后，系统将在登录时自动启动服务并打开浏览器</p>
+                            </div>
+
+                            <div class="border-t border-theme pt-4 mt-4">
+                                <div class="flex gap-3">
+                                    <button onclick="resetAllData()" id="reset-data-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30 transition text-sm">
+                                        <i class="fas fa-exclamation-triangle mr-1"></i>重置数据
+                                    </button>
+                                    <button onclick="restartServer()" id="restart-btn" class="flex-1 px-4 py-2 border border-amber-500 text-amber-500 rounded-lg hover:bg-amber-50 dark:border-amber-400 dark:text-amber-400 dark:hover:bg-amber-900/30 transition text-sm">
+                                        <i class="fas fa-redo mr-1"></i>重启服务
+                                    </button>
+                                    <button onclick="shutdownServer()" id="shutdown-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30 transition text-sm">
+                                        <i class="fas fa-power-off mr-1"></i>结束服务
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                </div>
+            </div>
+
+            <div class="flex gap-3 p-6 border-t border-theme flex-shrink-0">
+                <button onclick="closeSettingsModal()" class="flex-1 px-4 py-2 border border-theme text-theme-secondary rounded-lg hover:bg-theme-tertiary transition">关闭</button>
+                <button onclick="saveSettings()" class="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition" style="background-color: var(--accent-color)">保存设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 节假日与调休管理页面 -->
+    <div id="holiday-page" class="fixed inset-0 z-40 hidden overflow-y-auto">
+        <!-- 返回按钮（页面最左侧，字号与标题对齐） -->
+        <button onclick="closeHolidayPage()" class="fixed top-6 left-6 z-50 text-xl text-theme-primary hover:text-theme-secondary transition flex items-center">
+            <i class="fas fa-arrow-left mr-2"></i>返回
+        </button>
+
+        <div class="max-w-4xl mx-auto p-6">
+            <!-- 头部：标题 + 圆形图标按钮 -->
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-semibold text-theme-primary">设置节假日与调休</h2>
+                <div class="flex gap-3">
+                    <label for="holiday-import-file" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition cursor-pointer" title="导入 JSON">
+                        <i class="fas fa-download"></i>
+                    </label>
+                    <button onclick="exportHolidayJSON()" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition" title="导出 JSON">
+                        <i class="fas fa-upload"></i>
+                    </button>
+                    <input type="file" id="holiday-import-file" accept=".json" class="hidden" onchange="handleHolidayImport(this.files[0])">
+                </div>
+            </div>
+
+            <!-- 年份导航 + 统计 -->
+            <div class="flex items-center justify-between mb-4 p-4 bg-theme-tertiary rounded-lg">
+                <div class="flex items-center gap-3">
+                    <button onclick="navigateHolidayYear(-1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="上一年">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <span id="holiday-year-label" onclick="toggleHolidayYearPicker()" class="text-lg font-semibold text-theme-primary min-w-[80px] text-center cursor-pointer hover:text-blue-500 transition relative"></span>
+                    <button onclick="navigateHolidayYear(1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="下一年">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+                <div id="holiday-stats" class="text-sm text-theme-secondary">假期：0 天 | 调休：0 天</div>
+            </div>
+
+            <!-- 数据列表（单栏分组列表） -->
+            <div class="holiday-list-wrap">
+                <div id="holiday-groups"></div>
+            </div>
+
+            <!-- 节日名称建议列表 -->
+            <datalist id="holiday-festival-names">
+                <option value="元旦">
+                <option value="春节">
+                <option value="清明节">
+                <option value="劳动节">
+                <option value="端午节">
+                <option value="中秋节">
+                <option value="国庆节">
+            </datalist>
+        </div>
+    </div>
+
+    <script>
+    function togglePomodoroRightPanel() {
+        const rightPanel = document.getElementById('pomodoro-right-panel');
+        const leftPanel = document.getElementById('pomodoro-left-panel');
+        const toggleBtn = document.getElementById('pomodoro-toggle-panel-btn');
+        const toggleIcon = document.getElementById('pomodoro-toggle-panel-icon');
+        if (!rightPanel || !leftPanel) return;
+
+        // 临时禁用过渡，避免过渡期间读取中间宽度导致粒子偏移
+        leftPanel.style.transition = 'none';
+
+        if (rightPanel.classList.contains('hidden')) {
+            // 展开
+            rightPanel.classList.remove('hidden');
+            leftPanel.classList.remove('flex-1');
+            leftPanel.classList.add('flex-[7]');
+            toggleBtn.title = '收起概况';
+            if (toggleIcon) toggleIcon.className = 'fas fa-angles-right text-xl';
+        } else {
+            // 收起
+            rightPanel.classList.add('hidden');
+            leftPanel.classList.remove('flex-[7]');
+            leftPanel.classList.add('flex-1');
+            toggleBtn.title = '展开概况';
+            if (toggleIcon) toggleIcon.className = 'fas fa-angles-left text-xl';
+        }
+
+        // 强制同步布局重计算，确保宽度瞬间跳到最终值
+        void leftPanel.offsetWidth;
+        // 恢复过渡
+        leftPanel.style.transition = '';
+
+        // 面板尺寸变化后刷新动画
+        if (typeof refreshPomodoroAnimations === 'function') refreshPomodoroAnimations();
+    }
+
+    function togglePomodoroFullscreen() {
+        const pomodoroPage = document.getElementById('pomodoro-page');
+        if (!document.fullscreenElement) {
+            pomodoroPage.requestFullscreen().then(() => {
+                // 全屏后只显示左栏动画渐变部分，隐藏右栏
+                const rightPanel = document.getElementById('pomodoro-right-panel');
+                if (rightPanel) rightPanel.classList.add('hidden');
+                // 左栏占满全宽
+                const leftPanel = document.getElementById('pomodoro-left-panel');
+                if (leftPanel) leftPanel.classList.remove('flex-[7]');
+                if (leftPanel) leftPanel.classList.add('flex-1');
+                // 隐藏返回按钮
+                const backBtn = document.getElementById('pomodoro-back-btn');
+                if (backBtn) backBtn.classList.add('hidden');
+                // 隐藏设置、统计和收起/展开按钮
+                const settingsBtn = document.getElementById('pomodoro-settings-btn');
+                if (settingsBtn) settingsBtn.classList.add('hidden');
+                const statsBtn = document.getElementById('pomodoro-stats-btn');
+                if (statsBtn) statsBtn.classList.add('hidden');
+                const togglePanelBtn = document.getElementById('pomodoro-toggle-panel-btn');
+                if (togglePanelBtn) togglePanelBtn.classList.add('hidden');
+                // 更新按钮图标
+                const btn = pomodoroPage.querySelector('[title="全屏"] i');
+                if (btn) btn.className = 'fas fa-compress text-xl';
+            }).catch(err => {
+                console.log('全屏失败:', err);
+            });
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    document.addEventListener('fullscreenchange', () => {
+        const pomodoroPage = document.getElementById('pomodoro-page');
+        if (!document.fullscreenElement) {
+            // 退出全屏，恢复收起/展开按钮
+            const togglePanelBtn = document.getElementById('pomodoro-toggle-panel-btn');
+            if (togglePanelBtn) togglePanelBtn.classList.remove('hidden');
+            // 根据收起/展开按钮的状态恢复右栏
+            const toggleIcon = document.getElementById('pomodoro-toggle-panel-icon');
+            const wasCollapsed = toggleIcon && toggleIcon.classList.contains('fa-angles-left');
+            const rightPanel = document.getElementById('pomodoro-right-panel');
+            const leftPanel = document.getElementById('pomodoro-left-panel');
+            if (wasCollapsed) {
+                // 之前是收起状态，保持收起
+                if (rightPanel) rightPanel.classList.add('hidden');
+                if (leftPanel) {
+                    leftPanel.style.transition = 'none';
+                    leftPanel.classList.remove('flex-[7]');
+                    leftPanel.classList.add('flex-1');
+                    void leftPanel.offsetWidth;
+                    leftPanel.style.transition = '';
+                }
+            } else {
+                // 之前是展开状态，恢复右栏
+                if (rightPanel) rightPanel.classList.remove('hidden');
+                if (leftPanel) {
+                    leftPanel.style.transition = 'none';
+                    leftPanel.classList.remove('flex-1');
+                    leftPanel.classList.add('flex-[7]');
+                    void leftPanel.offsetWidth;
+                    leftPanel.style.transition = '';
+                }
+            }
+            // 恢复返回按钮
+            const backBtn = document.getElementById('pomodoro-back-btn');
+            if (backBtn) backBtn.classList.remove('hidden');
+            // 恢复设置和统计按钮
+            const settingsBtn = document.getElementById('pomodoro-settings-btn');
+            if (settingsBtn) settingsBtn.classList.remove('hidden');
+            const statsBtn = document.getElementById('pomodoro-stats-btn');
+            if (statsBtn) statsBtn.classList.remove('hidden');
+            // 更新按钮图标
+            const btn = pomodoroPage.querySelector('[title="全屏"] i');
+            if (btn) btn.className = 'fas fa-expand text-xl';
+            // 退出全屏后重新生成动画效果（面板尺寸已变化）
+            if (typeof refreshPomodoroAnimations === 'function') refreshPomodoroAnimations();
+        } else {
+            // 进入全屏后重新生成动画效果（面板尺寸已变化）
+            if (typeof refreshPomodoroAnimations === 'function') refreshPomodoroAnimations();
+        }
+    });
+    </script>
+
+    <script src="answers.js"></script>
+    <script src="mindful.js"></script>
+    <script src="lunar.js"></script>
+    <script src="utils.js"></script>
+    <script src="data.js"></script>
+    <script src="views.js"></script>
+    <script src="tasks.js"></script>
+    <script src="pomodoro.js"></script>
+    <script src="commandPalette.js"></script>
+    <script src="easterEgg.js"></script>
+    <script src="holiday.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

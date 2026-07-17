@@ -1,0 +1,26 @@
+# Runtime state
+server.log
+server.pid
+server.port
+.data.lock
+
+# User data
+data.json
+
+# Python
+__pycache__/
+
+# Android
+android/
+
+# IDE
+.trae/
+.idea/
+.vscode/
+
+# Documents
+documents/
+
+# OS
+.DS_Store
+Thumbs.db
