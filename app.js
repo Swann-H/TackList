@@ -1345,20 +1345,40 @@ function initThemePalettePreview() {
     }
 
     _highlightActivePalette(settings.themePalette || 'none');
+    _renderPaletteResetButtons();
 }
 
 // 渲染内置配色预览色条（根据当前主题选择 light/dark 变体）
+// 每个色条段可悬停显示编辑图标，点击后直接弹出系统调色板（input[type=color]）实时保存
 function _renderBuiltinPalettePreviews() {
     const isDark = isDarkThemeActive();
+    // 色条显示的字段顺序：accent, bgPrimary, bgSecondary, textPrimary, textMuted, border
+    const fields = ['accent', 'bgPrimary', 'bgSecondary', 'textPrimary', 'textMuted', 'border'];
     Object.keys(BUILTIN_PALETTES).forEach(key => {
-        const palette = BUILTIN_PALETTES[key];
-        const variant = isDark ? palette.dark : palette.light;
+        const paletteKey = 'builtin:' + key;
+        // 优先使用用户编辑后的调色板，其次内置
+        const palette = resolvePaletteObject(paletteKey) || BUILTIN_PALETTES[key];
+        if (!palette) return;
+        const variant = (palette.light && palette.dark) ? (isDark ? palette.dark : palette.light) : palette;
         const bar = document.querySelector('.palette-color-bar[data-palette="builtin-' + key + '"]');
         if (bar) {
             bar.innerHTML = '';
-            [variant.accent, variant.bgPrimary, variant.bgSecondary, variant.textPrimary, variant.border].forEach(color => {
+            fields.forEach(field => {
+                const color = variant[field];
                 const span = document.createElement('span');
                 span.style.backgroundColor = color;
+                span.dataset.field = field;
+                span.dataset.paletteKey = paletteKey;
+                // 阻止 mousedown 冒泡到父 button，避免触发 startPalettePreview 应用配色
+                span.onmousedown = function(e) { e.stopPropagation(); e.preventDefault(); };
+                span.onclick = function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    _openColorPicker(paletteKey, field, color, span);
+                };
+                const icon = document.createElement('i');
+                icon.className = 'fas fa-pen palette-edit-icon';
+                span.appendChild(icon);
                 bar.appendChild(span);
             });
         }
@@ -1366,17 +1386,322 @@ function _renderBuiltinPalettePreviews() {
 }
 
 function _renderPalettePreviews(palettes) {
+    const fields = ['accent', 'bgPrimary', 'bgSecondary', 'textPrimary', 'textMuted', 'border'];
     ['vibrant', 'muted', 'dark'].forEach(name => {
-        const p = palettes[name];
+        // 优先使用用户编辑后的调色板，其次背景图提取的
+        const p = (settings.customPalettes && settings.customPalettes[name]) || palettes[name];
         if (!p) return;
         const bar = document.querySelector('.palette-color-bar[data-palette="' + name + '"]');
         if (bar) {
             bar.innerHTML = '';
-            [p.accent, p.bgPrimary, p.bgSecondary, p.textPrimary, p.border].forEach(color => {
+            fields.forEach(field => {
+                const color = p[field];
                 const span = document.createElement('span');
                 span.style.backgroundColor = color;
+                span.dataset.field = field;
+                span.dataset.paletteKey = name;
+                // 阻止 mousedown 冒泡到父 button，避免触发 startPalettePreview 应用配色
+                span.onmousedown = function(e) { e.stopPropagation(); e.preventDefault(); };
+                span.onclick = function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    _openColorPicker(name, field, color, span);
+                };
+                const icon = document.createElement('i');
+                icon.className = 'fas fa-pen palette-edit-icon';
+                span.appendChild(icon);
                 bar.appendChild(span);
             });
+        }
+    });
+}
+
+// 配色显示名称映射
+const PALETTE_DISPLAY_NAMES = {
+    'builtin:blue': '蓝色',
+    'builtin:green': '绿色',
+    'builtin:rose': '玫红',
+    'vibrant': '鲜艳',
+    'muted': '柔和',
+    'dark': '深色'
+};
+
+// 基于当前颜色生成5个相近预设色（原色、稍亮、稍暗、色相+、色相-）
+function _generateRelatedColors(hex) {
+    function toHsl(hex) {
+        const r = parseInt(hex.slice(1, 3), 16) / 255;
+        const g = parseInt(hex.slice(3, 5), 16) / 255;
+        const b = parseInt(hex.slice(5, 7), 16) / 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h = 0, s = 0, l = (max + min) / 2;
+        if (max !== min) {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h *= 60;
+        }
+        return [h, s * 100, l * 100];
+    }
+    function toHex(h, s, l) {
+        h = ((h % 360) + 360) % 360;
+        s = Math.max(0, Math.min(100, s)) / 100;
+        l = Math.max(0, Math.min(100, l)) / 100;
+        const c = (1 - Math.abs(2 * l - 1)) * s;
+        const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        const m = l - c / 2;
+        let r = 0, g = 0, b = 0;
+        if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; }
+        else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; }
+        else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+        const to2 = v => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+        return '#' + to2(r) + to2(g) + to2(b);
+    }
+    const [h, s, l] = toHsl(hex);
+    return [
+        hex,
+        toHex(h, s, Math.min(85, l + 15)),
+        toHex(h, s, Math.max(15, l - 15)),
+        toHex(h + 25, s, l),
+        toHex(h - 25, s, l)
+    ];
+}
+
+// 弹出内联颜色选择器：定位在色条段下方，包含标题、可见调色板、hex输入、预设色、保存/取消按钮
+// 使用可见的 input[type=color] 使浏览器原生调色板在正确位置弹出
+function _openColorPicker(paletteKey, field, currentColor, anchorEl) {
+    _closeInlineColorPicker();
+    if (!anchorEl) return;
+
+    const paletteName = PALETTE_DISPLAY_NAMES[paletteKey] || paletteKey;
+    const fieldLabel = PALETTE_FIELD_LABELS[field] || field;
+    const originalColor = (currentColor && currentColor.startsWith('#')) ? currentColor : '#3b82f6';
+    let currentHex = originalColor;
+
+    const picker = document.createElement('div');
+    picker.id = 'palette-inline-picker';
+    picker.className = 'fixed z-[10000] bg-theme-primary border-2 border-blue-500 rounded-lg p-3 shadow-2xl';
+    picker.style.cssText = 'min-width:200px;';
+
+    // 基于当前颜色生成5个相近预设色
+    const presets = _generateRelatedColors(originalColor);
+
+    picker.innerHTML =
+        '<div class="text-xs font-semibold text-theme-primary mb-2">编辑' + paletteName + ' · ' + fieldLabel + '</div>' +
+        '<div class="flex gap-2 items-center mb-2">' +
+            '<input type="color" id="inline-color-input" value="' + originalColor + '" class="w-12 h-9 rounded cursor-pointer border-2 border-theme" style="padding:0;background:transparent;">' +
+            '<input type="text" id="inline-hex-input" value="' + originalColor + '" class="flex-1 px-2 py-1.5 text-sm border-2 border-theme rounded bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" maxlength="7" spellcheck="false">' +
+        '</div>' +
+        '<div class="flex gap-1 mb-3">' +
+            presets.map(function(c) { return '<div class="preset-color flex-1 h-6 rounded cursor-pointer border border-theme hover:scale-110 transition" style="background-color:' + c + ';" data-color="' + c + '" title="' + c + '"></div>'; }).join('') +
+        '</div>' +
+        '<div class="flex justify-end gap-2">' +
+            '<button id="inline-cancel-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border border-theme text-theme-secondary hover:bg-theme-secondary transition" title="取消"><i class="fas fa-times text-sm"></i></button>' +
+            '<button id="inline-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition" title="保存"><i class="fas fa-check text-sm"></i></button>' +
+        '</div>';
+
+    document.body.appendChild(picker);
+
+    // 定位：在 anchorEl 下方，做视口边界检查
+    const rect = anchorEl.getBoundingClientRect();
+    const pickerW = picker.offsetWidth;
+    const pickerH = picker.offsetHeight;
+    let left = rect.left;
+    let top = rect.bottom + 4;
+    if (left + pickerW > window.innerWidth - 8) left = window.innerWidth - pickerW - 8;
+    if (left < 8) left = 8;
+    if (top + pickerH > window.innerHeight - 8) top = rect.top - pickerH - 4;
+    if (top < 8) top = 8;
+    picker.style.left = left + 'px';
+    picker.style.top = top + 'px';
+
+    const colorInput = picker.querySelector('#inline-color-input');
+    const hexInput = picker.querySelector('#inline-hex-input');
+    const saveBtn = picker.querySelector('#inline-save-btn');
+    const cancelBtn = picker.querySelector('#inline-cancel-btn');
+
+    // 更新颜色（内部）：同步控件 + 实时预览色条段 + 预览应用到CSS变量
+    function updateColor(hex, syncColorInput, syncHexInput) {
+        currentHex = hex;
+        if (syncColorInput) colorInput.value = hex;
+        if (syncHexInput) hexInput.value = hex;
+        if (anchorEl) anchorEl.style.backgroundColor = hex;
+        _applyPaletteColor(paletteKey, field, hex, true);
+    }
+
+    // 可见 color input 变化 -> 更新文本框 + 预览
+    colorInput.addEventListener('input', function(e) {
+        updateColor(e.target.value, false, true);
+    });
+
+    // hex 文本框输入 -> 验证后同步
+    hexInput.addEventListener('input', function(e) {
+        let val = e.target.value.trim();
+        if (!val.startsWith('#')) val = '#' + val;
+        if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+            updateColor(val, true, false);
+        }
+    });
+
+    // 预设色点击
+    picker.querySelectorAll('.preset-color').forEach(function(el) {
+        el.addEventListener('click', function() {
+            updateColor(this.dataset.color, true, true);
+        });
+    });
+
+    // 保存
+    saveBtn.addEventListener('click', function() {
+        _applyPaletteColor(paletteKey, field, currentHex, false);
+        _closeInlineColorPicker();
+    });
+
+    // 取消：恢复原始颜色
+    cancelBtn.addEventListener('click', function() {
+        _applyPaletteColor(paletteKey, field, originalColor, false);
+        if (anchorEl) anchorEl.style.backgroundColor = originalColor;
+        _closeInlineColorPicker();
+    });
+
+    // 点击外部关闭（等同于取消）
+    setTimeout(function() {
+        document.addEventListener('mousedown', _inlinePickerOutsideHandler);
+    }, 0);
+}
+
+function _closeInlineColorPicker() {
+    const picker = document.getElementById('palette-inline-picker');
+    if (picker) picker.remove();
+    document.removeEventListener('mousedown', _inlinePickerOutsideHandler);
+}
+
+function _inlinePickerOutsideHandler(e) {
+    const picker = document.getElementById('palette-inline-picker');
+    if (picker && !picker.contains(e.target)) {
+        // 排除点击其他色条段的情况（会自行调 _openColorPicker）
+        if (e.target && e.target.closest && e.target.closest('.palette-color-bar span')) return;
+        const cancelBtn = picker.querySelector('#inline-cancel-btn');
+        if (cancelBtn) cancelBtn.click();
+        else _closeInlineColorPicker();
+    }
+}
+
+// 将颜色应用到调色板并保存（实时）
+// isPreview=true 时仅更新内存和视觉，不触发 saveData（避免高频写入）
+// isPreview=false 时执行最终保存
+let _paletteColorSaveTimer = null;
+function _applyPaletteColor(paletteKey, field, hex, isPreview) {
+    const isDark = isDarkThemeActive();
+    const currentPalette = resolvePaletteObject(paletteKey);
+    if (!currentPalette) return;
+    const newPalette = JSON.parse(JSON.stringify(currentPalette));
+
+    // 更新对应变体的字段
+    if (newPalette.light && newPalette.dark) {
+        // 双变体：仅更新当前主题对应的变体
+        if (isDark) {
+            newPalette.dark[field] = hex;
+        } else {
+            newPalette.light[field] = hex;
+        }
+    } else {
+        // 扁平结构（背景图提取的）
+        newPalette[field] = hex;
+        // 同步 RGB 字段
+        if (field === 'bgPrimary') {
+            const [r, g, b] = _hexToRgb(hex);
+            newPalette.bgPrimaryRgb = r + ',' + g + ',' + b;
+        } else if (field === 'bgSecondary') {
+            const [r, g, b] = _hexToRgb(hex);
+            newPalette.bgSecondaryRgb = r + ',' + g + ',' + b;
+        } else if (field === 'bgTertiary') {
+            const [r, g, b] = _hexToRgb(hex);
+            newPalette.bgTertiaryRgb = r + ',' + g + ',' + b;
+        }
+    }
+
+    // 保存到 customPalettes
+    if (!settings.customPalettes) settings.customPalettes = {};
+    settings.customPalettes[paletteKey] = newPalette;
+
+    // 如果当前正在使用该调色板，立即应用到 CSS 变量
+    if (settings.themePalette === paletteKey) {
+        applyThemePalette(paletteKey);
+    }
+
+    // 节流保存：预览时 300ms 节流，最终保存时立即保存
+    if (!isPreview) {
+        if (_paletteColorSaveTimer) {
+            clearTimeout(_paletteColorSaveTimer);
+            _paletteColorSaveTimer = null;
+        }
+        saveData();
+        _renderPaletteResetButtons();
+    } else {
+        if (_paletteColorSaveTimer) clearTimeout(_paletteColorSaveTimer);
+        _paletteColorSaveTimer = setTimeout(() => {
+            saveData();
+            _renderPaletteResetButtons();
+        }, 400);
+    }
+}
+
+// ==================== 配色编辑弹窗 ====================
+// 字段中文名映射
+const PALETTE_FIELD_LABELS = {
+    accent: '强调色',
+    accentHover: '强调色悬停',
+    accentSecondary: '辅助色',
+    accentBg: '强调色背景',
+    accentBgStrong: '强调色背景（深）',
+    accentTextDark: '强调色文字',
+    accentLight: '强调色浅色',
+    bgPrimary: '主背景',
+    bgSecondary: '次级背景',
+    bgTertiary: '三级背景',
+    textPrimary: '主文字',
+    textSecondary: '次级文字',
+    textMuted: '辅助文字',
+    border: '边框'
+};
+
+// 撤销编辑：删除该调色板的 customPalettes 记录，恢复原始配色
+// 从设置界面配色卡片上的撤销按钮触发
+function resetPaletteEdit(paletteKey) {
+    if (settings.customPalettes && settings.customPalettes[paletteKey]) {
+        delete settings.customPalettes[paletteKey];
+        // 如果 customPalettes 为空，置为 null 保持干净
+        if (Object.keys(settings.customPalettes).length === 0) {
+            settings.customPalettes = null;
+        }
+        saveData();
+        // 如果当前正在使用该调色板，立即应用原始配色
+        if (settings.themePalette === paletteKey) {
+            applyThemePalette(paletteKey);
+        }
+        // 重新渲染色条预览和撤销按钮
+        _renderBuiltinPalettePreviews();
+        if (settings.themePaletteColors) {
+            _renderPalettePreviews(settings.themePaletteColors);
+        }
+        _renderPaletteResetButtons();
+        showToast('已恢复原始配色', 'success', 2000);
+    } else {
+        showToast('该配色未做编辑', 'info', 2000);
+    }
+}
+
+// 渲染配色卡片上的撤销按钮（仅当该配色有编辑记录时显示）
+function _renderPaletteResetButtons() {
+    const paletteKeys = ['builtin:blue', 'builtin:green', 'builtin:rose', 'vibrant', 'muted', 'dark'];
+    paletteKeys.forEach(key => {
+        const btn = document.querySelector('.palette-reset-btn[data-palette-key="' + key + '"]');
+        if (btn) {
+            const hasEdit = settings.customPalettes && settings.customPalettes[key];
+            btn.style.display = hasEdit ? '' : 'none';
         }
     });
 }

@@ -273,8 +273,8 @@ function handleQuadrantCardDrop(e, targetKey) {
     } else if (draggedQuadrant && draggedQuadrant !== targetKey) {
         const fromIndex = quadrantOrder.indexOf(draggedQuadrant);
         const toIndex = quadrantOrder.indexOf(targetKey);
-        quadrantOrder.splice(fromIndex, 1);
-        quadrantOrder.splice(toIndex, 0, draggedQuadrant);
+        // 仅对调 A 与 B 两个象限的位置，不影响其他象限的顺序
+        [quadrantOrder[fromIndex], quadrantOrder[toIndex]] = [quadrantOrder[toIndex], quadrantOrder[fromIndex]];
         saveData();
         renderView();
         showToast('象限顺序已更新', 'success');
@@ -558,6 +558,8 @@ function openEditTaskPriority(taskId) {
 
 let currentDetailTaskId = null;
 let isTimeRangeMode = false;
+// 任务详情面板只读模式（如归档清单中的任务）
+let detailReadOnly = false;
 
 function onDetailAllDayChange() {
     const timeInput = document.getElementById('detail-task-time');
@@ -602,7 +604,7 @@ function toggleTimeRange() {
     updateDetailTimeBtnText();
 }
 
-function openTaskDetailPanel(taskId) {
+function openTaskDetailPanel(taskId, readOnly = false) {
     if (planPanelOpen && !detailOpenedFromPlan) {
         const detailPanel = document.getElementById('task-detail-panel');
         if (detailPanel && !detailPanel.classList.contains('hidden')) {
@@ -614,9 +616,10 @@ function openTaskDetailPanel(taskId) {
     detailOpenedFromPlan = false;
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
-    
+
     currentDetailTaskId = taskId;
     isTimeRangeMode = !!task.endTime;
+    detailReadOnly = readOnly;
     
     const titleInput = document.getElementById('detail-task-title');
     titleInput.value = task.title;
@@ -785,6 +788,9 @@ function openTaskDetailPanel(taskId) {
     
     // 初始化任务进度显示
     updateProgressDisplay();
+
+    // 已完成任务显示创建/完成时间
+    updateDetailTimestamps(task);
     
     // 初始化任务模式
     currentTaskMode = task.mode || 'text';
@@ -849,6 +855,73 @@ function openTaskDetailPanel(taskId) {
     
     document.removeEventListener('click', handleDetailTimeMenuOutsideClick);
     document.addEventListener('click', handleDetailTimeMenuOutsideClick);
+
+    // 应用只读模式：禁用所有可编辑控件，隐藏操作按钮
+    applyDetailReadOnly(detailReadOnly);
+}
+
+// 应用/取消任务详情面板的只读模式
+function applyDetailReadOnly(readOnly) {
+    const titleInput = document.getElementById('detail-task-title');
+    const notesInput = document.getElementById('detail-task-notes');
+    const completeBtn = document.getElementById('detail-task-complete-btn');
+    const toggleModeBtn = document.getElementById('toggle-mode-btn');
+    const timeMenuBtn = document.querySelector('[onclick*="toggleDetailTimeMenu"]');
+    const progressContainer = document.getElementById('progress-container');
+    // 底部快捷按钮容器（重要/紧急/标签/清单 + 删除/专注/保存）
+    const bottomActions = document.querySelector('#task-detail-panel > div:last-child');
+
+    if (readOnly) {
+        if (titleInput) titleInput.readOnly = true;
+        if (notesInput) notesInput.readOnly = true;
+        if (completeBtn) completeBtn.style.display = 'none';
+        if (toggleModeBtn) toggleModeBtn.style.display = 'none';
+        if (timeMenuBtn) timeMenuBtn.style.display = 'none';
+        if (progressContainer) progressContainer.style.cursor = 'default';
+        if (bottomActions) bottomActions.style.display = 'none';
+    } else {
+        if (titleInput) titleInput.readOnly = false;
+        if (notesInput) notesInput.readOnly = false;
+        if (completeBtn) completeBtn.style.display = '';
+        if (toggleModeBtn) toggleModeBtn.style.display = '';
+        if (timeMenuBtn) timeMenuBtn.style.display = '';
+        if (progressContainer) progressContainer.style.cursor = 'pointer';
+        if (bottomActions) bottomActions.style.display = '';
+    }
+}
+
+// 更新已完成任务的创建/完成时间显示
+function updateDetailTimestamps(task) {
+    const container = document.getElementById('detail-timestamps-display');
+    if (!container) return;
+
+    if (!task.completed) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+    }
+
+    const formatTs = (iso) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        const pad = (n) => n.toString().padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
+    let html = '';
+    if (task.createdAt) {
+        html += `<div class="flex items-center gap-1"><i class="fas fa-plus-circle"></i><span>创建：${formatTs(task.createdAt)}</span></div>`;
+    }
+    if (task.completedAt) {
+        html += `<div class="flex items-center gap-1"><i class="fas fa-check-circle"></i><span>完成：${formatTs(task.completedAt)}</span></div>`;
+    }
+    if (html) {
+        container.innerHTML = html;
+        container.classList.remove('hidden');
+    } else {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+    }
 }
 
 function handleDetailTimeMenuOutsideClick(e) {
@@ -1648,6 +1721,18 @@ function setupDateTimeInteractions() {
 }
 
 function closeTaskDetailPanel() {
+    // 只读模式下不保存任何修改（归档清单中的任务）
+    if (detailReadOnly) {
+        detailReadOnly = false;
+        document.getElementById('task-detail-panel').classList.add('hidden');
+        currentDetailTaskId = null;
+        detailOpenedFromPlan = false;
+        if (_dataRefreshPending) {
+            refreshDataFromServer();
+        }
+        if (planPanelOpen) renderPlanPanel();
+        return;
+    }
     if (currentDetailTaskId) {
         const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
         if (taskIndex !== -1) {

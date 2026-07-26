@@ -584,14 +584,14 @@ function filterTasks(taskList) {
                     case 'week':
                         const weekStart = new Date(todayStart);
                         weekStart.setDate(weekStart.getDate() - weekStart.getDay() + dayOffset);
-                        if (weekStart.getDay() === 0 && dayOffset === 1) weekStart.setDate(weekStart.getDate() - 7);
+                        if (todayStart.getDay() === 0 && dayOffset === 1) weekStart.setDate(weekStart.getDate() - 7);
                         const weekEnd = new Date(weekStart.getTime() + 7 * 86400000);
                         filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= weekStart && new Date(t.startTime) < weekEnd);
                         break;
                     case 'lastweek':
                         const lastWeekStart = new Date(todayStart);
                         lastWeekStart.setDate(lastWeekStart.getDate() - lastWeekStart.getDay() + dayOffset - 7);
-                        if (lastWeekStart.getDay() === 0 && dayOffset === 1) lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+                        if (todayStart.getDay() === 0 && dayOffset === 1) lastWeekStart.setDate(lastWeekStart.getDate() - 7);
                         const lastWeekEnd = new Date(lastWeekStart.getTime() + 7 * 86400000);
                         filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= lastWeekStart && new Date(t.startTime) < lastWeekEnd);
                         break;
@@ -685,6 +685,22 @@ function expandTagCapsules(el, taskId) {
 function sortTasksByCompletion(taskList) {
     const incomplete = taskList.filter(t => !t.completed);
     const completed = taskList.filter(t => t.completed);
+    // 未完成：按日期升序（最早在前），无日期的放最后
+    incomplete.sort((a, b) => {
+        if (!a.startTime && !b.startTime) return 0;
+        if (!a.startTime) return 1;
+        if (!b.startTime) return -1;
+        return new Date(a.startTime) - new Date(b.startTime);
+    });
+    // 已完成：按完成时间降序（最近完成在前），无完成时间的按 createdAt 降序
+    completed.sort((a, b) => {
+        const aTime = a.completedAt || a.createdAt;
+        const bTime = b.completedAt || b.createdAt;
+        if (!aTime && !bTime) return 0;
+        if (!aTime) return 1;
+        if (!bTime) return -1;
+        return new Date(bTime) - new Date(aTime);
+    });
     return [...incomplete, ...completed];
 }
 
@@ -1096,8 +1112,13 @@ function generatePaletteFromAccent(hex) {
 
 // 根据调色板名解析出调色板对象（用于应用和预览）
 // 支持的 key：none / builtin:blue / builtin:green / builtin:rose / custom:<hex> / vibrant / muted / dark
+// 优先级：用户编辑后的 customPalettes > 内置 BUILTIN_PALETTES / themePaletteColors
 function resolvePaletteObject(name) {
     if (!name || name === 'none') return null;
+    // 用户编辑后的调色板优先（含内置和背景图提取的）
+    if (settings.customPalettes && settings.customPalettes[name]) {
+        return settings.customPalettes[name];
+    }
     if (name.startsWith('builtin:')) {
         const key = name.substring(8);
         return BUILTIN_PALETTES[key] || null;
@@ -1392,6 +1413,9 @@ function applyThemePalette(paletteName) {
 
 // 直接应用某套调色板对象到 CSS 变量（不依赖 settings，用于按住预览）
 // 支持 {light, dark} 双变体（自动根据当前主题选择）和扁平结构
+// 仅暴露 6 个核心可编辑字段：accent / bgPrimary / bgSecondary / textPrimary / textMuted / border
+// 其余字段（accentHover, accentSecondary, accentBg, accentBgStrong, accentTextDark,
+// accentLight, bgTertiary, textSecondary）若调色板未提供，则自动从核心字段派生
 function applyPaletteToCssVars(palette) {
     if (!palette) return;
     // 内置/自定义调色板含 light/dark 双变体，根据当前主题选择
@@ -1399,14 +1423,47 @@ function applyPaletteToCssVars(palette) {
         palette = isDarkThemeActive() ? palette.dark : palette.light;
     }
     const root = document.documentElement;
+    const isDark = isDarkThemeActive();
+
+    // ---- 自动派生缺失字段 ----
+    // accent 衍生色：从 accent 派生
+    if (!palette.accentHover) palette.accentHover = _deriveColor(palette.accent, { dL: -0.08 });
+    if (!palette.accentTextDark) palette.accentTextDark = palette.accentHover;
+    if (!palette.accentLight) palette.accentLight = _deriveColor(palette.accent, { dL: 0.12 });
+    if (!palette.accentSecondary) palette.accentSecondary = palette.accentLight;
+    if (!palette.accentBg) {
+        // 浅色态用浅色 hex，深色态用 rgba 透明度
+        palette.accentBg = isDark
+            ? _hexToRgba(palette.accent, 0.15)
+            : _deriveColor(palette.accent, { dL: 0.42, dS: -0.45 });
+    }
+    if (!palette.accentBgStrong) {
+        palette.accentBgStrong = isDark
+            ? _hexToRgba(palette.accent, 0.25)
+            : _deriveColor(palette.accent, { dL: 0.36, dS: -0.38 });
+    }
+    // bg 衍生：bgTertiary 从 bgSecondary 派生（亮度微调）
+    if (!palette.bgTertiary) {
+        palette.bgTertiary = _deriveColor(palette.bgSecondary, { dL: isDark ? 0.05 : -0.04, dS: 0.05 });
+    }
+    if (!palette.bgTertiaryRgb) palette.bgTertiaryRgb = _hexToRgbStr(palette.bgTertiary);
+    // text 衍生：textSecondary 从 textPrimary 派生（亮度向中灰偏移）
+    if (!palette.textSecondary) {
+        palette.textSecondary = _deriveColor(palette.textPrimary, {
+            targetL: isDark ? 0.75 : 0.4, dS: -0.1
+        });
+    }
+    if (!palette.bgPrimaryRgb) palette.bgPrimaryRgb = _hexToRgbStr(palette.bgPrimary);
+    if (!palette.bgSecondaryRgb) palette.bgSecondaryRgb = _hexToRgbStr(palette.bgSecondary);
+
+    // ---- 写入 CSS 变量 ----
     root.style.setProperty('--accent-color', palette.accent);
     root.style.setProperty('--accent-hover', palette.accentHover);
-    // 色阶变量（仅当调色板提供时设置，背景图提取的扁平结构可能没有）
-    if (palette.accentSecondary) root.style.setProperty('--accent-secondary', palette.accentSecondary);
-    if (palette.accentBg) root.style.setProperty('--accent-bg', palette.accentBg);
-    if (palette.accentBgStrong) root.style.setProperty('--accent-bg-strong', palette.accentBgStrong);
-    if (palette.accentTextDark) root.style.setProperty('--accent-text-dark', palette.accentTextDark);
-    if (palette.accentLight) root.style.setProperty('--accent-light', palette.accentLight);
+    root.style.setProperty('--accent-secondary', palette.accentSecondary);
+    root.style.setProperty('--accent-bg', palette.accentBg);
+    root.style.setProperty('--accent-bg-strong', palette.accentBgStrong);
+    root.style.setProperty('--accent-text-dark', palette.accentTextDark);
+    root.style.setProperty('--accent-light', palette.accentLight);
     root.style.setProperty('--bg-primary', palette.bgPrimary);
     root.style.setProperty('--bg-primary-rgb', palette.bgPrimaryRgb);
     root.style.setProperty('--bg-secondary', palette.bgSecondary);
@@ -1419,6 +1476,36 @@ function applyPaletteToCssVars(palette) {
     root.style.setProperty('--border-color', palette.border);
 }
 
+// 辅助：hex 转 rgba 字符串
+function _hexToRgba(hex, alpha) {
+    const [r, g, b] = _hexToRgb(hex);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+}
+
+// 辅助：hex 转 "r,g,b" 字符串
+function _hexToRgbStr(hex) {
+    const [r, g, b] = _hexToRgb(hex);
+    return r + ',' + g + ',' + b;
+}
+
+// 辅助：从 hex 派生新颜色
+// options: { dL: 亮度增量, dS: 饱和度增量, targetL: 目标亮度(0-1), targetS: 目标饱和度(0-1) }
+function _deriveColor(hex, options) {
+    options = options || {};
+    try {
+        const [r, g, b] = _hexToRgb(hex);
+        let [h, s, l] = _rgbToHsl(r, g, b);
+        if (options.targetL !== undefined) l = options.targetL;
+        else if (options.dL !== undefined) l = Math.max(0, Math.min(1, l + options.dL));
+        if (options.targetS !== undefined) s = options.targetS;
+        else if (options.dS !== undefined) s = Math.max(0, Math.min(1, s + options.dS));
+        const newRgb = _hslToRgb(h, s, l);
+        return _rgbToHex(...newRgb);
+    } catch (e) {
+        return hex;
+    }
+}
+
 // 清除动态主题色覆盖（恢复默认）
 function clearThemePaletteVars() {
     const root = document.documentElement;
@@ -1428,4 +1515,57 @@ function clearThemePaletteVars() {
         '--bg-secondary', '--bg-secondary-rgb', '--bg-tertiary', '--bg-tertiary-rgb',
         '--text-primary', '--text-secondary', '--text-muted', '--border-color'];
     keys.forEach(k => root.style.removeProperty(k));
+}
+
+// ==================== 任务过期判断与专注按钮（从 views.js 拆分） ====================
+
+// 过期红色样式类名
+const OVERDUE_TEXT_CLASS = 'text-red-500';
+
+// 判断任务是否在今天已过期（非全天任务，startTime在今天且早于当前时刻，未完成）
+function isTaskOverdueToday(task) {
+    if (!task.startTime || task.isAllDay || task.completed) return false;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const taskDate = new Date(task.startTime);
+    return taskDate >= todayStart && taskDate < tomorrowStart && taskDate < now;
+}
+
+// 判断任务是否已过期（未完成、startTime早于当前时刻，跨天任务进行中除外）
+// 全天任务：日期早于今天即为过期
+function isTaskOverdue(task) {
+    if (!task.startTime || task.completed) return false;
+    const now = new Date();
+    const taskDate = new Date(task.startTime);
+    if (task.isAllDay) {
+        // 全天任务：按日期比较，日期早于今天即为过期
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const taskDayStart = new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate());
+        // 跨天全天任务：当前在[startDate, endDate]范围内算"进行中"，不算过期
+        if (task.endTime) {
+            const taskEndDate = new Date(task.endTime);
+            const taskEndDayStart = new Date(taskEndDate.getFullYear(), taskEndDate.getMonth(), taskEndDate.getDate());
+            if (todayStart >= taskDayStart && todayStart <= taskEndDayStart) return false;
+        }
+        return taskDayStart < todayStart;
+    }
+    // 非全天任务：startTime 早于当前时刻，跨天任务进行中除外
+    if (task.endTime) {
+        const taskEndDate = new Date(task.endTime);
+        if (now >= taskDate && now <= taskEndDate) return false;
+    }
+    return taskDate < now;
+}
+
+// 渲染"开始专注"按钮（受 settings.showFocusButton 开关控制）
+function renderFocusButton(taskId, extraClasses = '') {
+    if (settings && settings.showFocusButton === false) return '';
+    return `<button onclick="event.stopPropagation(); startPomodoroForTask('${taskId}')"
+            class="pomodoro-focus-btn flex-shrink-0 opacity-0 group-hover:opacity-100 text-green-600 w-5 h-5 flex items-center justify-center transition duration-200 ${extraClasses}"
+            title="开始专注">
+        <i class="far fa-clock text-xs pf-icon-outline"></i>
+        <i class="fas fa-clock text-xs pf-icon-solid"></i>
+    </button>`;
 }

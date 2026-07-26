@@ -810,7 +810,7 @@ def cleanup_notified_ids():
         pass
 
 
-class TackListHandler(BaseHTTPRequestHandler):
+class TodoHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
@@ -2013,7 +2013,7 @@ def main():
     httpd = None
     while True:
         try:
-            httpd = HTTPServer((bind_address, PORT), TackListHandler)
+            httpd = HTTPServer((bind_address, PORT), TodoHandler)
             break
         except OSError:
             PORT += 1

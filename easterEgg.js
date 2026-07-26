@@ -1407,6 +1407,10 @@ function easterEgg_onPomodoroStart() {
  * 当主视图（默认首页视图）被打开时调用，也会在直接触发彩蛋时被调用
  */
 let ee_flushing = false; // 是否正在顺序播放彩蛋
+// Toast 完整生命周期时长（入场0.8s + 停留4.5s + 出场0.7s ≈ 6s）
+// 与 ee_showToast 中 setTimeout(remove, 6500) 对齐
+const EE_TOAST_LIFECYCLE_MS = 6500;
+
 function ee_flushPendingEffects() {
     if (eeState.pendingEffects.length === 0) return;
     // 设置项 easterEggEnabled：关闭时不显示任何彩蛋效果
@@ -1423,10 +1427,14 @@ function ee_flushPendingEffects() {
             return;
         }
         const effect = eeState.pendingEffects.shift();
-        if (effect.effectFn) effect.effectFn();
+        // 先显示 toast 完整过程（从右进入→停留→从左消失）
         ee_showToast(effect.icon, effect.message, effect.desc);
-        // 等待当前彩蛋动画大致结束后再播放下一个
-        setTimeout(playNext, 2000);
+        // 等 toast 完整生命周期结束后，再播放对应的彩蛋动画，避免同时渲染造成浏览器卡顿
+        setTimeout(() => {
+            if (effect.effectFn) effect.effectFn();
+            // 等待彩蛋动画大致结束后再播放下一个（彩蛋动画总时长≤5s，此处取 4500ms）
+            setTimeout(playNext, 4500);
+        }, EE_TOAST_LIFECYCLE_MS);
     };
     playNext();
 }

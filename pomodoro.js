@@ -987,9 +987,23 @@ function startPomodoroForTaskFromDetail() {
 
 // 当专注中的任务被勾选完成时调用
 function onFocusTaskCompleted(taskId) {
-    // 仅在专注/暂停状态下处理，且必须是当前关联的任务
+    // 必须是当前关联的任务
     if (!taskId || taskId !== pomodoroState.currentTaskId) return;
     const currentState = pomodoroState.state;
+
+    // 休息/结算阶段：专注已结束，无需拆分专注时长，仅清除关联退回一般专注
+    if (currentState === 'resting' || currentState === 'rest_ended' || currentState === 'end_settlement') {
+        pomodoroState.currentTaskId = null;
+        fetch('/api/pomodoro/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentTaskId: null, taskName: '' })
+        }).catch(err => console.error('Update pomodoro task error:', err));
+        updatePomodoroTaskButton();
+        return;
+    }
+
+    // 专注/暂停状态：需要记录已专注时长用于拆分统计
     if (currentState !== 'focusing' && currentState !== 'pause') return;
 
     const task = tasks.find(t => t.id === taskId);
@@ -2233,7 +2247,7 @@ function acceptCurrentThing() {
 function acceptBoringThing(thingId) {
     const thing = mindfulThings.find(t => t.id === thingId);
     if (!thing) return;
-    
+
     if (settings.autoCreateTask) {
         const todayStr = formatDate(new Date());
         tasks.push({
@@ -2247,17 +2261,23 @@ function acceptBoringThing(thingId) {
             startTime: new Date(todayStr + 'T00:00:00').toISOString(),
             endTime: null,
             isAllDay: true,
+            reminder: 0,
+            repeat: null,
             completed: false,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            mode: 'text',
+            subtasks: [],
+            progress: 0
         });
-        saveData();
+        // 使用立即保存（不走节流），确保数据在 refreshDataFromServer 之前已同步到服务器
+        saveDataImmediate();
         renderLists();
         renderView();
         showToast('已添加到今日任务！', 'success');
     } else {
         showToast('好的，去做吧！', 'info');
     }
-    
+
     closeBoringModal();
 }
 
@@ -2571,14 +2591,14 @@ function renderStatsTrendChart() {
     
     document.getElementById('stats-trend-avg').textContent = '每日平均：' + formatMinutes(avgMinutes);
 
-    let html = '<div class="flex items-end justify-between h-full gap-' + (period === 'month' || period === 'last_month' ? '0.5' : '2') + ' pb-6 relative">';
-    html += '<div class="absolute bottom-6 left-0 right-0 border-t border-theme"></div>';
+    let html = '<div class="flex items-end justify-between h-full gap-' + (period === 'month' || period === 'last_month' ? '0.5' : '2') + ' relative">';
+    html += '<div class="absolute bottom-5 left-0 right-0 border-t border-theme"></div>';
 
     dailyMinutes.forEach((mins, i) => {
         const height = maxMin > 0 ? Math.max((mins / maxMin) * 100, 0) : 0;
         const isToday = (period === 'week' || period === 'month') && dates[i].getTime() === today.getTime();
         const barColor = isToday ? 'background: var(--accent-color)' : 'background: #93c5fd';
-        html += '<div class="flex-1 flex flex-col items-center justify-end h-full' + (period === 'month' || period === 'last_month' ? ' group' : '') + '">';
+        html += '<div class="flex-1 min-w-0 flex flex-col items-center justify-end h-full' + (period === 'month' || period === 'last_month' ? ' group' : '') + '">';
         if (mins > 0 && period !== 'month' && period !== 'last_month') {
             html += '<div class="text-xs text-theme-secondary mb-1">' + mins + 'm</div>';
         }
@@ -2586,8 +2606,7 @@ function renderStatsTrendChart() {
             html += '<div class="text-xs text-theme-secondary mb-1 opacity-0 group-hover:opacity-100 transition">' + mins + 'm</div>';
         }
         html += '<div class="stats-bar w-full" style="height: ' + Math.max(height, 2) + '%; ' + barColor + '"></div>';
-        const showLabel = period === 'week' || period === 'last_week' || ((period === 'month' || period === 'last_month') && (i % 5 === 0 || i === dates.length - 1)) || period === 'year';
-        html += '<div class="text-xs mt-2 ' + (isToday ? 'font-bold text-theme-primary' : 'text-theme-muted') + (showLabel ? '' : ' hidden') + '">' + dayLabels[i] + '</div>';
+        html += '<div class="text-xs mt-1 ' + (isToday ? 'font-bold text-theme-primary' : 'text-theme-muted') + '">' + dayLabels[i] + '</div>';
         html += '</div>';
     });
 
@@ -2614,8 +2633,8 @@ function renderStatsBestTimeChart() {
     
     const maxMin = Math.max(...hourMinutes, 1);
 
-    let html = '<div class="flex items-end justify-between h-full gap-1 pb-6 relative">';
-    html += '<div class="absolute bottom-6 left-0 right-0 border-t border-theme"></div>';
+    let html = '<div class="flex items-end justify-between h-full gap-1 relative">';
+    html += '<div class="absolute bottom-5 left-0 right-0 border-t border-theme"></div>';
 
     hourMinutes.forEach((mins, i) => {
         const height = maxMin > 0 ? (mins / maxMin) * 100 : 0;
@@ -2624,7 +2643,7 @@ function renderStatsBestTimeChart() {
             html += '<div class="text-xs text-theme-secondary mb-1 opacity-0 group-hover:opacity-100 transition">' + mins + 'm</div>';
         }
         html += '<div class="stats-bar w-full" style="height: ' + Math.max(height, 2) + '%; background: #a78bfa"></div>';
-        html += '<div class="text-xs mt-2 text-theme-muted">' + String(hourSlots[i]).padStart(2, '0') + ':00</div>';
+        html += '<div class="text-xs mt-1 text-theme-muted">' + String(hourSlots[i]).padStart(2, '0') + ':00</div>';
         html += '</div>';
     });
 
@@ -2747,12 +2766,12 @@ function renderStatsHeatmap() {
         return isDark ? '#39d353' : '#216e39';
     }
 
-    const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+    const monthNames = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
 
     let html = '<div style="min-width: 700px;">';
 
     html += '<div class="flex mb-2">';
-    html += '<div style="width: 30px" class="flex-shrink-0"></div>';
+    html += '<div style="width: 30px" class="flex-shrink-0 text-xs text-theme-muted text-right pr-2">月</div>';
     let lastMonth = -1;
     const totalDays = Math.floor((new Date(year, 11, 31) - startDate) / 86400000) + 1;
     const startDow = startDate.getDay();
@@ -2762,7 +2781,7 @@ function renderStatsHeatmap() {
         d.setDate(d.getDate() + w * 7 - startDow);
         const m = d.getMonth();
         if (m !== lastMonth) {
-            html += '<div class="text-xs text-theme-muted" style="width: 14px; margin-right: 2px;">' + monthNames[m] + '</div>';
+            html += '<div class="text-xs text-theme-muted" style="width: 14px; margin-right: 2px; white-space: nowrap;">' + monthNames[m] + '</div>';
             lastMonth = m;
         } else {
             html += '<div style="width: 16px;"></div>';

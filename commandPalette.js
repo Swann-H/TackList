@@ -490,6 +490,36 @@ function parseNLPDate(text) {
         }
     }
 
+    // 半小时后 / 半小时以后（相对时间，设置具体时间点）
+    if (!date || (date && hour === null)) {
+        m = remaining.match(/半小时[以]?后/);
+        if (m) {
+            const targetDate = new Date(now.getTime() + 30 * 60 * 1000);
+            if (!date) date = targetDate;
+            hour = targetDate.getHours();
+            minute = targetDate.getMinutes();
+            isAllDay = false;
+            periodSpecified = true; // 阻止智能时间修正
+            matches.push(m[0]);
+            remaining = remaining.replace(m[0], ' ');
+        }
+    }
+
+    // 一个半小时后 / 1个半小时后（相对时间，设置具体时间点）
+    if (!date || (date && hour === null)) {
+        m = remaining.match(/(一|1)?个?半小?时[以]?后/);
+        if (m) {
+            const targetDate = new Date(now.getTime() + 90 * 60 * 1000);
+            if (!date) date = targetDate;
+            hour = targetDate.getHours();
+            minute = targetDate.getMinutes();
+            isAllDay = false;
+            periodSpecified = true; // 阻止智能时间修正
+            matches.push(m[0]);
+            remaining = remaining.replace(m[0], ' ');
+        }
+    }
+
     // YYYY年M月D日
     if (!date) {
         m = remaining.match(/(\d{4})年(\d{1,2})月(\d{1,2})[日号]/);
@@ -653,7 +683,8 @@ function parseNLPDate(text) {
                 const currentDay = date.getDay();
                 let daysAhead = targetDay - currentDay;
                 if (daysAhead <= 0) daysAhead += 7;
-                daysAhead += 7;
+                // "下周X" = 下一个X（最近的未来X），与"本周X"算法一致
+                // 例如周五输入"下周一" → 3天后（而非10天后）
                 date.setDate(date.getDate() + daysAhead);
                 matches.push(m[0]);
                 remaining = remaining.replace(m[0], ' ');
@@ -804,8 +835,13 @@ function parseNLPDate(text) {
     if (!date && hour === null && !repeat) return null;
 
     // 智能时间解析
+    // 未指定时段（上午/下午/晚上/凌晨）时，1-7 点自动视为下午（+12）
     if (hour !== null && !periodSpecified) {
         if (hour >= 1 && hour <= 7) hour += 12;
+    }
+    // 时间段的结束时间应用相同的智能修正，避免"3点到5点"被识别为 15:00-05:00
+    if (endHour !== null && !periodSpecified) {
+        if (endHour >= 1 && endHour <= 7) endHour += 12;
     }
 
     // 如果没有日期但有时间，默认今天
@@ -856,6 +892,32 @@ function parseNLPDate(text) {
             endTime = endDate;
             isAllDay = true;
             matches.push(m[0]);
+        }
+    }
+
+    // --- 跨天时间段：今天到明天 / 今天到后天 / 明天到后天 ---
+    if (!endTime) {
+        const dayKeywordMap = { '今天': 0, '明天': 1, '后天': 2, '大后天': 3 };
+        m = text.match(/(今天|明天|后天|大后天)\s*[到至~\-]\s*(今天|明天|后天|大后天)/);
+        if (m) {
+            const startOffset = dayKeywordMap[m[1]];
+            const endOffset = dayKeywordMap[m[2]];
+            if (startOffset !== undefined && endOffset !== undefined && endOffset > startOffset) {
+                const startDate = new Date(now);
+                startDate.setDate(startDate.getDate() + startOffset);
+                startDate.setHours(0, 0, 0, 0);
+
+                const endDate = new Date(now);
+                endDate.setDate(endDate.getDate() + endOffset);
+                endDate.setHours(23, 59, 59, 0);
+
+                date = startDate;
+                endTime = endDate;
+                isAllDay = true;
+                matches.push(m[0]);
+                // 从 remaining 中也移除该关键词，避免后续重复匹配
+                remaining = remaining.replace(m[0], ' ');
+            }
         }
     }
 

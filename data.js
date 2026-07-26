@@ -3,6 +3,7 @@ let _dataRefreshTimerId = null;
 let _dataVersion = -1; // 数据版本号，-1表示未初始化
 let _initialLoadDone = false; // 是否已完成首次加载
 let _saveDataTimerId = null; // 节流保存定时器
+let _saveInFlight = false; // 保存请求是否正在发送中（含节流等待期和网络传输期）
 
 // ==================== IndexedDB 冗余缓存 ====================
 const IDB_NAME = 'tacklistBackup';
@@ -79,7 +80,8 @@ function notifyDataChange() {
 }
 
 async function refreshDataFromServer() {
-    if (currentDetailTaskId) {
+    // 当任务详情面板打开或有保存正在进行时，延迟刷新，避免覆盖本地未保存的数据
+    if (currentDetailTaskId || _saveInFlight) {
         _dataRefreshPending = true;
         return;
     }
@@ -373,6 +375,7 @@ function updateHolidayCountdown() {
 
 function saveData() {
     // 节流：500ms 内只发送一次，避免高频写入冲突
+    _saveInFlight = true; // 标记保存正在进行（含节流等待期），防止 refreshDataFromServer 覆盖本地数据
     if (_saveDataTimerId) {
         clearTimeout(_saveDataTimerId);
     }
@@ -417,11 +420,19 @@ function _doSaveData() {
         console.error('Save data error:', err);
         // 服务端保存失败，仍写入 IndexedDB 作为本地备份
         cacheToIndexedDB(data);
+    }).finally(() => {
+        _saveInFlight = false;
+        // 保存完成后，如有被延迟的刷新，立即执行
+        if (_dataRefreshPending) {
+            _dataRefreshPending = false;
+            refreshDataFromServer();
+        }
     });
 }
 
 // 立即保存（不走节流），用于导入等一次性操作
 function saveDataImmediate() {
+    _saveInFlight = true; // 标记保存正在进行，防止 refreshDataFromServer 覆盖本地数据
     if (_saveDataTimerId) {
         clearTimeout(_saveDataTimerId);
         _saveDataTimerId = null;
@@ -464,9 +475,6 @@ function importData(file) {
             const hasTasks = data.tasks;
 
             if (data.version && hasLists && hasTasks) {
-                // 备份原设置，用于用户选择不覆盖时恢复
-                const originalSettings = Object.assign({}, settings);
-
                 // 应用导入的数据（使用 DEFAULT_SETTINGS 确保所有字段都有默认值）
                 lists = data.taskLists || data.lists;
                 tasks = data.tasks;
@@ -480,18 +488,7 @@ function importData(file) {
                 await saveDataImmediate();
                 await init();
 
-                // 询问是否覆盖设置项
-                showConfirmToast('是否覆盖当前设置项？', () => {
-                    // 确认：设置已随数据一起保存，无需额外操作
-                    showToast('数据导入成功', 'success');
-                }, async () => {
-                    // 取消：恢复原设置
-                    settings = originalSettings;
-                    applySettings(settings);
-                    await saveDataImmediate();
-                    await init();
-                    showToast('数据已导入，设置保持不变', 'info');
-                });
+                showToast('数据导入成功', 'success');
             } else {
                 showToast('无效的数据格式', 'error');
             }
@@ -669,6 +666,7 @@ const DEFAULT_SETTINGS = {
     autoFocus: false,
     autoCreateTask: true,
     toastDuration: 5,
+    snoozeDelay: 15,
     refreshInterval: 30,
     cmdRemoveTimeText: true,
     cmdDefaultDate: 'none',
@@ -694,6 +692,7 @@ const DEFAULT_SETTINGS = {
     themePalette: 'none',
     themePaletteColors: null,
     customAccent: '',
+    customPalettes: null, // 用户编辑后的自定义调色板 { builtin:blue: {light:{...}, dark:{...}}, ... }
     holidayApiUrl: '',
     tags: [],
     filters: []

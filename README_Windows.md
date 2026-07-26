@@ -23,7 +23,7 @@ python --version
 将应用文件夹复制到目标目录，例如：
 
 ```
-C:\Users\你的用户名\TackList
+C:\Users\你的用户名\TODO
 ```
 
 > 注意：路径中避免使用中文或空格
@@ -44,7 +44,7 @@ C:\Users\你的用户名\TackList
 双击 `start.bat`，或在命令提示符中执行：
 
 ```cmd
-cd C:\Users\你的用户名\TackList
+cd C:\Users\你的用户名\TODO
 start.bat
 ```
 
@@ -99,13 +99,13 @@ start.bat restart   # 重启服务
 1. 打开"Internet 选项"（同上）
 2. 切换到"安全"选项卡，选择"受信任的站点"，点击"站点"
 3. 取消勾选"对该区域中的所有站点要求服务器验证(https:)"
-4. 在地址栏输入应用路径，如 `file://D:\Swann\Documents\TackList\`，点击"添加"
+4. 在地址栏输入应用路径，如 `file://D:\Swann\Documents\TODO\`，点击"添加"
 5. 点击关闭 → 确定
 
 **方法3：通过命令提示符运行**（无需修改设置）
 
 1. 按 `Win+R`，输入 `cmd`，回车
-2. 切换到应用目录，如 `cd /d D:\Swann\Documents\TackList`
+2. 切换到应用目录，如 `cd /d D:\Swann\Documents\TODO`
 3. 执行 `install.bat`
 
 **方法4：解除文件锁定**（仅对从网络下载的文件有效）

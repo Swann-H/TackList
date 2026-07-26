@@ -102,6 +102,8 @@
         .text-blue-400 { color: var(--accent-light) !important; }
         .hover\:text-blue-500:hover { color: var(--accent-color) !important; }
         .hover\:text-blue-600:hover { color: var(--accent-hover) !important; }
+        /* 修复蓝色按钮 hover 时文字/图标无法变白：需 !important 覆盖 .text-blue-500 */
+        .border-blue-500:hover { color: #ffffff !important; }
         /* 边框 */
         .border-blue-500 { border-color: var(--accent-color) !important; }
         .border-blue-600 { border-color: var(--accent-hover) !important; }
@@ -1309,6 +1311,24 @@
         }
         .palette-color-bar > span {
             flex: 1;
+            position: relative;
+            cursor: pointer;
+        }
+        /* 色条段悬停时显示编辑图标 */
+        .palette-color-bar > span:hover .palette-edit-icon {
+            opacity: 1;
+        }
+        .palette-edit-icon {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: opacity 0.15s;
+            pointer-events: none;
+            color: #ffffff;
+            font-size: 12px;
+            text-shadow: 0 0 4px rgba(0,0,0,0.6);
         }
         .palette-card.palette-active {
             border-color: var(--accent-color, #3b82f6);
@@ -1674,6 +1694,10 @@
                 <div id="subtasks-container" class="hidden space-y-2"></div>
             </div>
             
+            <!-- 任务创建/完成时间显示（标签区上方，仅已完成任务显示） -->
+            <div id="detail-timestamps-display" class="px-4 pt-3 pb-1 flex-col gap-1 text-sm text-theme-secondary hidden">
+            </div>
+
             <!-- 任务标签显示（进度上方） -->
             <div id="detail-tags-display" class="px-4 pt-3 pb-2 border-t border-theme flex flex-wrap flex-shrink-0 min-h-0">
             </div>
@@ -2292,17 +2316,26 @@
                                 <!-- 内置配色（适配深色/浅色模式） -->
                                 <p class="text-xs text-theme-muted mb-1">内置配色</p>
                                 <div class="grid grid-cols-3 gap-2 mb-3">
-                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:blue" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-blue"></div>
-                                        <div class="text-xs text-theme-secondary">蓝色</div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="text-xs text-theme-secondary">蓝色</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                        </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:green" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-green"></div>
-                                        <div class="text-xs text-theme-secondary">绿色</div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="text-xs text-theme-secondary">绿色</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                        </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:rose')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:rose" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:rose')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:rose" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-rose"></div>
-                                        <div class="text-xs text-theme-secondary">玫红</div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="text-xs text-theme-secondary">玫红</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:rose')" data-palette-key="builtin:rose" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                        </div>
                                     </button>
                                 </div>
 
@@ -2327,17 +2360,26 @@
                                     </button>
                                 </div>
                                 <div id="palette-preview-container" class="grid grid-cols-3 gap-2 hidden">
-                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" data-palette-key="vibrant" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" data-palette-key="vibrant" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="vibrant"></div>
-                                        <div class="text-xs text-theme-secondary">鲜艳</div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="text-xs text-theme-secondary">鲜艳</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('vibrant')" data-palette-key="vibrant" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                        </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" data-palette-key="muted" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" data-palette-key="muted" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="muted"></div>
-                                        <div class="text-xs text-theme-secondary">柔和</div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="text-xs text-theme-secondary">柔和</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                        </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" data-palette-key="dark" class="palette-card border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" data-palette-key="dark" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="dark"></div>
-                                        <div class="text-xs text-theme-secondary">深色</div>
+                                        <div class="flex items-center justify-between">
+                                            <div class="text-xs text-theme-secondary">深色</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('dark')" data-palette-key="dark" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                        </div>
                                     </button>
                                 </div>
                                 <p class="text-xs text-theme-muted mt-2 hidden" id="palette-hint-text">短按应用，长按预览（松开恢复）</p>
@@ -2708,7 +2750,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.3.3</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.0</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -2965,6 +3007,11 @@
     <script src="lunar.js"></script>
     <script src="utils.js"></script>
     <script src="data.js"></script>
+    <script src="sidebarViews.js"></script>
+    <script src="calendarViews.js"></script>
+    <script src="quadrantView.js"></script>
+    <script src="taskListView.js"></script>
+    <script src="summaryView.js"></script>
     <script src="views.js"></script>
     <script src="tasks.js"></script>
     <script src="pomodoro.js"></script>
