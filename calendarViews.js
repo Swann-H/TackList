@@ -626,10 +626,10 @@ function openMonthDayPopover(dateStr) {
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
                     </div>
-                    <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
+                    <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                         ${escapeHtml(task.title || '新任务')}
                     </div>
-                    ${task.notes ? `<div class="text-xs text-theme-secondary mt-1">${escapeHtml(task.notes)}</div>` : ''}
+                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-1">${escapeHtml(task.notes)}</div>` : '')}
                 </div>
             </div>
         `;

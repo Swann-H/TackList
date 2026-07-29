@@ -663,15 +663,15 @@ function renderPomodoroPage() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const todayPomodoros = pomodoroHistory.filter(p => {
+    const todayRecords = pomodoroHistory.filter(p => {
         const pDate = new Date(p.date);
         pDate.setHours(0, 0, 0, 0);
         return pDate.getTime() === today.getTime();
-    }).length;
-    
-    const todayMinutes = todayPomodoros * pomodoroState.focusDuration;
-    const totalPomodoros = pomodoroHistory.length;
-    const totalMinutes = totalPomodoros * pomodoroState.focusDuration;
+    });
+    const todayPomodoros = countUniqueSessions(todayRecords);
+    const todayMinutes = todayRecords.reduce((s, p) => s + (p.duration || 25), 0);
+    const totalPomodoros = countUniqueSessions(pomodoroHistory);
+    const totalMinutes = pomodoroHistory.reduce((s, p) => s + (p.duration || 25), 0);
     
     document.getElementById('today-pomodoros').textContent = todayPomodoros;
     document.getElementById('today-minutes').textContent = formatFocusMinutes(todayMinutes);
@@ -1877,6 +1877,16 @@ function getTaskFocusMinutes(taskId) {
     return taskHistory.reduce((total, record) => total + (record.duration || 0), 0);
 }
 
+// 统计唯一番茄专注周期数（同一date的拆分记录算作1个周期）
+function countUniqueSessions(records) {
+    const seen = new Set();
+    records.forEach(r => {
+        const key = r.date;
+        if (!seen.has(key)) seen.add(key);
+    });
+    return seen.size;
+}
+
 function formatFocusMinutes(minutes) {
     if (minutes < 60) {
         return `${minutes}m`;
@@ -2518,13 +2528,13 @@ function renderStatsOverview() {
     const todayRecords = pomodoroHistory.filter(p => getDayKey(p.date) === todayKey);
     const yesterdayRecords = pomodoroHistory.filter(p => getDayKey(p.date) === yesterdayKey);
     
-    const todayCount = todayRecords.length;
-    const yesterdayCount = yesterdayRecords.length;
+    const todayCount = countUniqueSessions(todayRecords);
+    const yesterdayCount = countUniqueSessions(yesterdayRecords);
     const todayMinutes = todayRecords.reduce((s, p) => s + (p.duration || 25), 0);
     const yesterdayMinutes = yesterdayRecords.reduce((s, p) => s + (p.duration || 25), 0);
-    
+
     const periodRecords = filterHistoryByPeriod();
-    const periodCount = periodRecords.length;
+    const periodCount = countUniqueSessions(periodRecords);
     const periodMinutes = periodRecords.reduce((s, p) => s + (p.duration || 25), 0);
     
     document.getElementById('stats-today-count').textContent = todayCount;
@@ -2644,20 +2654,20 @@ function renderStatsTrendChart() {
 function renderStatsBestTimeChart() {
     const container = document.getElementById('stats-best-time-chart');
     const periodRecords = filterHistoryByPeriod();
-    const hourSlots = [];
-    for (let i = 0; i < 24; i += 3) {
-        hourSlots.push(i);
-    }
-    
+    // 07:00~23:00，每2小时一个区间，共8个柱
+    const hourSlots = [7, 9, 11, 13, 15, 17, 19, 21];
+
     const hourMinutes = new Array(8).fill(0);
     periodRecords.forEach(p => {
         const h = new Date(p.date).getHours();
-        const slot = Math.floor(h / 3);
-        if (slot >= 0 && slot < 8) {
-            hourMinutes[slot] += (p.duration || 25);
+        if (h >= 7 && h < 23) {
+            const slot = Math.floor((h - 7) / 2);
+            if (slot >= 0 && slot < 8) {
+                hourMinutes[slot] += (p.duration || 25);
+            }
         }
     });
-    
+
     const maxMin = Math.max(...hourMinutes, 1);
 
     let html = '<div class="flex items-end justify-between h-full gap-1 relative">';
@@ -2724,7 +2734,10 @@ function renderStatsTimeline() {
         colors = dates.map((_, i) => palette[i % palette.length]);
     }
     
-    const timeLabels = ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'];
+    const timeLabels = ['07:00', '09:00', '11:00', '13:00', '15:00', '17:00', '19:00', '21:00', '23:00'];
+    // 07:00~23:00 共16小时 = 960分钟
+    const timelineStartMin = 7 * 60;
+    const timelineSpanMin = 16 * 60;
 
     let html = '<div style="min-width: 600px;">';
     html += '<div class="flex mb-2">';
@@ -2755,8 +2768,12 @@ function renderStatsTimeline() {
             const start = record.startedAt ? new Date(record.startedAt) : new Date(record.date);
             const startMin = start.getHours() * 60 + start.getMinutes();
             const dur = record.duration || 25;
-            const leftPct = (startMin / 1440) * 100;
-            const widthPct = (dur / 1440) * 100;
+            // 只显示07:00~23:00范围内的部分
+            if (startMin + dur <= timelineStartMin || startMin >= timelineStartMin + timelineSpanMin) return;
+            const clampedStart = Math.max(startMin, timelineStartMin);
+            const clampedEnd = Math.min(startMin + dur, timelineStartMin + timelineSpanMin);
+            const leftPct = ((clampedStart - timelineStartMin) / timelineSpanMin) * 100;
+            const widthPct = ((clampedEnd - clampedStart) / timelineSpanMin) * 100;
             html += '<div class="stats-timeline-bar" style="left: ' + leftPct + '%; width: ' + Math.max(widthPct, 0.5) + '%; background: ' + colors[di] + ';" title="' + record.taskName + ' ' + dur + '分钟"></div>';
         });
 

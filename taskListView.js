@@ -213,7 +213,7 @@ function renderTaskListView(container) {
                     <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
                         ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                     </button>
-                    <span class="flex-1 text-sm ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
+                    <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
                     ${renderFocusButton(task.id)}
                     <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                         ${tagCapsules}
@@ -394,10 +394,10 @@ function renderScheduleView(container) {
                                                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                                                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
                                                     </div>
-                                                    <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
+                                                    <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                                                         ${task.title || '新任务'}
                                                     </div>
-                                                    ${task.notes ? `<div class="text-xs text-theme-secondary mt-1">${task.notes}</div>` : ''}
+                                                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-1">${task.notes}</div>` : '')}
                                                 </div>
                                             </div>
                                         `;

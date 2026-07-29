@@ -141,7 +141,7 @@ function renderTaskCard(task) {
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span><span class="sidebar-text">${list.name}</span></span>` : ''}
                         ${timeDisplay ? `<span class="sidebar-text cursor-pointer hover:text-accent transition"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
                     </div>
-                    ${task.notes ? `<p class="mt-2 text-sm text-theme-secondary cursor-pointer hover:text-accent transition">${task.notes}</p>` : ''}
+                    ${renderSubtaskListDisplay(task) || (task.notes ? `<p class="mt-2 text-sm text-theme-secondary cursor-pointer hover:text-accent transition">${task.notes}</p>` : '')}
 
                     <div class="flex items-center gap-2 mt-3 pt-3 border-t border-theme">
                         <button onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" class="flex items-center gap-1 px-3 py-1 text-xs text-theme-secondary hover:bg-theme-tertiary rounded-lg transition">

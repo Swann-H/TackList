@@ -1473,6 +1473,7 @@ function toggleSubtaskComplete(subtaskId, completed) {
     const subtask = task.subtasks.find(st => st.id === subtaskId);
     if (subtask) {
         const wasCompleted = subtask.completed;
+        const wasTaskCompleted = task.completed;
         subtask.completed = completed;
         if (completed) {
             subtask.completedAt = new Date().toISOString();
@@ -1490,6 +1491,14 @@ function toggleSubtaskComplete(subtaskId, completed) {
         if (completed && !wasCompleted) {
             if (typeof easterEgg_onSubtaskComplete === 'function') {
                 easterEgg_onSubtaskComplete();
+            }
+        }
+
+        // 子任务全部完成导致父任务标记为已完成时，通知番茄专注退回"一般专注"
+        if (task.completed && !wasTaskCompleted) {
+            easterEgg_onTaskComplete(task);
+            if (typeof onFocusTaskCompleted === 'function') {
+                onFocusTaskCompleted(task.id);
             }
         }
     }

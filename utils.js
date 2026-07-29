@@ -54,6 +54,58 @@ function isDarkThemeActive() {
     return document.documentElement.getAttribute('data-theme') === 'dark';
 }
 
+// 方案A：子任务逐行列表展示（最多3行，超出显示"……(已完成/总数)"）
+function renderSubtaskListDisplay(task) {
+    const validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
+    if (validSubtasks.length === 0) return '';
+
+    const total = validSubtasks.length;
+    const completedCount = validSubtasks.filter(st => st.completed).length;
+    const maxShow = 3;
+    const showItems = validSubtasks.slice(0, maxShow);
+
+    let html = '<div class="text-xs mt-1 space-y-0.5">';
+    showItems.forEach(st => {
+        const symbol = st.completed ? '☑' : '☐';
+        const cls = st.completed ? 'text-theme-muted' : 'text-theme-secondary';
+        html += `<div class="${cls}">${symbol} ${escapeHtml(st.text)}</div>`;
+    });
+
+    if (total > maxShow) {
+        html += `<div class="text-theme-muted">……(${completedCount}/${total})</div>`;
+    }
+
+    html += '</div>';
+    return html;
+}
+
+// 方案C：子任务内联展示（最多3条，超出省略，末尾显示进度"(已完成/总数)"）
+function renderSubtaskInlineDisplay(task) {
+    const validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
+    if (validSubtasks.length === 0) return '';
+
+    const total = validSubtasks.length;
+    const completedCount = validSubtasks.filter(st => st.completed).length;
+    const maxShow = 3;
+    const showItems = validSubtasks.slice(0, maxShow);
+
+    let html = '<div class="text-xs text-slate-400 mt-1 leading-relaxed">';
+    showItems.forEach((st, i) => {
+        const symbol = st.completed ? '☑' : '☐';
+        const cls = st.completed ? 'text-slate-500' : 'text-slate-300';
+        html += `<span class="${cls}">${symbol} ${escapeHtml(st.text)}</span>`;
+        if (i < showItems.length - 1) html += '&nbsp;&nbsp;';
+    });
+
+    if (total > maxShow) {
+        html += ` <span class="text-slate-500">……</span>`;
+    }
+
+    html += ` <span class="text-slate-400">(${completedCount}/${total})</span>`;
+    html += '</div>';
+    return html;
+}
+
 // Toast通知 - 游戏任务提示风格
 function showToast(message, type = 'info', customDuration = null, title = null) {
     const container = document.getElementById('toast-container');
@@ -182,6 +234,10 @@ function showReminderToast(title, message, taskId) {
     // 从message中提取任务名称（格式可能是"清单名 | 任务名"或纯任务名）
     const taskTitle = message.includes(' | ') ? message.split(' | ').pop() : message;
 
+    // 查找任务以获取子任务信息
+    const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
+    const subtaskHtml = task ? renderSubtaskInlineDisplay(task) : '';
+
     const toast = document.createElement('div');
     const theme = {
         color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
@@ -202,6 +258,7 @@ function showReminderToast(title, message, taskId) {
                 <div class="text-sm font-medium text-slate-300 leading-snug">
                     ${message}
                 </div>
+                ${subtaskHtml}
             </div>
         </div>
         <div class="flex gap-2 mt-3 relative z-10 justify-end">

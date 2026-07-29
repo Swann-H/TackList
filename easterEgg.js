@@ -688,12 +688,15 @@ class SunsetHorizonParticle {
         sky.addColorStop(1, `rgba(255, 220, 100, ${alpha * 0.8})`);
         ctx.fillStyle = sky; ctx.fillRect(0, 0, w, h);
 
-        // 2. 巨型落日 (极强光晕)
+        // 2. 巨型落日 (极强光晕) - 退场时间提前，先于山脉消失
         ctx.globalCompositeOperation = 'lighter';
         const sunY = h * 0.4 + (timeSpent * 0.58); // 太阳缓缓落下（略提速以适配更短时长）
+        // 太阳在动画 60%~80% 阶段提前淡出，山脉随主 alpha 在 80%~100% 阶段消失
+        const sunFade = Math.max(0, Math.min(1, (0.8 * this.maxLife - timeSpent) / (0.2 * this.maxLife)));
+        const sunAlpha = alpha * sunFade;
         const sunGrad = ctx.createRadialGradient(w/2, sunY, 0, w/2, sunY, 300);
-        sunGrad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
-        sunGrad.addColorStop(0.2, `rgba(255, 200, 0, ${alpha * 0.8})`);
+        sunGrad.addColorStop(0, `rgba(255, 255, 255, ${sunAlpha})`);
+        sunGrad.addColorStop(0.2, `rgba(255, 200, 0, ${sunAlpha * 0.8})`);
         sunGrad.addColorStop(1, `rgba(255, 50, 0, 0)`);
         ctx.fillStyle = sunGrad; ctx.fillRect(0, 0, w, h);
 
@@ -1218,7 +1221,7 @@ function ee_playRipple() {
     if (!ee_animId) ee_animate();
 }
 
-// 多线程大师：30分钟内完成3+子任务时触发
+// 多线程大师：10分钟内完成5个子任务时触发
 function ee_playJuggler() {
     ee_initCanvas();
     ee_particles.push(new JugglerParticle());
@@ -1391,12 +1394,12 @@ function easterEgg_onPomodoroStart() {
     // 仅在专注阶段开始时检测心流（休息阶段不触发）
     if (pomodoroState.phase !== 'focus') return;
 
-    // 上一个番茄钟结束距今小于30秒，触发心流
-    if (eeState.lastPomodoroEndTime > 0 && (now - eeState.lastPomodoroEndTime) < 30000) {
+    // 上一个番茄钟结束距今小于3分钟，触发心流
+    if (eeState.lastPomodoroEndTime > 0 && (now - eeState.lastPomodoroEndTime) < 180000) {
         ee_enqueueOrShow({
             icon: '🌊',
             message: '沉浸心流，势不可挡！',
-            desc: '上一个番茄结束30秒内开始新专注',
+            desc: '上一个番茄结束3分钟内开始新专注',
             effectFn: ee_playAurora
         });
     }
@@ -1478,22 +1481,22 @@ function ee_getTaskFocusMinutes(taskId) {
 
 /**
  * 子任务完成时调用（多线程大师触发）
- * 在30分钟内连续完成3个以上子任务时触发
+ * 在10分钟内连续完成5个子任务时触发
  */
 function easterEgg_onSubtaskComplete() {
     ee_checkDate();
     const now = Date.now();
-    // 清理30分钟前的记录
-    eeState.recentSubtaskCompletes = eeState.recentSubtaskCompletes.filter(t => now - t < 30 * 60 * 1000);
+    // 清理10分钟前的记录
+    eeState.recentSubtaskCompletes = eeState.recentSubtaskCompletes.filter(t => now - t < 10 * 60 * 1000);
     eeState.recentSubtaskCompletes.push(now);
 
-    // 30分钟内完成3个以上子任务时触发
-    if (eeState.recentSubtaskCompletes.length >= 3) {
+    // 10分钟内完成5个子任务时触发
+    if (eeState.recentSubtaskCompletes.length >= 5) {
         eeState.recentSubtaskCompletes = []; // 触发后清空，避免短时间内重复触发
         ee_trigger({
             icon: '⚡',
             message: '多线程大师！',
-            desc: '30分钟内连破3关，绝佳的节奏感',
+            desc: '10分钟内连破5关，绝佳的节奏感',
             effectFn: ee_playJuggler
         });
     }

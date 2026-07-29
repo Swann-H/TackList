@@ -139,7 +139,7 @@ function renderQuadrantView(container) {
                                                 <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
                                                     ${task.title || '新任务'}
                                                 </div>
-                                                ${task.notes ? `<div class="text-xs text-theme-muted mt-1">${task.notes}</div>` : ''}
+                                                ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs text-theme-muted mt-1">${task.notes}</div>` : '')}
                                             </div>
                                         </div>
                                     `;

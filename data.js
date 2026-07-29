@@ -708,7 +708,11 @@ function applySettings(parsed) {
     pomodoroState.shortBreakDuration = settings.shortBreakDuration || 5;
     pomodoroState.longBreakDuration = settings.longBreakDuration || 15;
     pomodoroState.longBreakInterval = settings.longBreakInterval || 4;
-    pomodoroState.breakDuration = settings.shortBreakDuration || 5;
+    // 正在运行/暂停时不同步 breakDuration，避免覆盖长休息的实际时长导致圆环显示异常
+    if (pomodoroState.state !== 'focusing' && pomodoroState.state !== 'resting' && pomodoroState.state !== 'pause') {
+        pomodoroState.breakDuration = pomodoroState.phase === 'longBreak'
+            ? pomodoroState.longBreakDuration : pomodoroState.shortBreakDuration;
+    }
     pomodoroState.autoBreak = settings.autoBreak || false;
     pomodoroState.autoFocus = settings.autoFocus || false;
     if (pomodoroState.state === 'idle' || !pomodoroState.state) {
