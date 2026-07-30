@@ -99,8 +99,6 @@
         .text-blue-400 { color: var(--accent-light) !important; }
         .hover\:text-blue-500:hover { color: var(--accent-color) !important; }
         .hover\:text-blue-600:hover { color: var(--accent-hover) !important; }
-        /* 修复蓝色按钮 hover 时文字/图标无法变白：需 !important 覆盖 .text-blue-500 */
-        .border-blue-500:hover { color: #ffffff !important; }
         /* 边框 */
         .border-blue-500 { border-color: var(--accent-color) !important; }
         .border-blue-600 { border-color: var(--accent-hover) !important; }
@@ -1430,8 +1428,10 @@
                     </div>
                 </div>
 
+                <div id="view-nav-bar" class="flex items-center gap-2"></div>
+
                 <div class="flex items-center gap-3">
-                    <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition group relative" title="今天">
+                    <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 flex items-center justify-center hover:text-white transition group relative" style="border-color:#3b82f6;color:#3b82f6" onmouseover="this.style.backgroundColor='#3b82f6'" onmouseout="this.style.backgroundColor=''" title="今天">
                         <i class="fas fa-calendar-day"></i>
                     </button>
                     <button onclick="togglePlanPanel()" id="plan-btn" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition group relative" title="计划">
@@ -2584,21 +2584,6 @@
                             <button onclick="switchToHolidayPage()" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
                                 <i class="fas fa-calendar-alt"></i>设置节假日与调休
                             </button>
-
-                            <div class="border-t border-theme pt-3 mt-3">
-                                <label class="block text-sm font-medium text-theme-primary mb-2">自动抓取调休数据</label>
-                                <p class="text-xs text-theme-muted mb-2">从在线 API 抓取当年调休安排并自动写入 holiday_data.json（需互联网）</p>
-                                <div class="flex gap-2 mb-2">
-                                    <input type="number" id="settings-holiday-fetch-year" min="2020" max="2099" class="w-24 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" placeholder="年份">
-                                    <button onclick="fetchHolidayData()" id="holiday-fetch-btn" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition text-sm">
-                                        <i class="fas fa-download mr-1"></i>立即抓取
-                                    </button>
-                                </div>
-                                <div>
-                                    <label class="block text-xs text-theme-muted mb-1">自定义 API 地址（留空则使用 timor.tech → jiejiari 顺序）</label>
-                                    <input type="text" id="settings-holiday-api-url" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm" placeholder="https://your-api.example.com/holidays">
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -2682,7 +2667,7 @@
                     </div>
 
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.2</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.4</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
