@@ -444,14 +444,40 @@ function renderScheduleView(container) {
 
     container.innerHTML = html;
 
-    // ---- 日程视图懒加载：仅构建接近视口的月份日卡片，减少初始 DOM 节点 ----
+    // 日程视图懒加载：仅构建接近视口的月份日卡片，减少初始 DOM 节点
+    const scheduleScrollContainer = container.querySelector('.schedule-container');
     const _populateScheduleMonth = (contentEl) => {
         if (!contentEl || contentEl.dataset.populated === 'true') return;
         const y = parseInt(contentEl.dataset.smYear, 10);
         const m = parseInt(contentEl.dataset.smMonth, 10);
+
+        // 滚动锚定：若被填充月份位于视口上方，填充后其高度增长会下推可见内容，
+        // 导致滚动位置"跳动"。记录其后继月份位置，填充后补偿 scrollTop 使可见内容保持不动。
+        let needAnchor = false, anchorEl = null, anchorTopBefore = 0, selfHeightBefore = 0;
+        if (scheduleScrollContainer) {
+            const containerTop = scheduleScrollContainer.getBoundingClientRect().top;
+            if (contentEl.getBoundingClientRect().top < containerTop) {
+                needAnchor = true;
+                selfHeightBefore = contentEl.getBoundingClientRect().height;
+                anchorEl = contentEl.parentElement ? contentEl.parentElement.nextElementSibling : null;
+                if (anchorEl) anchorTopBefore = anchorEl.getBoundingClientRect().top;
+            }
+        }
+
         const daysHtml = buildScheduleMonthDaysHtml(y, m, groupedTasks);
         contentEl.innerHTML = daysHtml || '<div class="text-center text-theme-muted py-8">本月暂无日程</div>';
         contentEl.dataset.populated = 'true';
+
+        // 视口上方月份填充后，按内容下移量补偿 scrollTop，消除跳动
+        if (needAnchor && scheduleScrollContainer) {
+            let delta;
+            if (anchorEl) {
+                delta = anchorEl.getBoundingClientRect().top - anchorTopBefore;
+            } else {
+                delta = contentEl.getBoundingClientRect().height - selfHeightBefore;
+            }
+            if (delta) scheduleScrollContainer.scrollTop += delta;
+        }
     };
     const _scheduleMonthEls = container.querySelectorAll('.schedule-month-content');
     // 始终立即填充今天所在月份及相邻月份（保证"滚动到今天"与初始可见区域有内容）
@@ -483,7 +509,6 @@ function renderScheduleView(container) {
     }
 
     // 添加滚动监听，更新顶部导航栏显示当前可见月份
-    const scheduleScrollContainer = container.querySelector('.schedule-container');
     if (scheduleScrollContainer) {
         // 同步恢复滚动位置，消除刷新时从顶部（往期任务）跳到今天的跳动
         if (!_scheduleAutoScroll && savedScrollTop > 0) {
