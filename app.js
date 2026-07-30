@@ -362,41 +362,7 @@ function shutdownServer() {
 function restartServer() {
     const btn = document.getElementById('restart-btn');
     if (btn.dataset.confirming === 'true') {
-        // 第二次点击：先保存未保存的设置，再执行重启
-        const bindAddress = document.getElementById('settings-bind-address').value;
-        const port = parseInt(document.getElementById('settings-port').value) || 14438;
-        const networkChanged = (bindAddress !== _originalBindAddress || port !== _originalPort);
-
-        if (networkChanged) {
-            // 网络配置有变更，自动保存设置后再重启
-            saveSettings(true); // silent=true，不弹Toast
-        }
-
-        fetch('/api/restart', { method: 'POST' }).then(() => {
-            showToast('服务正在重启，请稍候...', 'info', 10000);
-            setTimeout(() => {
-                let retries = 0;
-                const tryReconnect = () => {
-                    fetch('/api/data').then(r => {
-                        if (r.ok) {
-                            location.reload();
-                        } else {
-                            throw new Error('not ready');
-                        }
-                    }).catch(() => {
-                        retries++;
-                        if (retries < 20) {
-                            setTimeout(tryReconnect, 1000);
-                        } else {
-                            showToast('重启超时，请手动刷新页面', 'error', 10000);
-                        }
-                    });
-                };
-                setTimeout(tryReconnect, 2000);
-            }, 1000);
-        }).catch(err => {
-            showToast('重启服务失败: ' + err.message, 'error');
-        });
+        executeRestart();
         return;
     }
     // 第一次点击：显示确认
@@ -410,6 +376,44 @@ function restartServer() {
         btn.innerHTML = '<i class="fas fa-redo mr-1"></i>重启服务';
         btn.style.cssText = '';
     }, 3000);
+}
+
+// 执行服务重启：保存未保存的网络配置，发起重启并重连
+function executeRestart() {
+    const bindAddress = document.getElementById('settings-bind-address').value;
+    const port = parseInt(document.getElementById('settings-port').value) || 14438;
+    const networkChanged = (bindAddress !== _originalBindAddress || port !== _originalPort);
+
+    if (networkChanged) {
+        // 网络配置有变更，自动保存设置后再重启
+        saveSettings(true); // silent=true，不弹Toast
+    }
+
+    fetch('/api/restart', { method: 'POST' }).then(() => {
+        showToast('服务正在重启，请稍候...', 'info', 10000);
+        setTimeout(() => {
+            let retries = 0;
+            const tryReconnect = () => {
+                fetch('/api/data').then(r => {
+                    if (r.ok) {
+                        location.reload();
+                    } else {
+                        throw new Error('not ready');
+                    }
+                }).catch(() => {
+                    retries++;
+                    if (retries < 20) {
+                        setTimeout(tryReconnect, 1000);
+                    } else {
+                        showToast('重启超时，请手动刷新页面', 'error', 10000);
+                    }
+                });
+            };
+            setTimeout(tryReconnect, 2000);
+        }, 1000);
+    }).catch(err => {
+        showToast('重启服务失败: ' + err.message, 'error');
+    });
 }
 
 function saveSettings(silent) {
@@ -495,7 +499,11 @@ function saveSettings(silent) {
         renderView();
         if (!silent) {
             setTimeout(() => {
-                showToast('网络配置已更改，请点击底部「重启服务」按钮使其生效', 'warning', 8000);
+                showConfirmToast(
+                    '网络配置已更改，是否重启服务以生效？',
+                    () => { executeRestart(); },
+                    () => { showToast('网络配置将在下一次重启服务时生效', 'info', 5000); }
+                );
             }, 100);
         }
         return;

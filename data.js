@@ -4,6 +4,7 @@ let _dataVersion = -1; // 数据版本号，-1表示未初始化
 let _initialLoadDone = false; // 是否已完成首次加载
 let _saveDataTimerId = null; // 节流保存定时器
 let _saveInFlight = false; // 保存请求是否正在发送中（含节流等待期和网络传输期）
+let _forceNextRefreshRender = false; // 冲突合并后强制下次刷新重渲染，绕过版本号检测
 
 // ==================== IndexedDB 冗余缓存 ====================
 const IDB_NAME = 'tacklistBackup';
@@ -85,14 +86,29 @@ async function refreshDataFromServer() {
         _dataRefreshPending = true;
         return;
     }
+    // 视图感知：标签页隐藏时不做后台全量渲染（主线程开销大且用户看不见），
+    // 标签页重新可见时由 visibilitychange 监听器触发刷新。
+    if (document.hidden) {
+        _dataRefreshPending = true;
+        return;
+    }
     _dataRefreshPending = false;
     try {
         const response = await fetch('/api/data');
         if (!response.ok) return;
         const data = await response.json();
+
+        // 变更检测：服务端版本号未变则跳过全量渲染（消除后台每 30s 一次的卡顿）
+        // _forceNextRefreshRender 用于冲突合并后强制刷新
+        const serverVersion = data._version;
+        if (!_forceNextRefreshRender && serverVersion !== undefined && serverVersion === _dataVersion) {
+            return; // 数据未变，无需重建 DOM
+        }
+        _forceNextRefreshRender = false;
+
         // 更新版本号
-        if (data._version !== undefined) {
-            _dataVersion = data._version;
+        if (serverVersion !== undefined) {
+            _dataVersion = serverVersion;
             delete data._version;
         }
         lists = data.taskLists || lists;
@@ -100,6 +116,9 @@ async function refreshDataFromServer() {
         applySettings(data.settings);
         quadrantOrder = data.quadrantOrder || quadrantOrder;
         pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || pomodoroHistory);
+        // 数据实际变化后才重建派生缓存
+        if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
+        if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
         renderLists();
         renderView();
         updateViewButtons();
@@ -407,6 +426,8 @@ function _doSaveData() {
             }
             // 智能合并：以服务器数据为基础，将本地修改过的任务覆盖上去
             _mergeServerData(serverData);
+            // 合并后本地数据已变化，下次刷新需强制重渲染（绕过版本号变更检测）
+            _forceNextRefreshRender = true;
             // 重试保存
             return _doSaveData();
         } else if (result.version !== undefined) {
@@ -440,6 +461,33 @@ function saveDataImmediate() {
     return _doSaveData();
 }
 
+// 增量保存单个任务：仅发送该任务对象，避免序列化/传输全量数据（5510 任务）。
+// 适用于勾选完成、编辑单个任务等高频操作。失败时回退到全量 saveData。
+function saveTaskPatch(taskId) {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return Promise.resolve();
+    _saveInFlight = true; // 防止刷新覆盖本地未持久化的变更
+    return fetch('/api/tasks/' + encodeURIComponent(taskId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(task)
+    }).then(r => r.json()).then(result => {
+        if (result.version !== undefined) {
+            _dataVersion = result.version;
+        }
+        notifyDataChange();
+        _saveInFlight = false;
+        if (_dataRefreshPending) {
+            _dataRefreshPending = false;
+            refreshDataFromServer();
+        }
+    }).catch(err => {
+        console.error('Task patch failed, falling back to full save:', err);
+        // 离线模式或网络失败：回退到全量保存（saveData 自行管理 _saveInFlight 生命周期）
+        saveData();
+    });
+}
+
 function _mergeServerData(serverData) {
     // 以服务器数据为基础，将本地当前打开的详情面板任务合并进去
     const serverTasks = serverData.tasks || [];
@@ -463,6 +511,7 @@ function _mergeServerData(serverData) {
     applySettings(serverData.settings);
     quadrantOrder = serverData.quadrantOrder || quadrantOrder;
     pomodoroHistory = deduplicatePomodoroHistory(serverData.pomodoroHistory || pomodoroHistory);
+    if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
 }
 
 function importData(file) {
@@ -844,6 +893,8 @@ async function loadData() {
         currentView = settings.defaultView;
     }
     _initialLoadDone = true;
+    // 数据加载完成后重建专注时长缓存与搜索索引（覆盖上方所有恢复分支）
+    if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
 }
 
 // 主题系统

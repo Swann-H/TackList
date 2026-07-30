@@ -50,6 +50,12 @@ function renderQuadrantView(container) {
         gray: 'text-gray-600'
     };
 
+    // 保存各象限滚动位置（自动刷新等重渲染场景）
+    const savedScrolls = {};
+    container.querySelectorAll('.quadrant-drop-zone').forEach((zone, i) => {
+        savedScrolls[i] = zone.scrollTop;
+    });
+
     container.innerHTML = `
         <div class="h-full flex flex-col">
             <div class="flex items-center justify-between mb-6 flex-shrink-0">
@@ -152,6 +158,13 @@ function renderQuadrantView(container) {
         </div>
     `;
 
+    // 同步恢复各象限滚动位置
+    container.querySelectorAll('.quadrant-drop-zone').forEach((zone, i) => {
+        if (savedScrolls[i] > 0) {
+            zone.scrollTop = savedScrolls[i];
+        }
+    });
+
     // 第二象限激活推进器：检查是否有停留超过7天的未完成任务
     checkQuadrantStagnation();
 }
@@ -185,48 +198,74 @@ function checkQuadrantStagnation() {
 }
 
 function showQuadrantStagnationModal(task, days, totalCount) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
     const existing = document.getElementById('quadrant-stagnation-modal');
     if (existing) existing.remove();
 
-    const modal = document.createElement('div');
-    modal.id = 'quadrant-stagnation-modal';
-    modal.className = 'fixed bottom-6 right-6 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-amber-300 dark:border-amber-600 p-5 z-50 max-w-sm';
-    modal.style.animation = 'fadeInUp 0.3s ease-out';
-    modal.innerHTML = `
-        <div class="flex items-start gap-3">
-            <div class="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center flex-shrink-0">
-                <i class="fas fa-hourglass-half text-amber-600"></i>
+    const theme = {
+        color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
+        shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', icon: 'fa-hourglass-half'
+    };
+    const duration = 30000;
+
+    const toast = document.createElement('div');
+    toast.id = 'quadrant-stagnation-modal';
+    toast.className = `quest-toast flex flex-col p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full`;
+
+    toast.innerHTML = `
+        <div class="flex items-center">
+            <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
+                <i class="fas ${theme.icon} text-lg"></i>
             </div>
-            <div class="flex-1">
-                <h4 class="font-bold text-gray-800 dark:text-gray-100 mb-1">重要任务长期未推进</h4>
-                <p class="text-sm text-gray-600 dark:text-gray-300 mb-1">「${task.title || '新任务'}」已在"重要不紧急"象限停留 <span class="font-bold text-amber-600">${days}</span> 天。</p>
-                ${totalCount > 1 ? `<p class="text-xs text-gray-500 dark:text-gray-400 mb-2">另有 ${totalCount - 1} 个类似任务</p>` : ''}
-                <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">是否将其临时调整为"紧急"以加速推进？</p>
-                <div class="flex gap-2">
-                    <button onclick="promoteStagnantTask('${task.id}')" class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-sm rounded-lg transition">
-                        <i class="fas fa-bolt mr-1"></i>设为紧急
-                    </button>
-                    <button onclick="focusStagnantTask('${task.id}')" class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-sm rounded-lg transition">
-                        <i class="fas fa-clock mr-1"></i>开始专注
-                    </button>
-                    <button onclick="dismissStagnationModal()" class="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm rounded-lg transition">
-                        稍后
-                    </button>
+            <div class="flex-1 relative z-10 flex flex-col justify-center">
+                <div class="${theme.color} text-xs font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
+                    WARNING
+                </div>
+                <div class="text-sm font-medium text-slate-300 leading-snug">
+                    「${escapeHtml(task.title || '新任务')}」已在"重要不紧急"象限停留 <span class="font-bold text-amber-400">${days}</span> 天。${totalCount > 1 ? ` 另有 ${totalCount - 1} 个类似任务。` : ''}
                 </div>
             </div>
-            <button onclick="dismissStagnationModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 flex-shrink-0">
-                <i class="fas fa-times"></i>
-            </button>
+        </div>
+        <div class="flex gap-2 mt-3 relative z-10 justify-end">
+            <button class="stagnation-promote-btn px-3 py-1.5 bg-amber-500/20 text-amber-400 border border-amber-500 rounded font-bold hover:bg-amber-500/30 transition text-xs tracking-wider">设为紧急</button>
+            <button class="stagnation-focus-btn px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500 rounded font-bold hover:bg-green-500/30 transition text-xs tracking-wider">开始专注</button>
+            <button class="stagnation-dismiss-btn px-3 py-1.5 bg-slate-700/50 text-slate-400 border border-slate-600 rounded font-bold hover:bg-slate-600/50 transition text-xs tracking-wider">稍后</button>
+        </div>
+        <div class="absolute bottom-0 left-0 h-1 ${theme.bg} opacity-80"
+             style="animation: progressShrink ${duration}ms linear forwards;">
         </div>
     `;
-    document.body.appendChild(modal);
 
-    // 30秒后自动消失
-    setTimeout(() => {
-        if (document.getElementById('quadrant-stagnation-modal')) {
-            dismissStagnationModal();
-        }
-    }, 30000);
+    container.appendChild(toast);
+
+    let isRemoved = false;
+    function removeToast() {
+        if (isRemoved) return;
+        isRemoved = true;
+        toast.classList.add('quest-toast-out');
+        setTimeout(() => toast.remove(), 400);
+    }
+
+    toast.querySelector('.stagnation-promote-btn').addEventListener('click', () => {
+        clearTimeout(autoRemoveTimer);
+        removeToast();
+        promoteStagnantTask(task.id);
+    });
+    toast.querySelector('.stagnation-focus-btn').addEventListener('click', () => {
+        clearTimeout(autoRemoveTimer);
+        removeToast();
+        focusStagnantTask(task.id);
+    });
+    toast.querySelector('.stagnation-dismiss-btn').addEventListener('click', () => {
+        clearTimeout(autoRemoveTimer);
+        removeToast();
+    });
+
+    const autoRemoveTimer = setTimeout(() => {
+        removeToast();
+    }, duration);
 }
 
 function promoteStagnantTask(taskId) {
@@ -237,20 +276,10 @@ function promoteStagnantTask(taskId) {
         renderView();
         showToast(buildTaskToastMessage(task), 'success', null, '已调整为紧急');
     }
-    dismissStagnationModal();
 }
 
 function focusStagnantTask(taskId) {
-    dismissStagnationModal();
     startPomodoroForTask(taskId);
-}
-
-function dismissStagnationModal() {
-    const modal = document.getElementById('quadrant-stagnation-modal');
-    if (modal) {
-        modal.style.animation = 'fadeOutDown 0.3s ease-in';
-        setTimeout(() => modal.remove(), 300);
-    }
 }
 
 function openAddTaskForQuadrant(quadrantKey) {

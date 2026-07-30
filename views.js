@@ -76,6 +76,9 @@ function updateViewButtons() {
 
 function renderView() {
     const container = document.getElementById('view-container');
+    // 清空顶部导航栏（由各视图自行填充）
+    const navBar = document.getElementById('view-nav-bar');
+    if (navBar) navBar.innerHTML = '';
     // 离开摘要页时停止彗星动画，防止 rAF 泄漏
     if (currentView !== 'summary') stopSummaryCometAnimation();
 
@@ -111,57 +114,4 @@ function renderView() {
     }
 
     updatePostponeButton();
-}
-
-function renderTaskCard(task) {
-    const list = lists.find(l => l.id === task.listId);
-    const timeDisplay = task.startTime ? formatDateTime(task.startTime) : '';
-
-    return `
-        <div class="task-item bg-theme-secondary rounded-xl p-4 shadow-theme card-hover border border-theme ${task.completed ? 'task-complete' : ''}"
-             draggable="true"
-             data-task-id="${task.id}"
-             ondragstart="handleTaskDragStart(event, '${task.id}')"
-             ondragover="handleTaskDragOver(event)"
-             ondrop="handleTaskDrop(event, '${task.id}')"
-             ondragend="handleTaskDragEnd(event)"
-             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
-            <div class="flex items-start gap-4">
-                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
-                    ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
-                </button>
-                <div class="flex-1">
-                    <div class="flex items-center gap-2 mb-1">
-                        <h3 class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} cursor-pointer hover:text-accent transition">${task.title || '新任务'}</h3>
-                        ${task.important ? '<i class="fas fa-star text-yellow-500 text-sm"></i>' : ''}
-                        ${task.urgent ? '<i class="fas fa-fire text-red-500 text-sm"></i>' : ''}
-                        <span class="ml-auto">${renderTagCapsules(task, 2, 'right')}</span>
-                    </div>
-                    <div class="flex items-center gap-3 text-sm text-theme-secondary">
-                        ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span><span class="sidebar-text">${list.name}</span></span>` : ''}
-                        ${timeDisplay ? `<span class="sidebar-text cursor-pointer hover:text-accent transition"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
-                    </div>
-                    ${renderSubtaskListDisplay(task) || (task.notes ? `<p class="mt-2 text-sm text-theme-secondary cursor-pointer hover:text-accent transition">${task.notes}</p>` : '')}
-
-                    <div class="flex items-center gap-2 mt-3 pt-3 border-t border-theme">
-                        <button onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" class="flex items-center gap-1 px-3 py-1 text-xs text-theme-secondary hover:bg-theme-tertiary rounded-lg transition">
-                            <i class="fas fa-clock"></i>
-                            <span class="sidebar-text">${timeDisplay || '设置时间'}</span>
-                        </button>
-                        <button onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" class="flex items-center gap-1 px-3 py-1 text-xs ${task.important || task.urgent ? 'text-yellow-600' : 'text-theme-secondary'} hover:bg-theme-tertiary rounded-lg transition">
-                            <i class="fas fa-star"></i>
-                            <span class="sidebar-text">${task.important || task.urgent ? (task.important ? '重要' : '') + (task.important && task.urgent ? ' / ' : '') + (task.urgent ? '紧急' : '') : '设置优先级'}</span>
-                        </button>
-                        <button onclick="event.stopPropagation(); startPomodoroForTask('${task.id}')" class="flex items-center gap-1 px-3 py-1 text-xs text-green-600 hover:bg-green-50 rounded-lg transition">
-                            <i class="fas fa-stopwatch"></i>
-                            <span class="sidebar-text">专注</span>
-                        </button>
-                        <button onclick="event.stopPropagation(); confirmDeleteTask('${task.id}')" class="ml-auto p-1 text-theme-muted hover:text-red-500 transition">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
 }

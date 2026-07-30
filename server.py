@@ -851,7 +851,7 @@ class TodoHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, PUT, PATCH, POST, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
 
     def send_json_response(self, data, status=200):
@@ -1088,10 +1088,21 @@ class TodoHandler(BaseHTTPRequestHandler):
 
                 global notified_task_ids
                 with notified_task_ids_lock:
+                    # 仅保留仍存在的任务ID，且对 startTime 变化的任务清除通知标记，
+                    # 使其在新的时间到达时能重新触发提醒
+                    old_data = load_data_from_file()
+                    old_start_times = {}
+                    for t in old_data.get('tasks', []):
+                        if t.get('id'):
+                            old_start_times[t['id']] = t.get('startTime', '')
                     task_ids = set()
                     for task in data.get('tasks', []):
                         if task.get('id'):
                             task_ids.add(task['id'])
+                            # 任务时间变化时，清除通知标记，允许在新时间重新提醒
+                            new_start = task.get('startTime', '')
+                            if new_start != old_start_times.get(task['id']):
+                                notified_task_ids.discard(task['id'])
                     notified_task_ids = notified_task_ids & task_ids
 
                 self.send_json_response({"status": "ok", "version": _data_version})
@@ -1100,6 +1111,84 @@ class TodoHandler(BaseHTTPRequestHandler):
             self.send_error_json("Not found", 404)
         except Exception as e:
             print("PUT error: %s" % str(e))
+            sys.stdout.flush()
+            try:
+                self.send_error(500, str(e))
+            except Exception:
+                pass
+
+    def do_PATCH(self):
+        # 增量保存单个任务：避免每次勾选/编辑都序列化并传输全量数据（5510 任务 + 416 历史）
+        global _data_version, notified_task_ids
+        try:
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+
+            if path.startswith('/api/tasks/'):
+                task_id = urllib.parse.unquote(path[len('/api/tasks/'):])
+                if not task_id:
+                    self.send_error_json("Missing task id", 400)
+                    return
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length > 5 * 1024 * 1024:
+                    self.send_error_json("Task data too large", 413)
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    task = json.loads(body.decode('utf-8'))
+                except Exception:
+                    self.send_error_json("Invalid JSON", 400)
+                    return
+
+                # 原子地读取-修改-写回单个任务（与 PUT 串行化在同一文件锁上）
+                lock_fd = acquire_file_lock()
+                try:
+                    if os.path.exists(DATA_FILE):
+                        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                    else:
+                        data = json.loads(json.dumps(DEFAULT_DATA))
+                    for key in DEFAULT_DATA:
+                        if key not in data:
+                            data[key] = DEFAULT_DATA[key]
+                    if not data.get('taskLists'):
+                        data['taskLists'] = DEFAULT_DATA['taskLists']
+                    if not data.get('settings'):
+                        data['settings'] = dict(DEFAULT_DATA['settings'])
+                    elif 'defaultListId' not in data['settings']:
+                        data['settings']['defaultListId'] = 'default'
+
+                    tasks_list = data.get('tasks', [])
+                    found = False
+                    old_start = ''
+                    for i in range(len(tasks_list)):
+                        if tasks_list[i].get('id') == task_id:
+                            old_start = tasks_list[i].get('startTime', '')
+                            tasks_list[i] = task
+                            found = True
+                            break
+                    if not found:
+                        tasks_list.append(task)
+                    data['tasks'] = tasks_list
+
+                    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                finally:
+                    release_file_lock(lock_fd)
+
+                # 任务时间变化时清除通知标记，允许在新时间重新提醒
+                new_start = task.get('startTime', '')
+                with notified_task_ids_lock:
+                    if new_start != old_start:
+                        notified_task_ids.discard(task_id)
+
+                _data_version += 1
+                self.send_json_response({"status": "ok", "version": _data_version})
+                return
+
+            self.send_error_json("Not found", 404)
+        except Exception as e:
+            print("PATCH error: %s" % str(e))
             sys.stdout.flush()
             try:
                 self.send_error(500, str(e))

@@ -604,6 +604,73 @@ function toggleTimeRange() {
     updateDetailTimeBtnText();
 }
 
+// 方案C：任务详情模态浮层模式（从命令面板打开时使用，避免被命令面板遮挡）
+let _taskDetailModalMode = false;
+let _taskDetailSavedClassName = '';
+let _taskDetailSavedStyle = '';
+
+// 应用模态浮层布局：宽屏固定右侧、窄屏模态居中
+function _applyTaskDetailModalLayout(panel) {
+    panel.classList.remove('h-screen', 'relative', 'z-40');
+    panel.classList.add('fixed', 'shadow-2xl');
+    if (window.innerWidth < 768) {
+        // 窄屏：模态居中
+        panel.classList.add('border', 'rounded-xl');
+        panel.style.zIndex = '10001';
+        panel.style.top = '50%';
+        panel.style.left = '50%';
+        panel.style.right = 'auto';
+        panel.style.transform = 'translate(-50%, -50%)';
+        panel.style.height = 'auto';
+        panel.style.maxHeight = '85vh';
+    } else {
+        // 宽屏：固定屏幕右侧，与命令面板互不重叠
+        panel.classList.add('border-l');
+        panel.style.zIndex = '10001';
+        panel.style.top = '0';
+        panel.style.right = '0';
+        panel.style.left = 'auto';
+        panel.style.transform = 'none';
+        panel.style.height = '100vh';
+        panel.style.maxHeight = 'none';
+        // 命令面板向左偏移，腾出详情面板空间，避免重叠
+        _adjustCommandPaletteForDetail(true);
+    }
+    panel.style.boxShadow = '0 25px 50px -12px rgba(0, 0, 0, 0.5)';
+    panel.style.transition = 'none';
+}
+
+// 调整命令面板位置，为详情面板腾出空间（宽屏右侧布局时）
+function _adjustCommandPaletteForDetail(open) {
+    const overlay = document.getElementById('command-palette-overlay');
+    if (!overlay) return;
+    overlay.style.transition = 'padding 0.2s ease';
+    overlay.style.paddingRight = open ? '400px' : '';
+}
+
+function openTaskDetailModal(taskId) {
+    const panel = document.getElementById('task-detail-panel');
+    if (!panel) return;
+
+    // 首次进入模态模式时，保存原始样式（此时面板含 hidden，仍不可见）
+    if (!_taskDetailModalMode) {
+        _taskDetailSavedClassName = panel.className;
+        _taskDetailSavedStyle = panel.style.cssText;
+    }
+    _taskDetailModalMode = true;
+
+    // 在下一帧渲染：让点击的视觉反馈先绘制，避免同步阻塞造成卡顿；
+    // 同时检查 _taskDetailModalMode，处理点击后立即 ESC 关闭的竞态
+    requestAnimationFrame(() => {
+        if (!_taskDetailModalMode) return;
+        const p = document.getElementById('task-detail-panel');
+        if (!p) return;
+        // 先应用浮层布局（面板仍 hidden，不会闪烁），再渲染内容
+        _applyTaskDetailModalLayout(p);
+        openTaskDetailPanel(taskId);
+    });
+}
+
 function openTaskDetailPanel(taskId, readOnly = false) {
     if (planPanelOpen && !detailOpenedFromPlan) {
         const detailPanel = document.getElementById('task-detail-panel');
@@ -1679,9 +1746,13 @@ function toggleTaskDetailComplete() {
         if (nextTask) {
             tasks.push(nextTask);
         }
+        // 新增了重复任务，需全量保存
+        saveData();
+    } else {
+        // 仅本任务状态变更，增量保存
+        saveTaskPatch(currentDetailTaskId);
     }
     updateDetailCompleteButton(task.completed);
-    saveData();
     renderView();
 
     // 触发彩蛋效果（任务完成时）
@@ -1730,6 +1801,17 @@ function setupDateTimeInteractions() {
 }
 
 function closeTaskDetailPanel() {
+    // 模态浮层模式：关闭时恢复原样式
+    if (_taskDetailModalMode) {
+        const modalPanel = document.getElementById('task-detail-panel');
+        if (modalPanel) {
+            modalPanel.className = _taskDetailSavedClassName;
+            modalPanel.style.cssText = _taskDetailSavedStyle;
+        }
+        _taskDetailModalMode = false;
+        // 恢复命令面板位置
+        _adjustCommandPaletteForDetail(false);
+    }
     // 只读模式下不保存任何修改（归档清单中的任务）
     if (detailReadOnly) {
         detailReadOnly = false;
@@ -3414,8 +3496,12 @@ function toggleTaskComplete(taskId) {
             if (nextTask) {
                 tasks.push(nextTask);
             }
+            // 新增了重复任务，需全量保存
+            saveData();
+        } else {
+            // 仅本任务状态变更，增量保存
+            saveTaskPatch(taskId);
         }
-        saveData();
         renderLists();
         if (typeof renderTags === 'function') renderTags();
         renderView();

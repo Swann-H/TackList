@@ -39,8 +39,9 @@ function renderSummaryView(container) {
         ? generateTimeBasedContent(filteredTasks)
         : generateListBasedContent(filteredTasks);
 
-    // 左栏数据：今日完成率（始终今日，仅受清单筛选影响）
-    const todayData = getTodayCompletionData();
+    // 左栏数据：今日完成率（昨天时间范围时显示昨日数据，仅受清单筛选影响）
+    const isYesterday = summaryTimeRange === 'yesterday';
+    const todayData = getTodayCompletionData(isYesterday ? -1 : 0);
     // 左栏数据：完成趋势（跟随时间范围，仅显示已过日期，仅受清单筛选影响）
     const trendData = getCompletionTrendData();
 
@@ -86,9 +87,9 @@ function renderSummaryView(container) {
             <div class="flex-1 min-h-0 flex gap-4 px-4 pb-4">
                 <!-- 左栏：数据洞察与可视化 (45%) -->
                 <div class="flex flex-col gap-4" style="width: 45%; min-width: 0;">
-                    <!-- 模块一：今日概况（整合任务+专注） -->
+                    <!-- 模块一：今日/昨日概况（整合任务+专注） -->
                     <div class="bg-theme-secondary rounded-xl shadow-theme p-5 flex-shrink-0">
-                        ${renderTodayOverviewCard(todayData)}
+                        ${renderTodayOverviewCard(todayData, isYesterday)}
                     </div>
                     <!-- 模块二：完成趋势 -->
                     <div class="bg-theme-secondary rounded-xl shadow-theme p-5 flex-1 min-h-0 flex flex-col">
@@ -149,9 +150,11 @@ function renderSummaryView(container) {
 // 今日总任务 = 今天新创建且已完成的任务 + 截止日期是今天的任务（无论是否完成） + 从过去延期到今天的未完成任务
 // 排除未来日期的任务，以及没有设置日期且不在今天执行的任务
 // 仅受清单筛选影响，不受优先级/状态/时间范围筛选影响
-function getTodayCompletionData() {
+// dateOffset: 0=今天（默认），-1=昨天
+function getTodayCompletionData(dateOffset = 0) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    today.setDate(today.getDate() + dateOffset);
 
     const todayTasks = tasks.filter(task => {
         // 清单筛选
@@ -201,9 +204,10 @@ function getTodayCompletionData() {
     return { completed, total, remaining, importantCompleted, newCount };
 }
 
-function renderTodayOverviewCard(data) {
+function renderTodayOverviewCard(data, isYesterday = false) {
     const percent = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 0;
     const isAllClear = data.total > 0 && data.completed === data.total;
+    const overviewTitle = isYesterday ? '昨日概况' : '今日概况';
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
     // 基础参数
@@ -230,31 +234,34 @@ function renderTodayOverviewCard(data) {
     // 最短长度（周期起止时的长度）
     const minCometLength = Math.max(maxCometLength * 0.25, 4);
 
-    // 专注数据
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // 专注数据（根据 isYesterday 切换为昨日数据）
+    const focusDate = new Date();
+    focusDate.setHours(0, 0, 0, 0);
+    if (isYesterday) focusDate.setDate(focusDate.getDate() - 1);
     const history = typeof pomodoroHistory !== 'undefined' ? pomodoroHistory : [];
-    const todayPomodoros = history.filter(p => {
+    const focusPomodoros = history.filter(p => {
         const pDate = new Date(p.date);
         pDate.setHours(0, 0, 0, 0);
-        return pDate.getTime() === today.getTime();
+        return pDate.getTime() === focusDate.getTime();
     }).length;
     const focusDuration = (typeof pomodoroState !== 'undefined' && pomodoroState.focusDuration)
         ? pomodoroState.focusDuration
         : (settings.focusDuration || 25);
-    const todayMinutes = todayPomodoros * focusDuration;
+    const focusMinutes = focusPomodoros * focusDuration;
+    const focusLabel = isYesterday ? '昨日专注' : '今日专注';
+    const durationLabel = isYesterday ? '昨日时长' : '今日时长';
 
     // 信息项：统一使用数字在上、标签在下的样式，无独立底色
-    const infoItem = (value, label, extraAttrs = '') =>
+    // valueClass 可选，用于在特定条件下给数字加强调色（如高优完成>4时变橙色）
+    const infoItem = (value, label, extraAttrs = '', valueClass = 'text-theme-primary') =>
         `<div class="text-center" ${extraAttrs}>
-            <div class="text-lg font-bold text-theme-primary">${value}</div>
+            <div class="text-lg font-bold ${valueClass}">${value}</div>
             <div class="text-xs text-theme-muted mt-0.5">${label}</div>
         </div>`;
 
     let html = `
         <div class="flex items-center justify-between mb-3">
-            <h3 class="text-base font-semibold text-theme-primary">今日概况</h3>
-            ${data.importantCompleted > 0 ? `<span class="text-xs px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 flex items-center gap-1"><i class="fas fa-bolt text-xs"></i> 高优 ${data.importantCompleted}</span>` : ''}
+            <h3 class="text-base font-semibold text-theme-primary">${overviewTitle}</h3>
         </div>
     `;
 
@@ -316,10 +323,11 @@ function renderTodayOverviewCard(data) {
             </div>
             <div class="flex-1 min-w-0 grid grid-cols-3 gap-x-2 gap-y-3">
                 ${infoItem(data.completed + '<span class="text-xs text-theme-muted"> / ' + data.total + '</span>', '已完成')}
+                ${infoItem(data.importantCompleted, '高优完成', 'title="高优任务指标记为重要的任务" style="cursor:help"', data.importantCompleted > 4 ? 'text-orange-500' : 'text-theme-primary')}
                 ${infoItem(data.remaining, '剩余待办')}
                 ${infoItem(data.newCount || 0, '新增任务')}
-                ${infoItem(todayPomodoros, '今日专注', 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
-                ${infoItem(formatFocusMinutes(todayMinutes), '今日时长', 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
+                ${infoItem(focusPomodoros, focusLabel, 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
+                ${infoItem(formatFocusMinutes(focusMinutes), durationLabel, 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
             </div>
         </div>
     `;
@@ -639,27 +647,54 @@ function renderCompletionTrendCard(trendData) {
         return html;
     }
 
+    // 单调三次插值（Fritsch-Carlson 方法）：保证曲线平滑且不超出数据点 y 范围
+    // 无过冲、无震荡，局部极值处切线自动归零，首末段与中段曲率一致
     function generateSmoothPath(points) {
         if (points.length < 2) return '';
         if (points.length === 2) {
             return `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)} L ${points[1].x.toFixed(1)} ${points[1].y.toFixed(1)}`;
         }
-        const minY = padding.top;
-        const maxY = padding.top + innerHeight;
+        const n = points.length;
+        // 1. 计算相邻点间的斜率
+        const slopes = [];
+        for (let i = 0; i < n - 1; i++) {
+            const dx = points[i + 1].x - points[i].x;
+            slopes.push(dx !== 0 ? (points[i + 1].y - points[i].y) / dx : 0);
+        }
+        // 2. 计算每个点的切线：端点取相邻斜率，内部点在极值处归零
+        const tangents = new Array(n);
+        tangents[0] = slopes[0];
+        tangents[n - 1] = slopes[n - 2];
+        for (let i = 1; i < n - 1; i++) {
+            tangents[i] = (slopes[i - 1] * slopes[i] <= 0) ? 0 : (slopes[i - 1] + slopes[i]) / 2;
+        }
+        // 3. 单调性约束：防止切线过陡导致过冲
+        for (let i = 0; i < n - 1; i++) {
+            if (slopes[i] === 0) {
+                tangents[i] = 0;
+                tangents[i + 1] = 0;
+            } else {
+                const alpha = tangents[i] / slopes[i];
+                const beta = tangents[i + 1] / slopes[i];
+                const h = Math.hypot(alpha, beta);
+                if (h > 3) {
+                    const tau = 3 / h;
+                    tangents[i] = tau * alpha * slopes[i];
+                    tangents[i + 1] = tau * beta * slopes[i];
+                }
+            }
+        }
+        // 4. 转换为 cubic bezier 路径（Hermite → Bezier）
         let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-        for (let i = 0; i < points.length - 1; i++) {
-            const p0 = i === 0 ? points[0] : points[i - 1];
+        for (let i = 0; i < n - 1; i++) {
             const p1 = points[i];
             const p2 = points[i + 1];
-            const p3 = i + 2 < points.length ? points[i + 2] : points[i + 1];
-            const tension = 0.33;
-            const cp1x = p1.x + (p2.x - p0.x) * tension;
-            const cp1y = p1.y + (p2.y - p0.y) * tension;
-            const cp2x = p2.x - (p3.x - p1.x) * tension;
-            const cp2y = p2.y - (p3.y - p1.y) * tension;
-            const clampedCp1y = Math.max(minY, Math.min(maxY, cp1y));
-            const clampedCp2y = Math.max(minY, Math.min(maxY, cp2y));
-            path += ` C ${cp1x.toFixed(1)} ${clampedCp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${clampedCp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+            const dx = (p2.x - p1.x) / 3;
+            const cp1x = p1.x + dx;
+            const cp1y = p1.y + tangents[i] * dx;
+            const cp2x = p2.x - dx;
+            const cp2y = p2.y - tangents[i + 1] * dx;
+            path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
         }
         return path;
     }
@@ -694,6 +729,7 @@ function renderCompletionTrendCard(trendData) {
     });
     if (completedPoints.length >= 2) {
         const smoothPath = generateSmoothPath(completedPoints);
+        // 面积填充基线在图表底部（0 值位置），填充曲线下方区域
         const baselineY = padding.top + innerHeight;
         const areaPath = smoothPath + ` L ${completedPoints[completedPoints.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)} L ${completedPoints[0].x.toFixed(1)} ${baselineY.toFixed(1)} Z`;
         barSvg += `<path d="${areaPath}" fill="url(#trend-completed-gradient)"/>`;

@@ -1,6 +1,7 @@
 // ==================== 命令面板 & NLP 快速添加 (FR-27 / FR-28) ====================
 
 let _commandPaletteOpen = false;
+let _commandPaletteDebounceTimer = null;
 
 // ==================== 命令面板 UI ====================
 
@@ -48,12 +49,23 @@ function openCommandPalette() {
     const input = document.getElementById('command-palette-input');
     input.focus();
 
+    // 打开时重建搜索索引，保证数据新鲜（一次 O(n)，后续按键直接查表）
+    if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
+
     input.addEventListener('keydown', handleCommandPaletteKeydown);
     input.addEventListener('input', handleCommandPaletteInput);
 }
 
 function closeCommandPalette() {
     _commandPaletteOpen = false;
+    if (_commandPaletteDebounceTimer) {
+        clearTimeout(_commandPaletteDebounceTimer);
+        _commandPaletteDebounceTimer = null;
+    }
+    // 关闭命令面板时，同步关闭模态浮层模式的任务详情
+    if (typeof _taskDetailModalMode !== 'undefined' && _taskDetailModalMode) {
+        closeTaskDetailPanel();
+    }
     const overlay = document.getElementById('command-palette-overlay');
     if (overlay) {
         overlay.style.animation = 'fadeOut 0.1s ease-in';
@@ -74,6 +86,12 @@ function handleCommandPaletteKeydown(e) {
 function handleCommandPaletteInput(e) {
     const input = document.getElementById('command-palette-input');
     const value = input.value.trim();
+
+    // 清除上一次防抖定时器
+    if (_commandPaletteDebounceTimer) {
+        clearTimeout(_commandPaletteDebounceTimer);
+    }
+
     const resultsContainer = document.getElementById('command-palette-results');
 
     if (!value) {
@@ -81,21 +99,30 @@ function handleCommandPaletteInput(e) {
         return;
     }
 
-    // /s 搜索模式
+    // /s 搜索模式：防抖 150ms，避免连续按键全量扫描
     if (value.startsWith('/s ') || value === '/s') {
         const query = value.slice(3).trim();
         if (!query) {
             resultsContainer.innerHTML = renderSearchHint();
             return;
         }
-        const results = searchTasks(query);
-        resultsContainer.innerHTML = renderSearchResults(results, query);
+        _commandPaletteDebounceTimer = setTimeout(() => {
+            const curInput = document.getElementById('command-palette-input');
+            // 防抖期间用户可能已清空或切换输入，校验当前值仍为搜索模式
+            if (!curInput || !curInput.value.trim().startsWith('/s')) return;
+            const results = searchTasks(query);
+            resultsContainer.innerHTML = renderSearchResults(results, query);
+        }, 150);
         return;
     }
 
-    // 快速创建模式 - 实时预览 NLP 解析结果
-    const parsed = parseNLPInput(value);
-    resultsContainer.innerHTML = renderNLPPreview(parsed);
+    // 快速创建模式 - 实时预览 NLP 解析结果（也轻微防抖，避免高频解析）
+    _commandPaletteDebounceTimer = setTimeout(() => {
+        const curInput = document.getElementById('command-palette-input');
+        if (!curInput || curInput.value.trim().startsWith('/s')) return;
+        const parsed = parseNLPInput(value);
+        resultsContainer.innerHTML = renderNLPPreview(parsed);
+    }, 120);
 }
 
 function executeCommandPalette() {
@@ -109,7 +136,7 @@ function executeCommandPalette() {
         if (query) {
             const results = searchTasks(query);
             if (results.length > 0) {
-                openTaskDetailPanel(results[0].id);
+                openTaskDetailModal(results[0].id);
                 return;
             }
         }
@@ -125,12 +152,36 @@ function executeCommandPalette() {
 
 // ==================== 任务搜索 ====================
 
+// 预计算的小写搜索索引，避免每次按键对 5510 条任务做 toLowerCase() + includes()。
+// 在命令面板打开时重建（保证数据新鲜），数据刷新时也会重建。
+let _searchIndex = [];
+let _searchIndexReady = false;
+
+function rebuildSearchIndex() {
+    _searchIndex = [];
+    if (!tasks || tasks.length === 0) { _searchIndexReady = true; return; }
+    for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        _searchIndex.push({
+            task: t,
+            title: (t.title || '').toLowerCase(),
+            notes: (t.notes || '').toLowerCase()
+        });
+    }
+    _searchIndexReady = true;
+}
+
 function searchTasks(query) {
     const q = query.toLowerCase();
-    return tasks.filter(t => {
-        return (t.title && t.title.toLowerCase().includes(q)) ||
-               (t.notes && t.notes.toLowerCase().includes(q));
-    }).slice(0, 8);
+    if (!_searchIndexReady) rebuildSearchIndex();
+    const results = [];
+    for (let i = 0; i < _searchIndex.length && results.length < 8; i++) {
+        const s = _searchIndex[i];
+        if (s.title.indexOf(q) !== -1 || s.notes.indexOf(q) !== -1) {
+            results.push(s.task);
+        }
+    }
+    return results;
 }
 
 function renderSearchHint() {
@@ -148,37 +199,33 @@ function renderSearchResults(results, query) {
     return results.map(task => {
         const list = lists.find(l => l.id === task.listId);
         const listColor = list ? list.color : '#9ca3af';
-        const listName = list ? list.name : '默认';
-        // 格式化任务时间
-        let timeStr = '';
-        if (task.startTime) {
-            const d = new Date(task.startTime);
-            const now = new Date();
-            const isToday = d.toDateString() === now.toDateString();
-            const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
-            const isTomorrow = d.toDateString() === tomorrow.toDateString();
-            const datePart = isToday ? '今天' : isTomorrow ? '明天' : `${d.getMonth() + 1}/${d.getDate()}`;
-            if (task.isAllDay) {
-                timeStr = ` · ${datePart} 全天`;
-            } else {
-                const hh = d.getHours().toString().padStart(2, '0');
-                const mm = d.getMinutes().toString().padStart(2, '0');
-                let timePart = `${hh}:${mm}`;
-                if (task.endTime) {
-                    const ed = new Date(task.endTime);
-                    timePart += `-${ed.getHours().toString().padStart(2, '0')}:${ed.getMinutes().toString().padStart(2, '0')}`;
-                }
-                timeStr = ` · ${datePart} ${timePart}`;
-            }
-        }
-        return `<div class="px-5 py-3 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition"
-                     onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
-            <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${listColor}"></span>
-            <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate ${task.completed ? 'line-through opacity-50' : ''}">${escapeHtml(task.title || '新任务')}</div>
-                <div class="text-xs text-theme-secondary">${listName}${timeStr}${task.important ? ' · 重要' : ''}${task.urgent ? ' · 紧急' : ''}</div>
+        const listName = list ? list.name : '';
+        const focusMinutes = getTaskFocusMinutes(task.id);
+        const timeDisplay = formatTaskListTime(task);
+        const progress = task.progress || 0;
+        const quadColors = getQuadrantColorClass(task);
+        const isOverdue = isTaskOverdue(task);
+        const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
+        const tagCapsules = renderTagCapsules(task, 2, 'right');
+
+        return `<div class="px-3 py-1">
+            <div class="task-list-item relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
+                 data-list-id="${task.listId || 'default'}"
+                 onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
+                <div class="task-list-color-bar" style="background-color: ${listColor};"></div>
+                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
+                    ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
+                </button>
+                <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
+                ${renderFocusButton(task.id)}
+                <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
+                    ${tagCapsules}
+                    ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-400"></i>${progress}%</span>` : ''}
+                    ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
+                    ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span><span class="hidden sm:inline">${listName}</span></span>` : ''}
+                </div>
+                ${timeDisplay ? `<span class="flex-shrink-0 text-xs ${timeTextClass} whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
             </div>
-            <i class="fas fa-arrow-right text-xs text-theme-muted"></i>
         </div>`;
     }).join('');
 }

@@ -12,8 +12,6 @@ let _completedTaskInfo = [];
 let _pomodoroStartPending = false;
 // 超时保护定时器：防止网络异常导致 _pomodoroStartPending 永久保持
 let _pomodoroStartPendingTimer = null;
-// 记录进入 rest_ended 状态的时间戳，用于多标签页同步超时
-let _restEndedAt = 0;
 
 if (_pomodoroChannel) {
     _pomodoroChannel.onmessage = function(event) {
@@ -119,15 +117,6 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ==================== 番茄计时器核心函数 ====================
-
-function shouldAskAboutFocusTime() {
-    if (pomodoroState.state !== 'focusing' && pomodoroState.state !== 'pause') return false;
-    if (pomodoroState.phase !== 'focus') return false;
-    if (!pomodoroState.currentTaskId) return false;
-    
-    const elapsed = pomodoroState.totalDuration - pomodoroState.timeLeft;
-    return elapsed >= 5 * 60; // 5 minutes
-}
 
 function stopFlowAnimation() {
     const leftPanel = document.getElementById('pomodoro-left-panel');
@@ -945,7 +934,6 @@ function startPomodoroForTask(taskId) {
         setPomodoroPhase('focus');
         pomodoroState.state = 'focusing';
         pomodoroState.originalStartedAt = new Date().toISOString();
-        _restEndedAt = 0;  // 离开 rest_ended 状态
         startPomodoro();   // 内部统一设置 _pomodoroStartPending
         closePomodoroPage();
         switchToPomodoroPage();
@@ -1152,7 +1140,6 @@ function handleStartFocus() {
     pomodoroState.originalStartedAt = new Date().toISOString();
     _completedTaskInfo = [];
     _endedTaskId = null;
-    _restEndedAt = 0;  // 离开 rest_ended 状态
     startPomodoro();   // 内部统一设置 _pomodoroStartPending
     notifyOtherTabs();
 }
@@ -1190,7 +1177,6 @@ function handleClickEnd() {
         pomodoroState.currentTaskId = null;
         _endedTaskId = null;
         _completedTaskInfo = [];
-        _restEndedAt = 0;  // 离开 rest_ended 状态
         updatePomodoroDisplay();
         updatePomodoroBackground();
         updatePomodoroTaskButton();
@@ -1321,7 +1307,6 @@ function doAutoForward() {
     _pomodoroPhaseTransition = false;
     _endedTaskId = null;
     _completedTaskInfo = [];
-    _restEndedAt = 0;  // 清理 rest_ended 时间戳
     clearMainViewBackground();
     updatePomodoroDisplay();
     updatePomodoroBackground();
@@ -1347,11 +1332,6 @@ function togglePomodoro() {
             handleClickRest();
             break;
     }
-}
-
-// 兼容旧接口：endPomodoro
-function endPomodoro() {
-    handleClickEnd();
 }
 
 // ==================== 核心计时器函数 ====================
@@ -1414,23 +1394,32 @@ function syncPomodoroFromServer() {
         }
         
         if (serverState === 'focusing' || serverState === 'resting') {
-            // 服务器正在运行：用服务器 timeLeft 启动本地倒计时
-            pomodoroState.state = serverState;
-            pomodoroState.totalDuration = pomodoroState.timeLeft;
-            pomodoroState.startedAt = Date.now(); // 本地时间戳，仅用于本地倒计时
-            
-            if (pomodoroState.timerId) clearInterval(pomodoroState.timerId);
-            pomodoroState.timerId = setInterval(() => {
-                const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
-                pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
-                updatePomodoroDisplay();
-                if (pomodoroState.timeLeft <= 0) {
-                    onPomodoroComplete();
-                }
-            }, 1000);
-            
-            startFlowAnimation();
-            _pomodoroPaused = false;
+            // 本地已是相同运行状态且 timer 在运行时，不重置计时器
+            // 避免 startPomodoroForTask 刚启动专注时 syncPomodoroFromServer 用服务器
+            // timeLeft 覆盖本地计时导致 "24:59→25:00→24:59" 跳动
+            const localAlreadyRunning = pomodoroState.state === serverState && pomodoroState.timerId;
+            if (!localAlreadyRunning) {
+                // 服务器正在运行：用服务器 timeLeft 启动本地倒计时
+                pomodoroState.state = serverState;
+                pomodoroState.totalDuration = pomodoroState.timeLeft;
+                pomodoroState.startedAt = Date.now(); // 本地时间戳，仅用于本地倒计时
+
+                if (pomodoroState.timerId) clearInterval(pomodoroState.timerId);
+                pomodoroState.timerId = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
+                    pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
+                    updatePomodoroDisplay();
+                    if (pomodoroState.timeLeft <= 0) {
+                        onPomodoroComplete();
+                    }
+                }, 1000);
+
+                startFlowAnimation();
+                _pomodoroPaused = false;
+            } else {
+                // 本地已在运行，仅确保状态一致，不重置计时器
+                pomodoroState.state = serverState;
+            }
         } else if (serverState === 'pause') {
             pomodoroState.state = 'pause';
             _pomodoroPaused = true;
@@ -1678,17 +1667,6 @@ function resumePomodoro() {
     });
 }
 
-// 旧接口兼容：doEndPomodoro 已被 doAutoForward 替代，保留空函数以防引用
-function doEndPomodoro() {
-    pomodoroState.continuousTomatoCount = 0;
-    doAutoForward();
-}
-
-// 旧接口兼容：三按钮操作已被新状态机事件替代
-function startBreakFromTransition() { handleClickRest(); }
-function skipBreakFromTransition() { handleSkipRest(); }
-function endPomodoroFromTransition() { pomodoroState.continuousTomatoCount = 0; doAutoForward(); }
-
 function onPomodoroComplete() {
     if (_pomodoroCompletionHandled) return;
     _pomodoroCompletionHandled = true;
@@ -1802,7 +1780,6 @@ function onPomodoroComplete() {
             pomodoroState.state = 'rest_ended';
             pomodoroState.phase = 'focus';
             pomodoroState.timeLeft = pomodoroState.focusDuration * 60;
-            _restEndedAt = Date.now();  // 记录进入时间（调试用）
             updatePomodoroDisplay();
             updatePomodoroBackground();
         }
@@ -1864,7 +1841,6 @@ function onPomodoroComplete() {
                 pomodoroState.state = 'rest_ended';
                 pomodoroState.phase = 'focus';
                 pomodoroState.timeLeft = pomodoroState.focusDuration * 60;
-                _restEndedAt = Date.now();  // 记录进入时间（调试用）
             }
         }
         updatePomodoroDisplay();
@@ -1872,9 +1848,25 @@ function onPomodoroComplete() {
     });
 }
 
+// 专注时长缓存：taskId -> 累计分钟数
+// 渲染时每个任务都会调用 getTaskFocusMinutes，若每次都对 pomodoroHistory 做 filter
+// 全表扫描，5510 任务 × 416 历史 ≈ 230 万次比较/次渲染。改为在数据加载/变更时
+// 一次性聚合，渲染时 O(1) 查表。
+let _taskFocusMinutesCache = {};
+
+function rebuildFocusMinutesCache() {
+    _taskFocusMinutesCache = {};
+    if (!pomodoroHistory || pomodoroHistory.length === 0) return;
+    for (let i = 0; i < pomodoroHistory.length; i++) {
+        const p = pomodoroHistory[i];
+        const tid = p.taskId;
+        if (!tid) continue;
+        _taskFocusMinutesCache[tid] = (_taskFocusMinutesCache[tid] || 0) + (p.duration || 0);
+    }
+}
+
 function getTaskFocusMinutes(taskId) {
-    const taskHistory = pomodoroHistory.filter(p => p.taskId === taskId);
-    return taskHistory.reduce((total, record) => total + (record.duration || 0), 0);
+    return _taskFocusMinutesCache[taskId] || 0;
 }
 
 // 统计唯一番茄专注周期数（同一date的拆分记录算作1个周期）
@@ -1894,15 +1886,6 @@ function formatFocusMinutes(minutes) {
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
     return mins > 0 ? `${hours}h${mins}m` : `${hours}h`;
-}
-
-function showPomodoroConfirmModal(phase) {
-    // 已废弃：右下角确认弹窗被新状态机按钮替代
-    // 保留空函数以防旧代码引用
-}
-
-function confirmPomodoroAction(confirm) {
-    // 已废弃：右下角确认弹窗被新状态机按钮替代
 }
 
 function updatePomodoroDisplay() {
@@ -2077,12 +2060,6 @@ function updatePomodoroDisplay() {
     updateMainViewBackground();
 }
 
-function updatePomodoroToggleBtn() {
-    // 已废弃：按钮由 updatePomodoroDisplay 根据状态控制
-    // 保留空函数以防旧代码引用
-    updateSidebarPomodoroTimer();
-}
-
 // 更新侧栏番茄倒计时显示
 function updateSidebarPomodoroTimer() {
     const sidebarTimer = document.getElementById('sidebar-pomodoro');
@@ -2173,12 +2150,9 @@ function sendBackendNotification(title, body) {
     });
 }
 
-let _relinkRecordIdx = -1;
-
 function openRelinkTaskPanel(recordIdx) {
     const record = pomodoroHistory[recordIdx];
     if (!record) return;
-    _relinkRecordIdx = recordIdx;
 
     document.getElementById('pomodoro-task-panel-title').textContent = '关联到任务';
     renderPomodoroTaskList(
@@ -2205,6 +2179,7 @@ function relinkTask(recordIdx, taskId) {
     }
 
     saveData();
+    rebuildFocusMinutesCache();
     renderPomodoroPage();
     showToast('专注记录已重新关联', 'success');
 }
@@ -2389,12 +2364,9 @@ function askAgain() {
     }, 600);
 }
 
-let statsSelectedDate = null;
 let statsRecordsMonth = null; // 专注记录月份导航 { year, month }
 
 function openPomodoroStats() {
-    statsSelectedDate = new Date();
-    statsSelectedDate.setHours(0, 0, 0, 0);
     // 默认当前月
     const now = new Date();
     statsRecordsMonth = { year: now.getFullYear(), month: now.getMonth() };
@@ -2405,8 +2377,6 @@ function openPomodoroStats() {
 function openPomodoroStatsRecords() {
     // 从主界面跳转到统计界面的专注记录部分
     const now = new Date();
-    statsSelectedDate = new Date();
-    statsSelectedDate.setHours(0, 0, 0, 0);
     statsRecordsMonth = { year: now.getFullYear(), month: now.getMonth() };
     document.getElementById('pomodoro-stats-page').classList.remove('hidden');
     renderPomodoroStats();

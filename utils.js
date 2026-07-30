@@ -55,7 +55,10 @@ function isDarkThemeActive() {
 }
 
 // 方案A：子任务逐行列表展示（最多3行，超出显示"……(已完成/总数)"）
-function renderSubtaskListDisplay(task) {
+// colorMode: 'theme'（默认，跟随主题）| 'dark'（深色背景，如 Toast）
+function renderSubtaskListDisplay(task, colorMode = 'theme') {
+    // 文本模式下不显示子任务，回退到 notes 显示
+    if (task.mode === 'text') return '';
     const validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
     if (validSubtasks.length === 0) return '';
 
@@ -64,15 +67,19 @@ function renderSubtaskListDisplay(task) {
     const maxShow = 3;
     const showItems = validSubtasks.slice(0, maxShow);
 
+    const colors = colorMode === 'dark'
+        ? { completed: 'text-slate-500', uncompleted: 'text-slate-300', muted: 'text-slate-500' }
+        : { completed: 'text-theme-muted', uncompleted: 'text-theme-secondary', muted: 'text-theme-muted' };
+
     let html = '<div class="text-xs mt-1 space-y-0.5">';
     showItems.forEach(st => {
-        const symbol = st.completed ? '☑' : '☐';
-        const cls = st.completed ? 'text-theme-muted' : 'text-theme-secondary';
-        html += `<div class="${cls}">${symbol} ${escapeHtml(st.text)}</div>`;
+        const icon = st.completed ? 'fa-check-circle' : 'fa-circle';
+        const cls = st.completed ? colors.completed : colors.uncompleted;
+        html += `<div class="${cls} flex items-start gap-1"><i class="far ${icon} mt-0.5 flex-shrink-0"></i><span>${escapeHtml(st.text)}</span></div>`;
     });
 
     if (total > maxShow) {
-        html += `<div class="text-theme-muted">……(${completedCount}/${total})</div>`;
+        html += `<div class="${colors.muted}">…… [ ${completedCount}/${total} ]</div>`;
     }
 
     html += '</div>';
@@ -81,6 +88,8 @@ function renderSubtaskListDisplay(task) {
 
 // 方案C：子任务内联展示（最多3条，超出省略，末尾显示进度"(已完成/总数)"）
 function renderSubtaskInlineDisplay(task) {
+    // 文本模式下不显示子任务，回退到 notes 显示
+    if (task.mode === 'text') return '';
     const validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
     if (validSubtasks.length === 0) return '';
 
@@ -89,11 +98,11 @@ function renderSubtaskInlineDisplay(task) {
     const maxShow = 3;
     const showItems = validSubtasks.slice(0, maxShow);
 
-    let html = '<div class="text-xs text-slate-400 mt-1 leading-relaxed">';
+    let html = '<div class="text-xs text-slate-400 mt-1 leading-relaxed flex flex-wrap gap-x-3 gap-y-0.5">';
     showItems.forEach((st, i) => {
-        const symbol = st.completed ? '☑' : '☐';
+        const icon = st.completed ? 'fa-check-circle' : 'fa-circle';
         const cls = st.completed ? 'text-slate-500' : 'text-slate-300';
-        html += `<span class="${cls}">${symbol} ${escapeHtml(st.text)}</span>`;
+        html += `<span class="${cls} inline-flex items-center gap-1"><i class="far ${icon}"></i>${escapeHtml(st.text)}</span>`;
         if (i < showItems.length - 1) html += '&nbsp;&nbsp;';
     });
 
@@ -101,7 +110,7 @@ function renderSubtaskInlineDisplay(task) {
         html += ` <span class="text-slate-500">……</span>`;
     }
 
-    html += ` <span class="text-slate-400">(${completedCount}/${total})</span>`;
+    html += ` <span class="text-slate-400">[ ${completedCount}/${total} ]</span>`;
     html += '</div>';
     return html;
 }
@@ -226,6 +235,48 @@ function showConfirmToast(message, onConfirm, onCancel) {
     }, 30000);
 }
 
+// 构造提醒Toast第2行显示文本
+// 有子任务：显示"清单名 | 任务名"（不含notes，避免与子任务重复）；默认清单仅显示任务名
+// 无子任务：显示 message 原样（含notes或任务名）
+function buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml) {
+    if (!subtaskHtml) {
+        // 无子任务：message 正常显示（可能含 notes 或任务名）
+        return message;
+    }
+    // 有子任务：构造"清单名 | 任务名"，不含 notes
+    const taskName = task ? (task.title || taskTitle) : taskTitle;
+    if (message.includes(' | ')) {
+        // 非默认清单：显示"清单名 | 任务名"
+        return message.split(' | ')[0] + ' | ' + taskName;
+    }
+    // 默认清单：仅显示任务名
+    return taskName;
+}
+
+// 构造提醒Toast第1行
+// 规则：若第2行(displayMessage)已包含任务名，则第1行只显示时间，避免重复；
+//       若第2行不含任务名（如显示notes），则第1行显示"时间 任务名"
+function buildReminderDisplayTitle(title, task, taskTitle, displayMessage) {
+    // 提取纯时间部分
+    const timeMatch = title.match(/^(\d{1,2}:\d{2})/);
+    const timeOnly = timeMatch ? timeMatch[1] : title;
+    const taskName = task ? (task.title || taskTitle) : taskTitle;
+
+    // 判断第2行是否已包含任务名
+    // 子任务模式：displayMessage 为 "任务名" 或 "清单名 | 任务名"，均含任务名
+    // 文本模式无notes：displayMessage 为 "任务名" 或 "清单名 | 任务名"，均含任务名
+    // 文本模式有notes：displayMessage 为 "notes" 或 "清单名 | notes"，不含任务名
+    const messageIncludesTaskName = displayMessage === taskName
+        || (taskName && displayMessage.endsWith(' | ' + taskName));
+
+    if (messageIncludesTaskName) {
+        // 第2行已含任务名，第1行只显示时间
+        return timeOnly;
+    }
+    // 第2行不含任务名，第1行显示"时间 任务名"
+    return taskName ? `${timeOnly} ${taskName}` : timeOnly;
+}
+
 // 任务提醒Toast - 带Focus/Done/Later/OK四个按钮，不自动消失
 function showReminderToast(title, message, taskId) {
     const container = document.getElementById('toast-container');
@@ -236,7 +287,14 @@ function showReminderToast(title, message, taskId) {
 
     // 查找任务以获取子任务信息
     const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
-    const subtaskHtml = task ? renderSubtaskInlineDisplay(task) : '';
+    // 子任务逐行展示（深色背景模式），与日程视图显示方式一致
+    const subtaskHtml = task ? renderSubtaskListDisplay(task, 'dark') : '';
+
+    // 第2行：根据子任务情况构造显示文本（需先计算，供第1行判断是否显示任务名）
+    const displayMessage = buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml);
+
+    // 第1行：若第2行已含任务名则只显示时间，否则显示"时间 任务名"
+    const displayTitle = buildReminderDisplayTitle(title, task, taskTitle, displayMessage);
 
     const toast = document.createElement('div');
     const theme = {
@@ -253,11 +311,9 @@ function showReminderToast(title, message, taskId) {
             </div>
             <div class="flex-1 relative z-10 flex flex-col justify-center">
                 <div class="${theme.color} text-xs font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
-                    ${title}
+                    ${displayTitle}
                 </div>
-                <div class="text-sm font-medium text-slate-300 leading-snug">
-                    ${message}
-                </div>
+                ${displayMessage ? `<div class="text-sm font-medium text-slate-300 leading-snug">${displayMessage}</div>` : ''}
                 ${subtaskHtml}
             </div>
         </div>
