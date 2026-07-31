@@ -1891,6 +1891,10 @@ function cancelPalettePreview() {
     // 长按预览状态下不响应 mouseleave（设置面板已隐藏，鼠标离开是预期行为）
     if (_palettePreviewLongPress) return;
     if (_palettePreviewSaved === null) return;
+    // 忽略 mousedown 后极短时间内的 mouseleave：按下时 applyPaletteToCssVars 会改变
+    // CSS 变量，在已设置背景图时触发毛玻璃（backdrop-filter）重排，可能产生瞬时
+    // mouseleave（鼠标并未真正移出按钮），此时不应取消单击，否则短按永远无法生效
+    if (Date.now() - _palettePreviewDownTime < 150) return;
     clearTimeout(_palettePreviewLongPressTimer);
     const saved = _palettePreviewSaved;
     _palettePreviewSaved = null;
