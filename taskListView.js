@@ -5,6 +5,7 @@ let _scheduleAutoScroll = true;
 let taskListCompletedCollapsed = true;
 let taskListCompletedShowAll = false;
 let _scheduleIntersectionObserver = null; // 当前日程视图的 IO，重渲染前 disconnect 防泄漏
+let _scheduleNavObserver = null; // 顶部导航栏月份指示器 IO（替代 scroll 监听，避免高频 reflow）
 let _scheduleGroupedTasks = null; // 日程视图按日期分组的缓存，供局部更新复用
 let _scheduleFilteredCache = null; // filterTasks 结果缓存，避免每次渲染全量扫描
 
@@ -517,6 +518,8 @@ function renderScheduleView(container) {
 
         // 滚动锚定：若被填充月份位于视口上方，填充后其高度增长会下推可见内容，
         // 导致滚动位置"跳动"。记录其后继月份位置，填充后补偿 scrollTop 使可见内容保持不动。
+        // 注意：这里只做一次“读”，写入 innerHTML 后的第二次“读+写”必须延后到下一帧，
+        // 否则在同一 JS 执行周期内“写完 DOM 立刻读几何属性”会触发强制同步布局（Layout Thrashing）。
         let needAnchor = false, anchorEl = null, anchorTopBefore = 0, selfHeightBefore = 0;
         if (scheduleScrollContainer) {
             const containerTop = scheduleScrollContainer.getBoundingClientRect().top;
@@ -532,15 +535,23 @@ function renderScheduleView(container) {
         contentEl.innerHTML = daysHtml || '<div class="text-center text-theme-muted py-8">本月暂无日程</div>';
         contentEl.dataset.populated = 'true';
 
-        // 视口上方月份填充后，按内容下移量补偿 scrollTop，消除跳动
+        // 视口上方月份填充后，按内容下移量补偿 scrollTop，消除跳动。
+        // 将“读取新几何属性 + 修正 scrollTop”放到 requestAnimationFrame 中执行，
+        // 与上面的 innerHTML 写入分离到不同帧，避免强制同步布局导致的卡顿。
         if (needAnchor && scheduleScrollContainer) {
-            let delta;
-            if (anchorEl) {
-                delta = anchorEl.getBoundingClientRect().top - anchorTopBefore;
-            } else {
-                delta = contentEl.getBoundingClientRect().height - selfHeightBefore;
-            }
-            if (delta) scheduleScrollContainer.scrollTop += delta;
+            const anchorRef = anchorEl;
+            const anchorTopRef = anchorTopBefore;
+            const selfHeightRef = selfHeightBefore;
+            const containerRef = scheduleScrollContainer;
+            requestAnimationFrame(() => {
+                let delta;
+                if (anchorRef) {
+                    delta = anchorRef.getBoundingClientRect().top - anchorTopRef;
+                } else {
+                    delta = contentEl.getBoundingClientRect().height - selfHeightRef;
+                }
+                if (delta) containerRef.scrollTop += delta;
+            });
         }
     };
     const _scheduleMonthEls = container.querySelectorAll('.schedule-month-content');
@@ -572,41 +583,53 @@ function renderScheduleView(container) {
         `;
     }
 
-    // 添加滚动监听，更新顶部导航栏显示当前可见月份
+    // 顶部导航栏月份指示：使用 IntersectionObserver 替代 scroll 监听。
+    // scroll 事件每秒可触发 60+ 次，原实现每次都遍历所有月份并调用 getBoundingClientRect()，
+    // 会强制同步布局（Layout Thrashing），在大量月份下导致明显卡顿。
+    // IO 在浏览器内部以非主线程方式计算可见性，性能极高。
     if (scheduleScrollContainer) {
         // 同步恢复滚动位置，消除刷新时从顶部（往期任务）跳到今天的跳动
         if (!_scheduleAutoScroll && savedScrollTop > 0) {
             scheduleScrollContainer.scrollTop = savedScrollTop;
         }
-        scheduleScrollContainer.addEventListener('scroll', function() {
-            const navMonth = document.getElementById('schedule-nav-month');
-            if (!navMonth) return;
-            const monthSections = scheduleScrollContainer.querySelectorAll('[data-schedule-month]');
-            if (monthSections.length === 0) return;
-            const containerRect = scheduleScrollContainer.getBoundingClientRect();
-            // 使用靠近顶部的阈值（与自动滚动到今天的偏移量一致），
-            // 避免1/3处检测到下一个月（如今天7月29日位于顶部时，1/3处已到8月）
-            const centerY = containerRect.top + 20;
-            let visibleMonth = null;
-            for (let i = monthSections.length - 1; i >= 0; i--) {
-                const rect = monthSections[i].getBoundingClientRect();
-                if (rect.top <= centerY) {
-                    visibleMonth = monthSections[i].getAttribute('data-schedule-month');
-                    break;
-                }
+        const navMonth = document.getElementById('schedule-nav-month');
+        const monthSections = scheduleScrollContainer.querySelectorAll('[data-schedule-month]');
+        if (navMonth && monthSections.length > 0 && 'IntersectionObserver' in window) {
+            // 断开上一次渲染的 nav observer，避免累积泄漏
+            if (_scheduleNavObserver) {
+                _scheduleNavObserver.disconnect();
+                _scheduleNavObserver = null;
             }
-            if (!visibleMonth) {
-                visibleMonth = monthSections[0].getAttribute('data-schedule-month');
-            }
-            if (visibleMonth) {
-                const [y, m] = visibleMonth.split('-');
+            // rootMargin 在容器顶部构造一条 20px 高的“探测线”，
+            // 与原 scroll 实现的 containerRect.top + 20 阈值等价：
+            // 只有跨越该探测线的月份才会触发回调，避免1/3处误判到下一个月。
+            // 上边距 0px：从视口顶部开始；下边距 -(容器高-20)px 等价于只保留顶部 20px 高的探测带。
+            const lineObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const monthLabel = entry.target.getAttribute('data-schedule-month');
+                        if (monthLabel) {
+                            const [y, m] = monthLabel.split('-');
+                            navMonth.textContent = `${y}年${parseInt(m)}月`;
+                        }
+                    }
+                });
+            }, {
+                root: scheduleScrollContainer,
+                rootMargin: `0px 0px -${Math.max((scheduleScrollContainer.clientHeight || 400) - 20, 0)}px 0px`,
+                threshold: 0
+            });
+            _scheduleNavObserver = lineObserver;
+            monthSections.forEach(sec => lineObserver.observe(sec));
+        } else if (navMonth && monthSections.length > 0) {
+            // 不支持 IO 时回退：直接显示第一个月份
+            const monthLabel = monthSections[0].getAttribute('data-schedule-month');
+            if (monthLabel) {
+                const [y, m] = monthLabel.split('-');
                 navMonth.textContent = `${y}年${parseInt(m)}月`;
             }
-        });
-        // 非自动滚动时立即触发一次（自动滚动场景由下方200ms处统一触发，避免时序冲突）
-        if (!_scheduleAutoScroll) {
-            setTimeout(() => scheduleScrollContainer.dispatchEvent(new Event('scroll')), 100);
         }
+        // 注：IO 在初始 observe 后会异步触发首次回调，无需像旧 scroll 监听那样手动 dispatch。
 
         // 视口附近（含已恢复的滚动位置）的月份立即填充，其余由 IntersectionObserver 懒加载
         const cRect = scheduleScrollContainer.getBoundingClientRect();
@@ -654,10 +677,8 @@ function renderScheduleView(container) {
                     scrollContainer.scrollTop += cardRect.top - containerRect.top - 20;
                 }
             }
-            // 滚动到今天后触发一次，确保导航栏显示今天的月份
-            if (scheduleScrollContainer) {
-                scheduleScrollContainer.dispatchEvent(new Event('scroll'));
-            }
+            // 滚动到今天后，IntersectionObserver 会异步捕捉到新可见月份并更新导航栏。
+            // 旧实现此处 dispatch scroll 事件是为了触发手动监听器，IO 化后已无需手动触发。
         }, 200);
     }
     // 非自动滚动时，滚动位置已在上方同步恢复，无需额外处理

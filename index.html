@@ -1228,6 +1228,17 @@
         .task-list-item {
             margin-bottom: 2px;
             transition: background-color 0.15s ease;
+            /* 大数据量下跳过屏幕外任务项的渲染工作，显著降低 2000+ 任务时的首次渲染开销 */
+            content-visibility: auto;
+            contain-intrinsic-size: 56px;
+        }
+        /* 日程视图：开启浏览器原生滚动锚定，由浏览器自动补偿懒加载填充月份后引起的滚动条跳动，
+           可替代部分 JS 的 scrollTop 修正逻辑，减少强制同步布局。 */
+        .schedule-container {
+            overflow-anchor: auto;
+        }
+        .schedule-month-content {
+            overflow-anchor: none;
         }
         .task-list-color-bar {
             position: absolute;

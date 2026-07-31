@@ -13,6 +13,22 @@ let _pomodoroStartPending = false;
 // 超时保护定时器：防止网络异常导致 _pomodoroStartPending 永久保持
 let _pomodoroStartPendingTimer = null;
 
+// 专注任务推荐列表缓存：避免每次打开面板都对全量 tasks（可能 5000+）执行三重 sort。
+// 仅在 tasks 变化（含多标签页同步）时由 invalidatePomodoroTaskCache() 清空。
+let _pomodoroTaskListCache = null;
+
+// 供 data.js 在 tasks 变化时调用，清空缓存以便下次渲染时重新排序。
+function invalidatePomodoroTaskCache() {
+    _pomodoroTaskListCache = null;
+}
+
+// 统计页面“按天聚合”缓存：renderPomodoroStats 入口一次性构建，
+// 供 renderStatsOverview/TrendChart/Timeline/BestTimeChart/Heatmap 共享，避免每个图表各自全表扫描。
+// 结构：Map<dayKey, { records: [], minutes: number }>
+let _statsDayMap = null;
+// 当前统计周期内的记录缓存（filterHistoryByPeriod 结果），供多个图表复用。
+let _statsPeriodRecords = null;
+
 if (_pomodoroChannel) {
     _pomodoroChannel.onmessage = function(event) {
         if (event.data && event.data.action === 'SYNC_NEEDED') {
@@ -669,12 +685,22 @@ function renderPomodoroPage() {
 
     // 渲染历史记录
     const historyContainer = document.getElementById('pomodoro-history');
-    
+
     if (pomodoroHistory.length === 0) {
         historyContainer.innerHTML = '<div class="text-center py-4 text-theme-muted">暂无历史记录</div>';
     } else {
+        // 性能优化：仅渲染最近 100 条历史记录。
+        // 原实现遍历全量 pomodoroHistory（一年后可能数千条）并一次性生成全部 DOM，
+        // 会导致切换到番茄页面时严重卡顿。统计数据（todayPomodoros 等）仍基于全量计算，
+        // 此处仅截断“历史列表”的渲染。
+        const recentHistory = [...pomodoroHistory].sort((a, b) => {
+            const aTime = a.startedAt ? new Date(a.startedAt) : new Date(a.date);
+            const bTime = b.startedAt ? new Date(b.startedAt) : new Date(b.date);
+            return bTime - aTime;
+        }).slice(0, 100);
+
         const grouped = {};
-        pomodoroHistory.forEach(record => {
+        recentHistory.forEach(record => {
             const recordDate = record.startedAt ? new Date(record.startedAt) : new Date(record.date);
             const d = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
             const key = d.getTime();
@@ -708,15 +734,15 @@ function renderPomodoroPage() {
                 const endStr = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
                 let taskDesc = record.taskName || '一般专注';
                 if (taskDesc.length > 30) taskDesc = taskDesc.substring(0, 30) + '...';
-                
+
                 const task = record.taskId ? tasks.find(t => t.id === record.taskId) : null;
                 const list = task ? lists.find(l => l.id === task.listId) : null;
                 const listColor = list ? list.color : '#9ca3af';
                 const listName = list ? list.name : '';
-                
+
                 const duration = record.duration || 25;
                 const recordIdx = pomodoroHistory.indexOf(record);
-                
+
                 return `
                 <div class="pomodoro-glass-item flex items-start gap-2 py-2.5 px-3 rounded-r-lg cursor-pointer group relative"
                      data-record-idx="${recordIdx}"
@@ -759,24 +785,37 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
 
     // 排序顺序：一般专注 → 已设置时间的未完成任务 → 未设置时间的未完成任务 → 已完成的任务
     // 组内保持原有时间排序（已设置时间组按时间升序；未设置时间组按 createdAt 升序；已完成组按 completedAt 倒序）
-    const getTaskTime = (t) => t.startTime ? new Date(t.startTime).getTime() : (t.dueDate ? new Date(t.dueDate).getTime() : 0);
-    const hasTime = (t) => !!(t.startTime || t.dueDate);
+    //
+    // 性能优化：缓存三重排序结果。原实现对 5000+ tasks 每次打开面板都做三次 filter+sort，
+    // 单次耗时数十至上百毫秒。这里只在缓存失效（tasks 变化或首次渲染）时执行排序，
+    // 并在未完成组累计已 >= 15 条时跳过 completedTasks 的排序（最终只需前 15 条）。
+    if (!_pomodoroTaskListCache) {
+        const getTaskTime = (t) => t.startTime ? new Date(t.startTime).getTime() : (t.dueDate ? new Date(t.dueDate).getTime() : 0);
+        const hasTime = (t) => !!(t.startTime || t.dueDate);
 
-    const timedIncompleteTasks = tasks.filter(t => !t.completed && hasTime(t))
-        .sort((a, b) => getTaskTime(a) - getTaskTime(b));
-    const untimedIncompleteTasks = tasks.filter(t => !t.completed && !hasTime(t))
-        .sort((a, b) => {
-            const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-            const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-            return aTime - bTime;
-        });
-    const completedTasks = tasks.filter(t => t.completed)
-        .sort((a, b) => {
-            const aTime = a.completedAt ? new Date(a.completedAt).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-            const bTime = b.completedAt ? new Date(b.completedAt).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-            return bTime - aTime;
-        });
-    const allTasks = [...timedIncompleteTasks, ...untimedIncompleteTasks, ...completedTasks].slice(0, 15);
+        const timedIncompleteTasks = tasks.filter(t => !t.completed && hasTime(t))
+            .sort((a, b) => getTaskTime(a) - getTaskTime(b));
+        const untimedIncompleteTasks = tasks.filter(t => !t.completed && !hasTime(t))
+            .sort((a, b) => {
+                const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                return aTime - bTime;
+            });
+
+        let allTasks = [...timedIncompleteTasks, ...untimedIncompleteTasks];
+        // 仅当未完成任务不足 15 条时，才需要补充已完成任务到列表末尾
+        if (allTasks.length < 15) {
+            const completedTasks = tasks.filter(t => t.completed)
+                .sort((a, b) => {
+                    const aTime = a.completedAt ? new Date(a.completedAt).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+                    const bTime = b.completedAt ? new Date(b.completedAt).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+                    return bTime - aTime;
+                });
+            allTasks = [...allTasks, ...completedTasks];
+        }
+        _pomodoroTaskListCache = allTasks.slice(0, 15);
+    }
+    const allTasks = _pomodoroTaskListCache;
 
     // "一般专注"选项 - 取消关联任务
     const isGeneralFocus = !currentTaskId;
@@ -2477,36 +2516,59 @@ function renderPomodoroStats() {
     document.getElementById('stats-trend-period').textContent = label;
     document.getElementById('stats-timeline-period').textContent = label;
     document.getElementById('stats-best-time-period').textContent = label;
-    
+
+    // 一次遍历，数据共享：原实现中 renderStatsOverview/TrendChart/Timeline/BestTimeChart/Heatmap
+    // 各自对 pomodoroHistory 做 filter/reduce/forEach，3000 条记录会被全表扫描 10 次以上。
+    // 这里在入口统一构建按天聚合的 Map，并缓存当前周期内的记录，下游图表直接读取。
+    _statsDayMap = new Map();
+    pomodoroHistory.forEach(p => {
+        const key = getDayKey(p.date);
+        let entry = _statsDayMap.get(key);
+        if (!entry) {
+            entry = { records: [], minutes: 0 };
+            _statsDayMap.set(key, entry);
+        }
+        entry.records.push(p);
+        entry.minutes += (p.duration || 25);
+    });
+    _statsPeriodRecords = filterHistoryByPeriod();
+
     renderStatsOverview();
     renderStatsTrendChart();
     renderStatsBestTimeChart();
     renderStatsTimeline();
     renderStatsHeatmap();
     renderStatsRecords();
+
+    // 渲染结束立即释放引用，避免长时间持有大数组导致内存占用偏高
+    _statsDayMap = null;
+    _statsPeriodRecords = null;
 }
 
 function renderStatsOverview() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayKey = today.getTime();
-    
+
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayKey = yesterday.getTime();
-    
-    const todayRecords = pomodoroHistory.filter(p => getDayKey(p.date) === todayKey);
-    const yesterdayRecords = pomodoroHistory.filter(p => getDayKey(p.date) === yesterdayKey);
-    
+
+    // 复用 renderPomodoroStats 入口构建的按天聚合 Map，避免再次 filter 全量 pomodoroHistory。
+    const todayEntry = _statsDayMap ? _statsDayMap.get(todayKey) : null;
+    const yesterdayEntry = _statsDayMap ? _statsDayMap.get(yesterdayKey) : null;
+    const todayRecords = todayEntry ? todayEntry.records : [];
+    const yesterdayRecords = yesterdayEntry ? yesterdayEntry.records : [];
+
     const todayCount = countUniqueSessions(todayRecords);
     const yesterdayCount = countUniqueSessions(yesterdayRecords);
-    const todayMinutes = todayRecords.reduce((s, p) => s + (p.duration || 25), 0);
-    const yesterdayMinutes = yesterdayRecords.reduce((s, p) => s + (p.duration || 25), 0);
+    const todayMinutes = todayEntry ? todayEntry.minutes : 0;
+    const yesterdayMinutes = yesterdayEntry ? yesterdayEntry.minutes : 0;
 
-    const periodRecords = filterHistoryByPeriod();
+    const periodRecords = _statsPeriodRecords || filterHistoryByPeriod();
     const periodCount = countUniqueSessions(periodRecords);
     const periodMinutes = periodRecords.reduce((s, p) => s + (p.duration || 25), 0);
-    
+
     document.getElementById('stats-today-count').textContent = todayCount;
     document.getElementById('stats-total-count').textContent = periodCount;
     document.getElementById('stats-today-time').textContent = formatMinutes(todayMinutes);
@@ -2582,11 +2644,25 @@ function renderStatsTrendChart() {
         if (period === 'year') {
             const month = d.getMonth();
             const year = d.getFullYear();
+            // 年视图按月聚合：仍需遍历一次聚合 Map（Map 已按天分组，规模远小于全量 history）。
+            if (_statsDayMap) {
+                let sum = 0;
+                _statsDayMap.forEach((entry, dayKey) => {
+                    const pd = new Date(dayKey);
+                    if (pd.getFullYear() === year && pd.getMonth() === month) sum += entry.minutes;
+                });
+                return sum;
+            }
             return pomodoroHistory
                 .filter(p => { const pd = new Date(p.date); return pd.getFullYear() === year && pd.getMonth() === month; })
                 .reduce((s, p) => s + (p.duration || 25), 0);
         }
         const key = getDayKey(d);
+        // 复用按天聚合 Map，O(1) 命中，避免对每个日期都 filter 全量 pomodoroHistory。
+        if (_statsDayMap) {
+            const entry = _statsDayMap.get(key);
+            return entry ? entry.minutes : 0;
+        }
         return pomodoroHistory
             .filter(p => getDayKey(p.date) === key)
             .reduce((s, p) => s + (p.duration || 25), 0);
@@ -2623,7 +2699,7 @@ function renderStatsTrendChart() {
 
 function renderStatsBestTimeChart() {
     const container = document.getElementById('stats-best-time-chart');
-    const periodRecords = filterHistoryByPeriod();
+    const periodRecords = _statsPeriodRecords || filterHistoryByPeriod();
     // 07:00~23:00，每2小时一个区间，共8个柱
     const hourSlots = [7, 9, 11, 13, 15, 17, 19, 21];
 
@@ -2721,13 +2797,30 @@ function renderStatsTimeline() {
         if (period === 'year') {
             const month = date.getMonth();
             const year = date.getFullYear();
-            dayRecords = pomodoroHistory.filter(p => {
-                const pd = new Date(p.date);
-                return pd.getFullYear() === year && pd.getMonth() === month;
-            });
+            // 年视图按月聚合：复用按天 Map（规模远小于全量 history），避免逐月 filter。
+            if (_statsDayMap) {
+                dayRecords = [];
+                _statsDayMap.forEach((entry, dayKey) => {
+                    const pd = new Date(dayKey);
+                    if (pd.getFullYear() === year && pd.getMonth() === month) {
+                        dayRecords = dayRecords.concat(entry.records);
+                    }
+                });
+            } else {
+                dayRecords = pomodoroHistory.filter(p => {
+                    const pd = new Date(p.date);
+                    return pd.getFullYear() === year && pd.getMonth() === month;
+                });
+            }
         } else {
             const key = getDayKey(date);
-            dayRecords = pomodoroHistory.filter(p => getDayKey(p.date) === key);
+            // 复用按天聚合 Map，O(1) 命中，避免对每个日期都 filter 全量 pomodoroHistory。
+            const entry = _statsDayMap ? _statsDayMap.get(key) : null;
+            if (entry) {
+                dayRecords = entry.records;
+            } else {
+                dayRecords = pomodoroHistory.filter(p => getDayKey(p.date) === key);
+            }
         }
 
         html += '<div class="flex items-center mb-1">';
@@ -2763,13 +2856,23 @@ function renderStatsHeatmap() {
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
+    // 复用 renderPomodoroStats 入口构建的按天聚合 Map，避免再次 forEach 全量 pomodoroHistory。
+    // _statsDayMap 的 key 是 dayKey（时间戳），这里需要 ISO 日期字符串作为 heatmap 单元格 key。
     const dayMap = {};
-    pomodoroHistory.forEach(p => {
-        const d = new Date(p.date);
-        d.setHours(0, 0, 0, 0);
-        const key = d.toISOString().slice(0, 10);
-        dayMap[key] = (dayMap[key] || 0) + (p.duration || 25);
-    });
+    if (_statsDayMap) {
+        _statsDayMap.forEach((entry, dayKey) => {
+            const d = new Date(dayKey);
+            const key = d.toISOString().slice(0, 10);
+            dayMap[key] = (dayMap[key] || 0) + entry.minutes;
+        });
+    } else {
+        pomodoroHistory.forEach(p => {
+            const d = new Date(p.date);
+            d.setHours(0, 0, 0, 0);
+            const key = d.toISOString().slice(0, 10);
+            dayMap[key] = (dayMap[key] || 0) + (p.duration || 25);
+        });
+    }
 
     // 深色模式使用更暗的空格 + 更亮的绿色，浅色模式保持原配色
     function heatColor(mins) {
