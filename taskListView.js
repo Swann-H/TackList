@@ -4,6 +4,9 @@ let scheduleMonthOffset = 0;
 let _scheduleAutoScroll = true;
 let taskListCompletedCollapsed = true;
 let taskListCompletedShowAll = false;
+let _scheduleIntersectionObserver = null; // 当前日程视图的 IO，重渲染前 disconnect 防泄漏
+let _scheduleGroupedTasks = null; // 日程视图按日期分组的缓存，供局部更新复用
+let _scheduleFilteredCache = null; // filterTasks 结果缓存，避免每次渲染全量扫描
 
 function getTaskListGroup(task) {
     const now = new Date();
@@ -269,24 +272,19 @@ function showCompletedTasksPage() {
     renderView();
 }
 
-// 构建单个月份的日卡片 HTML（从 renderScheduleView 抽出，供懒加载按需调用）
-function buildScheduleMonthDaysHtml(year, month, groupedTasks) {
+// 构建单个日期卡片 HTML（抽出供懒加载与勾选局部更新复用）
+function buildScheduleDayCardHtml(date, dayTasks) {
     const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
     const today = new Date();
-    let monthHtml = '';
+    const isToday = date.toDateString() === today.toDateString();
+    const day = date.getDate();
+    const dayOfWeek = weekDays[date.getDay()];
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const tasks = dayTasks || [];
 
-    for (let day = 1; day <= daysInMonth; day++) {
-        const date = new Date(year, month, day);
-        const dateKey = date.toDateString();
-        const dayTasks = groupedTasks[dateKey] || [];
-        const isToday = date.toDateString() === today.toDateString();
-
-        if (dayTasks.length > 0 || isToday) {
-            const dayOfWeek = weekDays[date.getDay()];
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-
-            monthHtml += `
+    return `
                     <div class="bg-theme-secondary rounded-xl shadow-theme p-4 ${isToday ? 'ring-2 ring-blue-500' : ''} schedule-day-drop" data-drop-date="${dateStr}" ondragover="handleScheduleDragOver(event)" ondragleave="handleScheduleDragLeave(event)" ondrop="handleScheduleDrop(event)">
                         <div class="flex items-center gap-4 mb-4">
                             <div class="text-center min-w-[60px]">
@@ -298,7 +296,7 @@ function buildScheduleMonthDaysHtml(year, month, groupedTasks) {
                             <div class="flex-1">
                                 <div class="relative pl-6">
                                     <div class="absolute left-0 top-0 bottom-0 w-0.5 bg-theme"></div>
-                                    ${dayTasks.map((task, taskIndex) => {
+                                    ${tasks.map((task, taskIndex) => {
                                         const startTime = new Date(task.startTime);
                                         const startHour = startTime.getHours().toString().padStart(2, '0');
                                         const startMin = startTime.getMinutes().toString().padStart(2, '0');
@@ -339,30 +337,91 @@ function buildScheduleMonthDaysHtml(year, month, groupedTasks) {
                         </div>
                     </div>
                 `;
+}
+
+// 构建单个月份的日卡片 HTML（供懒加载按需调用）
+function buildScheduleMonthDaysHtml(year, month, groupedTasks) {
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    let monthHtml = '';
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month, day);
+        const dateKey = date.toDateString();
+        const dayTasks = groupedTasks[dateKey] || [];
+        const isToday = date.toDateString() === today.toDateString();
+        if (dayTasks.length > 0 || isToday) {
+            monthHtml += buildScheduleDayCardHtml(date, dayTasks);
         }
     }
     return monthHtml;
 }
 
-function renderScheduleView(container) {
-    const filteredTasks = filterTasks(tasks).filter(t => t.startTime);
+// 局部刷新：重渲染指定日期的日卡片（仅当该月已懒加载填充时）
+function refreshScheduleDayCard(dateKey) {
+    if (!_scheduleGroupedTasks) return;
+    const dayTasks = _scheduleGroupedTasks[dateKey];
+    const date = new Date(dateKey);
+    if (isNaN(date.getTime())) return;
+    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const el = document.querySelector(`.schedule-day-drop[data-drop-date="${dateStr}"]`);
+    if (!el) return; // 所在月份尚未懒加载填充，无需更新
+    el.outerHTML = buildScheduleDayCardHtml(date, dayTasks || []);
+}
 
-    // 按日期和时间排序任务
+// 勾选任务后局部更新：重排受影响日期分组并重渲染其日卡片，避免全量 renderView
+function refreshScheduleDayCardsForTask(taskId) {
+    if (!_scheduleGroupedTasks) return false; // 日程视图尚未渲染，交由调用方全量渲染
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || !task.startTime) return true; // 无开始时间任务不在日程视图，无需更新
+    const keys = new Set();
+    const startKey = new Date(task.startTime).toDateString();
+    if (_scheduleGroupedTasks[startKey]) keys.add(startKey);
+    if (task.endTime) {
+        const endKey = new Date(task.endTime).toDateString();
+        if (_scheduleGroupedTasks[endKey]) keys.add(endKey);
+    }
+    keys.forEach(k => {
+        _scheduleGroupedTasks[k] = sortTasksByCompletion(_scheduleGroupedTasks[k]);
+        refreshScheduleDayCard(k);
+    });
+    return true; // 已处理：任务不在可见分组时也无需全量渲染
+}
+
+
+// 缓存 filter+排序+分组 的整条流水线结果，按筛选状态 + 当天日期签名复用。
+// 勾选任务（仅 completed 变化）不会失效，因任务对象引用共享、completed 已实时更新；
+// 结构性变更（增删/改期/服务端刷新）由 invalidateScheduleFilterCache 主动失效。
+function invalidateScheduleFilterCache() {
+    _scheduleFilteredCache = null;
+}
+
+function getScheduleGroupedTasks() {
+    const tagKey = (currentTagIds || []).join(',');
+    const todayKey = new Date().toDateString();
+    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey;
+    if (_scheduleFilteredCache && _scheduleFilteredCache.sig === sig) {
+        return _scheduleFilteredCache.grouped;
+    }
+
+    const filteredTasks = filterTasks(tasks).filter(t => t.startTime);
+    // startTime 为 ISO 字符串，直接字典序比较，避免反复 new Date
     const sortedTasks = [...filteredTasks].sort((a, b) => {
-        return new Date(a.startTime) - new Date(b.startTime);
+        const sa = a.startTime || '';
+        const sb = b.startTime || '';
+        if (sa < sb) return -1;
+        if (sa > sb) return 1;
+        return 0;
     });
 
-    // 按日期分组任务
     const groupedTasks = {};
     sortedTasks.forEach(task => {
         const date = new Date(task.startTime);
         const dateKey = date.toDateString();
-        if (!groupedTasks[dateKey]) {
-            groupedTasks[dateKey] = [];
-        }
+        if (!groupedTasks[dateKey]) groupedTasks[dateKey] = [];
         groupedTasks[dateKey].push(task);
 
-        // 跨天任务：如果开始日期已过但截止日期未过，也添加到截止日期的分组
+        // 跨天任务：开始日期已过但截止日期未过 → 也加入截止日期分组
         if (task.endTime) {
             const now = new Date();
             const startDate = new Date(task.startTime);
@@ -372,14 +431,10 @@ function renderScheduleView(container) {
             const endDayStart = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
             const endDayTomorrow = new Date(endDayStart);
             endDayTomorrow.setDate(endDayTomorrow.getDate() + 1);
-
-            // 开始日期已过，截止日期未过 → 显示在截止日期列表
             if (startDayStart < todayStart && now < endDayTomorrow) {
                 const endDateKey = endDayStart.toDateString();
                 if (endDateKey !== dateKey) {
-                    if (!groupedTasks[endDateKey]) {
-                        groupedTasks[endDateKey] = [];
-                    }
+                    if (!groupedTasks[endDateKey]) groupedTasks[endDateKey] = [];
                     groupedTasks[endDateKey].push(task);
                 }
             }
@@ -389,6 +444,15 @@ function renderScheduleView(container) {
     Object.keys(groupedTasks).forEach(dateKey => {
         groupedTasks[dateKey] = sortTasksByCompletion(groupedTasks[dateKey]);
     });
+
+    _scheduleFilteredCache = { sig: sig, grouped: groupedTasks };
+    return groupedTasks;
+}
+
+function renderScheduleView(container) {
+    // 数据准备（filter+排序+分组）走缓存，避免每次全量扫描 5518 条
+    const groupedTasks = getScheduleGroupedTasks();
+    _scheduleGroupedTasks = groupedTasks; // 供勾选任务的局部更新复用
 
     // 计算月份范围（当前月 - 3个月 到 当前月 + 9个月，共约1年）
     const currentDate = new Date();
@@ -555,6 +619,11 @@ function renderScheduleView(container) {
             }
         });
         if ('IntersectionObserver' in window) {
+            // 断开上一次渲染的 observer，避免频繁重渲染累积泄漏
+            if (_scheduleIntersectionObserver) {
+                _scheduleIntersectionObserver.disconnect();
+                _scheduleIntersectionObserver = null;
+            }
             const scheduleIO = new IntersectionObserver((entries) => {
                 entries.forEach(entry => {
                     if (entry.isIntersecting) {
@@ -563,6 +632,7 @@ function renderScheduleView(container) {
                     }
                 });
             }, { root: scheduleScrollContainer, rootMargin: '600px 0px 600px 0px' });
+            _scheduleIntersectionObserver = scheduleIO;
             _scheduleMonthEls.forEach(el => {
                 if (el.dataset.populated !== 'true') scheduleIO.observe(el);
             });

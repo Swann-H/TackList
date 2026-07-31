@@ -1741,6 +1741,7 @@ function toggleTaskDetailComplete() {
     const wasCompleted = task.completed;
     task.completed = !task.completed;
     task.completedAt = task.completed ? new Date().toISOString() : null;
+    let structuralChange = false;
     if (task.completed && task.repeat && task.repeat.type) {
         const nextTask = createNextRepeatTask(task);
         if (nextTask) {
@@ -1748,12 +1749,19 @@ function toggleTaskDetailComplete() {
         }
         // 新增了重复任务，需全量保存
         saveData();
+        structuralChange = true;
     } else {
         // 仅本任务状态变更，增量保存
         saveTaskPatch(currentDetailTaskId);
     }
     updateDetailCompleteButton(task.completed);
-    renderView();
+    // 日程视图下非结构性变更走局部更新
+    if (structuralChange
+        || currentView !== 'schedule'
+        || typeof refreshScheduleDayCardsForTask !== 'function'
+        || !refreshScheduleDayCardsForTask(currentDetailTaskId)) {
+        renderView();
+    }
 
     // 触发彩蛋效果（任务完成时）
     if (task.completed && !wasCompleted) {
@@ -3491,6 +3499,7 @@ function toggleTaskComplete(taskId) {
         const wasCompleted = task.completed;
         task.completed = !task.completed;
         task.completedAt = task.completed ? new Date().toISOString() : null;
+        let structuralChange = false;
         if (task.completed && task.repeat && task.repeat.type) {
             const nextTask = createNextRepeatTask(task);
             if (nextTask) {
@@ -3498,13 +3507,20 @@ function toggleTaskComplete(taskId) {
             }
             // 新增了重复任务，需全量保存
             saveData();
+            structuralChange = true;
         } else {
             // 仅本任务状态变更，增量保存
             saveTaskPatch(taskId);
         }
         renderLists();
         if (typeof renderTags === 'function') renderTags();
-        renderView();
+        // 日程视图下非结构性变更走局部更新，避免全量重渲染（保持滚动位置、消除跳动）
+        if (structuralChange
+            || currentView !== 'schedule'
+            || typeof refreshScheduleDayCardsForTask !== 'function'
+            || !refreshScheduleDayCardsForTask(taskId)) {
+            renderView();
+        }
 
         // 触发彩蛋效果（任务完成时）
         if (task.completed && !wasCompleted) {

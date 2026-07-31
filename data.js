@@ -119,6 +119,7 @@ async function refreshDataFromServer() {
         // 数据实际变化后才重建派生缓存
         if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
         if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
+        if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
         renderLists();
         renderView();
         updateViewButtons();
@@ -393,6 +394,8 @@ function updateHolidayCountdown() {
 }
 
 function saveData() {
+    // 结构性变更（增删/改期/设置等）经此保存，令日程视图流水线缓存失效
+    if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     // 节流：500ms 内只发送一次，避免高频写入冲突
     _saveInFlight = true; // 标记保存正在进行（含节流等待期），防止 refreshDataFromServer 覆盖本地数据
     if (_saveDataTimerId) {
@@ -453,6 +456,7 @@ function _doSaveData() {
 
 // 立即保存（不走节流），用于导入等一次性操作
 function saveDataImmediate() {
+    if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     _saveInFlight = true; // 标记保存正在进行，防止 refreshDataFromServer 覆盖本地数据
     if (_saveDataTimerId) {
         clearTimeout(_saveDataTimerId);
@@ -512,6 +516,7 @@ function _mergeServerData(serverData) {
     quadrantOrder = serverData.quadrantOrder || quadrantOrder;
     pomodoroHistory = deduplicatePomodoroHistory(serverData.pomodoroHistory || pomodoroHistory);
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
+    if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
 }
 
 function importData(file) {
@@ -895,6 +900,7 @@ async function loadData() {
     _initialLoadDone = true;
     // 数据加载完成后重建专注时长缓存与搜索索引（覆盖上方所有恢复分支）
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
+    if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
 }
 
 // 主题系统

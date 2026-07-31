@@ -798,21 +798,25 @@ function expandTagCapsules(el, taskId) {
 function sortTasksByCompletion(taskList) {
     const incomplete = taskList.filter(t => !t.completed);
     const completed = taskList.filter(t => t.completed);
-    // 未完成：按日期升序（最早在前），无日期的放最后
+    // 未完成：按日期升序（最早在前），无日期的放最后（ISO 字符串字典序比较，避免 new Date）
     incomplete.sort((a, b) => {
         if (!a.startTime && !b.startTime) return 0;
         if (!a.startTime) return 1;
         if (!b.startTime) return -1;
-        return new Date(a.startTime) - new Date(b.startTime);
+        if (a.startTime < b.startTime) return -1;
+        if (a.startTime > b.startTime) return 1;
+        return 0;
     });
     // 已完成：按完成时间降序（最近完成在前），无完成时间的按 createdAt 降序
     completed.sort((a, b) => {
-        const aTime = a.completedAt || a.createdAt;
-        const bTime = b.completedAt || b.createdAt;
+        const aTime = a.completedAt || a.createdAt || '';
+        const bTime = b.completedAt || b.createdAt || '';
         if (!aTime && !bTime) return 0;
         if (!aTime) return 1;
         if (!bTime) return -1;
-        return new Date(bTime) - new Date(aTime);
+        if (bTime < aTime) return -1;
+        if (bTime > aTime) return 1;
+        return 0;
     });
     return [...incomplete, ...completed];
 }
