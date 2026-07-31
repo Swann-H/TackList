@@ -2309,21 +2309,21 @@
                                 <!-- 内置配色（适配深色/浅色模式） -->
                                 <p class="text-xs text-theme-muted mb-1">内置配色</p>
                                 <div class="grid grid-cols-3 gap-2 mb-3">
-                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-blue"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">蓝色</div>
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-green"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">绿色</div>
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:rose')" onmouseleave="cancelPalettePreview()" data-palette-key="builtin:rose" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:rose')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:rose" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-rose"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">玫红</div>
@@ -2353,21 +2353,21 @@
                                     </button>
                                 </div>
                                 <div id="palette-preview-container" class="grid grid-cols-3 gap-2 hidden">
-                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" data-palette-key="vibrant" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="vibrant" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="vibrant"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">鲜艳</div>
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('vibrant')" data-palette-key="vibrant" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" data-palette-key="muted" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="muted" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="muted"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">柔和</div>
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" data-palette-key="dark" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="dark" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="dark"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">深色</div>
