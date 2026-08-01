@@ -289,49 +289,84 @@ def _do_pomodoro_complete(split_info=None):
         now_str = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         original_started = pomodoro_state.get('originalStartedAt')
 
-        # 处理拆分记录：专注过程中任务被完成后切换了新任务
-        # 修正：服务器端存储的 completedTaskDuringFocus 总是带有 completedElapsedSeconds（数值），
-        # 但如果用户未切换到新任务（currentTaskId 为 None 或仍为已完成的任务），
-        # 则不应拆分，整个时长归已完成任务。
-        if split_info and split_info.get('completedElapsedSeconds') is not None:
+        # 处理多任务拆分记录
+        if split_info and split_info.get('completedTasks'):
+            completed_tasks = split_info['completedTasks']
+            prev_started_at = original_started
+            for task in completed_tasks:
+                ended_at = original_started
+                if original_started and task.get('elapsedSeconds'):
+                    try:
+                        orig_dt = datetime.fromisoformat(original_started.replace('Z', '+00:00'))
+                        ended_at = (orig_dt + timedelta(seconds=task['elapsedSeconds'])).isoformat().replace('+00:00', 'Z')
+                    except Exception:
+                        ended_at = original_started
+                entry = {
+                    "date": now_str,
+                    "startedAt": prev_started_at,
+                    "endedAt": ended_at,
+                    "duration": max(1, round(task.get('durationSeconds', 0) / 60)),
+                    "taskName": task.get('taskName', '一般专注'),
+                    "taskId": task.get('taskId')
+                }
+                _save_pomodoro_history_entry(entry)
+                prev_started_at = ended_at
+            last_task = completed_tasks[-1]
+            remaining_seconds = total_elapsed - last_task.get('elapsedSeconds', 0)
+            if remaining_seconds > 0:
+                entry = {
+                    "date": now_str,
+                    "startedAt": prev_started_at,
+                    "endedAt": now_str,
+                    "duration": max(1, round(remaining_seconds / 60)),
+                    "taskName": task_name or '一般专注',
+                    "taskId": current_task_id
+                }
+                _save_pomodoro_history_entry(entry)
+        elif split_info and split_info.get('completedElapsedSeconds') is not None:
             if current_task_id is None or current_task_id == split_info.get('completedTaskId'):
-                # 未切换新任务：不拆分，整个时长归已完成任务
                 split_info = dict(split_info)
                 split_info['completedElapsedSeconds'] = None
 
-        if split_info and split_info.get('completedElapsedSeconds') is not None:
-            completed_seconds = split_info['completedElapsedSeconds']
-            remaining_seconds = total_elapsed - completed_seconds
-            # 计算新任务B的开始时间（= 专注开始时间 + 已完成任务时长 = 切换时刻）
-            b_started_at = original_started
-            if original_started:
-                try:
-                    orig_dt = datetime.fromisoformat(original_started.replace('Z', '+00:00'))
-                    b_started_at = (orig_dt + timedelta(seconds=completed_seconds)).isoformat().replace('+00:00', 'Z')
-                except Exception:
-                    b_started_at = original_started
-            # 第一条记录：已完成任务的时长（endedAt为切换到新任务B的时刻）
-            entry1 = {
-                "date": now_str,
-                "startedAt": original_started,
-                "endedAt": b_started_at,
-                "duration": max(1, round(completed_seconds / 60)),
-                "taskName": split_info.get('completedTaskName', '一般专注'),
-                "taskId": split_info.get('completedTaskId')
-            }
-            # 第二条记录：新任务的时长（startedAt为切换时刻）
-            entry2 = {
-                "date": now_str,
-                "startedAt": b_started_at,
-                "endedAt": now_str,
-                "duration": max(1, round(remaining_seconds / 60)),
-                "taskName": task_name or '一般专注',
-                "taskId": current_task_id
-            }
-            _save_pomodoro_history_entry(entry1)
-            _save_pomodoro_history_entry(entry2)
+            if split_info.get('completedElapsedSeconds') is not None:
+                completed_seconds = split_info['completedElapsedSeconds']
+                remaining_seconds = total_elapsed - completed_seconds
+                b_started_at = original_started
+                if original_started:
+                    try:
+                        orig_dt = datetime.fromisoformat(original_started.replace('Z', '+00:00'))
+                        b_started_at = (orig_dt + timedelta(seconds=completed_seconds)).isoformat().replace('+00:00', 'Z')
+                    except Exception:
+                        b_started_at = original_started
+                entry1 = {
+                    "date": now_str,
+                    "startedAt": original_started,
+                    "endedAt": b_started_at,
+                    "duration": max(1, round(completed_seconds / 60)),
+                    "taskName": split_info.get('completedTaskName', '一般专注'),
+                    "taskId": split_info.get('completedTaskId')
+                }
+                entry2 = {
+                    "date": now_str,
+                    "startedAt": b_started_at,
+                    "endedAt": now_str,
+                    "duration": max(1, round(remaining_seconds / 60)),
+                    "taskName": task_name or '一般专注',
+                    "taskId": current_task_id
+                }
+                _save_pomodoro_history_entry(entry1)
+                _save_pomodoro_history_entry(entry2)
+            elif split_info.get('completedTaskId'):
+                history_entry = {
+                    "date": now_str,
+                    "startedAt": original_started,
+                    "endedAt": now_str,
+                    "duration": round(total_elapsed / 60),
+                    "taskName": split_info.get('completedTaskName', task_name or '一般专注'),
+                    "taskId": split_info.get('completedTaskId')
+                }
+                _save_pomodoro_history_entry(history_entry)
         elif split_info and split_info.get('completedTaskId'):
-            # 未切换任务：整个时长归已完成任务
             history_entry = {
                 "date": now_str,
                 "startedAt": original_started,
@@ -816,7 +851,7 @@ class TodoHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, PUT, PATCH, POST, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
 
     def send_json_response(self, data, status=200):
@@ -1053,10 +1088,21 @@ class TodoHandler(BaseHTTPRequestHandler):
 
                 global notified_task_ids
                 with notified_task_ids_lock:
+                    # 仅保留仍存在的任务ID，且对 startTime 变化的任务清除通知标记，
+                    # 使其在新的时间到达时能重新触发提醒
+                    old_data = load_data_from_file()
+                    old_start_times = {}
+                    for t in old_data.get('tasks', []):
+                        if t.get('id'):
+                            old_start_times[t['id']] = t.get('startTime', '')
                     task_ids = set()
                     for task in data.get('tasks', []):
                         if task.get('id'):
                             task_ids.add(task['id'])
+                            # 任务时间变化时，清除通知标记，允许在新时间重新提醒
+                            new_start = task.get('startTime', '')
+                            if new_start != old_start_times.get(task['id']):
+                                notified_task_ids.discard(task['id'])
                     notified_task_ids = notified_task_ids & task_ids
 
                 self.send_json_response({"status": "ok", "version": _data_version})
@@ -1065,6 +1111,84 @@ class TodoHandler(BaseHTTPRequestHandler):
             self.send_error_json("Not found", 404)
         except Exception as e:
             print("PUT error: %s" % str(e))
+            sys.stdout.flush()
+            try:
+                self.send_error(500, str(e))
+            except Exception:
+                pass
+
+    def do_PATCH(self):
+        # 增量保存单个任务：避免每次勾选/编辑都序列化并传输全量数据（5510 任务 + 416 历史）
+        global _data_version, notified_task_ids
+        try:
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+
+            if path.startswith('/api/tasks/'):
+                task_id = urllib.parse.unquote(path[len('/api/tasks/'):])
+                if not task_id:
+                    self.send_error_json("Missing task id", 400)
+                    return
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length > 5 * 1024 * 1024:
+                    self.send_error_json("Task data too large", 413)
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    task = json.loads(body.decode('utf-8'))
+                except Exception:
+                    self.send_error_json("Invalid JSON", 400)
+                    return
+
+                # 原子地读取-修改-写回单个任务（与 PUT 串行化在同一文件锁上）
+                lock_fd = acquire_file_lock()
+                try:
+                    if os.path.exists(DATA_FILE):
+                        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                    else:
+                        data = json.loads(json.dumps(DEFAULT_DATA))
+                    for key in DEFAULT_DATA:
+                        if key not in data:
+                            data[key] = DEFAULT_DATA[key]
+                    if not data.get('taskLists'):
+                        data['taskLists'] = DEFAULT_DATA['taskLists']
+                    if not data.get('settings'):
+                        data['settings'] = dict(DEFAULT_DATA['settings'])
+                    elif 'defaultListId' not in data['settings']:
+                        data['settings']['defaultListId'] = 'default'
+
+                    tasks_list = data.get('tasks', [])
+                    found = False
+                    old_start = ''
+                    for i in range(len(tasks_list)):
+                        if tasks_list[i].get('id') == task_id:
+                            old_start = tasks_list[i].get('startTime', '')
+                            tasks_list[i] = task
+                            found = True
+                            break
+                    if not found:
+                        tasks_list.append(task)
+                    data['tasks'] = tasks_list
+
+                    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                finally:
+                    release_file_lock(lock_fd)
+
+                # 任务时间变化时清除通知标记，允许在新时间重新提醒
+                new_start = task.get('startTime', '')
+                with notified_task_ids_lock:
+                    if new_start != old_start:
+                        notified_task_ids.discard(task_id)
+
+                _data_version += 1
+                self.send_json_response({"status": "ok", "version": _data_version})
+                return
+
+            self.send_error_json("Not found", 404)
+        except Exception as e:
+            print("PATCH error: %s" % str(e))
             sys.stdout.flush()
             try:
                 self.send_error(500, str(e))
@@ -1442,11 +1566,43 @@ class TodoHandler(BaseHTTPRequestHandler):
                         if duration_minutes > 0:
                             now_str = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                             original_started = pomodoro_state.get('originalStartedAt')
-                            # 处理拆分记录
-                            if split_info and split_info.get('completedElapsedSeconds') is not None:
+                            # 处理多任务拆分记录
+                            if split_info and split_info.get('completedTasks'):
+                                completed_tasks = split_info['completedTasks']
+                                prev_started_at = original_started
+                                for task in completed_tasks:
+                                    ended_at = original_started
+                                    if original_started and task.get('elapsedSeconds'):
+                                        try:
+                                            orig_dt = datetime.fromisoformat(original_started.replace('Z', '+00:00'))
+                                            ended_at = (orig_dt + timedelta(seconds=task['elapsedSeconds'])).isoformat().replace('+00:00', 'Z')
+                                        except Exception:
+                                            ended_at = original_started
+                                    entry = {
+                                        "date": now_str,
+                                        "startedAt": prev_started_at,
+                                        "endedAt": ended_at,
+                                        "duration": max(1, round(task.get('durationSeconds', 0) / 60)),
+                                        "taskName": task.get('taskName', '一般专注'),
+                                        "taskId": task.get('taskId')
+                                    }
+                                    _save_pomodoro_history_entry(entry)
+                                    prev_started_at = ended_at
+                                last_task = completed_tasks[-1]
+                                remaining_seconds = total_elapsed - last_task.get('elapsedSeconds', 0)
+                                if remaining_seconds > 0:
+                                    entry = {
+                                        "date": now_str,
+                                        "startedAt": prev_started_at,
+                                        "endedAt": now_str,
+                                        "duration": max(1, round(remaining_seconds / 60)),
+                                        "taskName": task_name or '一般专注',
+                                        "taskId": current_task_id
+                                    }
+                                    _save_pomodoro_history_entry(entry)
+                            elif split_info and split_info.get('completedElapsedSeconds') is not None:
                                 completed_seconds = split_info['completedElapsedSeconds']
                                 remaining_seconds = total_elapsed - completed_seconds
-                                # 计算新任务B的开始时间（= 专注开始时间 + 已完成任务时长 = 切换时刻）
                                 b_started_at = original_started
                                 if original_started:
                                     try:

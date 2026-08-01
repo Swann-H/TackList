@@ -9,6 +9,7 @@ data.json
 
 # Python
 __pycache__/
+inject_test_data.py
 
 # Android
 android/

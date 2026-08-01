@@ -362,41 +362,7 @@ function shutdownServer() {
 function restartServer() {
     const btn = document.getElementById('restart-btn');
     if (btn.dataset.confirming === 'true') {
-        // 第二次点击：先保存未保存的设置，再执行重启
-        const bindAddress = document.getElementById('settings-bind-address').value;
-        const port = parseInt(document.getElementById('settings-port').value) || 14438;
-        const networkChanged = (bindAddress !== _originalBindAddress || port !== _originalPort);
-
-        if (networkChanged) {
-            // 网络配置有变更，自动保存设置后再重启
-            saveSettings(true); // silent=true，不弹Toast
-        }
-
-        fetch('/api/restart', { method: 'POST' }).then(() => {
-            showToast('服务正在重启，请稍候...', 'info', 10000);
-            setTimeout(() => {
-                let retries = 0;
-                const tryReconnect = () => {
-                    fetch('/api/data').then(r => {
-                        if (r.ok) {
-                            location.reload();
-                        } else {
-                            throw new Error('not ready');
-                        }
-                    }).catch(() => {
-                        retries++;
-                        if (retries < 20) {
-                            setTimeout(tryReconnect, 1000);
-                        } else {
-                            showToast('重启超时，请手动刷新页面', 'error', 10000);
-                        }
-                    });
-                };
-                setTimeout(tryReconnect, 2000);
-            }, 1000);
-        }).catch(err => {
-            showToast('重启服务失败: ' + err.message, 'error');
-        });
+        executeRestart();
         return;
     }
     // 第一次点击：显示确认
@@ -410,6 +376,44 @@ function restartServer() {
         btn.innerHTML = '<i class="fas fa-redo mr-1"></i>重启服务';
         btn.style.cssText = '';
     }, 3000);
+}
+
+// 执行服务重启：保存未保存的网络配置，发起重启并重连
+function executeRestart() {
+    const bindAddress = document.getElementById('settings-bind-address').value;
+    const port = parseInt(document.getElementById('settings-port').value) || 14438;
+    const networkChanged = (bindAddress !== _originalBindAddress || port !== _originalPort);
+
+    if (networkChanged) {
+        // 网络配置有变更，自动保存设置后再重启
+        saveSettings(true); // silent=true，不弹Toast
+    }
+
+    fetch('/api/restart', { method: 'POST' }).then(() => {
+        showToast('服务正在重启，请稍候...', 'info', 10000);
+        setTimeout(() => {
+            let retries = 0;
+            const tryReconnect = () => {
+                fetch('/api/data').then(r => {
+                    if (r.ok) {
+                        location.reload();
+                    } else {
+                        throw new Error('not ready');
+                    }
+                }).catch(() => {
+                    retries++;
+                    if (retries < 20) {
+                        setTimeout(tryReconnect, 1000);
+                    } else {
+                        showToast('重启超时，请手动刷新页面', 'error', 10000);
+                    }
+                });
+            };
+            setTimeout(tryReconnect, 2000);
+        }, 1000);
+    }).catch(err => {
+        showToast('重启服务失败: ' + err.message, 'error');
+    });
 }
 
 function saveSettings(silent) {
@@ -495,7 +499,11 @@ function saveSettings(silent) {
         renderView();
         if (!silent) {
             setTimeout(() => {
-                showToast('网络配置已更改，请点击底部「重启服务」按钮使其生效', 'warning', 8000);
+                showConfirmToast(
+                    '网络配置已更改，是否重启服务以生效？',
+                    () => { executeRestart(); },
+                    () => { showToast('网络配置将在下一次重启服务时生效', 'info', 5000); }
+                );
             }, 100);
         }
         return;
@@ -1822,73 +1830,63 @@ const PALETTE_PREVIEW_CLICK_THRESHOLD = 300;
 
 // 全局 mouseup 监听：长按预览状态下，鼠标在面板外松开也能正确恢复
 document.addEventListener('mouseup', function(e) {
-    if (_palettePreviewSaved !== null && _palettePreviewActiveName !== null) {
+    if (_palettePreviewSaved !== null || _palettePreviewLongPress) {
         endPalettePreview(_palettePreviewActiveName);
     }
 });
 
-// 鼠标按下：记录时间 + 临时应用调色板（不写 settings）
+// 鼠标按下：仅启动长按判定定时器，不立即应用调色板。
+// 按下即应用会改变 CSS 变量，在有背景图/大数据量时引发毛玻璃重排与瞬时 mouseleave，
+// 进而干扰短按判定。改为：短按由 onclick 应用，长按由定时器在阈值后应用。
 function startPalettePreview(name) {
-    const palette = resolvePaletteObject(name);
-    if (!palette) return;
-    _palettePreviewDownTime = Date.now();
+    _palettePreviewLongPress = false;
     _palettePreviewActiveName = name;
     if (_palettePreviewSaved === null) {
         _palettePreviewSaved = settings.themePalette || 'none';
     }
-    applyPaletteToCssVars(palette);
-    _highlightActivePalette(name);
-    // 延迟判定长按：超过阈值则隐藏设置面板进入预览模式
     clearTimeout(_palettePreviewLongPressTimer);
     _palettePreviewLongPressTimer = setTimeout(() => {
-        if (_palettePreviewSaved !== null) {
-            _palettePreviewLongPress = true;
-            const modal = document.getElementById('settings-modal');
-            if (modal) modal.classList.add('hidden');
-        }
+        const palette = resolvePaletteObject(name);
+        if (!palette) return;
+        _palettePreviewLongPress = true;
+        applyPaletteToCssVars(palette);
+        _highlightActivePalette(name);
+        const modal = document.getElementById('settings-modal');
+        if (modal) modal.classList.add('hidden');
     }, PALETTE_PREVIEW_CLICK_THRESHOLD);
 }
 
-// 鼠标松开：短按视为单击 → 保存应用；长按 → 恢复原配色 + 恢复设置面板
+// 单击配色卡片：由 onclick 触发，可靠应用（与 mouseleave/响应时间完全无关）。
+// 长按预览结束时设置面板处于 hidden(display:none)，mouseup/click 不会命中卡片，
+// 故长按后不会误触发此处，无需额外抑制。
+function onPaletteCardClick(name) {
+    selectThemePalette(name);
+}
+
+// 鼠标松开：长按预览恢复原配色；短按不在此应用（交由后续 onclick 应用）
 function endPalettePreview(name) {
-    if (_palettePreviewSaved === null) {
-        // 未进入预览状态（如已被 cancelPalettePreview 清空，或 startPalettePreview 未生效）
-        // 直接返回，避免长按移出后松开误触发保存
-        return;
-    }
     clearTimeout(_palettePreviewLongPressTimer);
-    const duration = Date.now() - _palettePreviewDownTime;
-    const saved = _palettePreviewSaved;
-    const wasLongPress = _palettePreviewLongPress;
-    _palettePreviewSaved = null;
-    _palettePreviewActiveName = null;
-    _palettePreviewLongPress = false;
-    // 长按预览后，先恢复设置面板
-    if (wasLongPress) {
+    if (_palettePreviewLongPress) {
+        const saved = _palettePreviewSaved;
+        _palettePreviewSaved = null;
+        _palettePreviewActiveName = null;
+        _palettePreviewLongPress = false;
         const modal = document.getElementById('settings-modal');
         if (modal) modal.classList.remove('hidden');
-    }
-    if (duration < PALETTE_PREVIEW_CLICK_THRESHOLD) {
-        // 短按 = 保存应用
-        selectThemePalette(name);
-    } else {
-        // 长按 = 恢复原配色
         applyThemePalette(saved);
         _highlightActivePalette(settings.themePalette || 'none');
+    } else {
+        _palettePreviewSaved = null;
+        _palettePreviewActiveName = null;
     }
 }
 
-// 鼠标离开：仅短按状态下取消（长按预览状态下忽略，由全局mouseup处理）
+// 鼠标离开：取消长按判定定时器（不影响 onclick 的应用）
 function cancelPalettePreview() {
-    // 长按预览状态下不响应 mouseleave（设置面板已隐藏，鼠标离开是预期行为）
-    if (_palettePreviewLongPress) return;
-    if (_palettePreviewSaved === null) return;
+    if (_palettePreviewLongPress) return; // 长按预览中，忽略
     clearTimeout(_palettePreviewLongPressTimer);
-    const saved = _palettePreviewSaved;
     _palettePreviewSaved = null;
     _palettePreviewActiveName = null;
-    applyThemePalette(saved);
-    _highlightActivePalette(settings.themePalette || 'none');
 }
 
 // ==================== 节假日数据抓取 ====================

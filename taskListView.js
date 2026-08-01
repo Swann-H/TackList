@@ -4,6 +4,9 @@ let scheduleMonthOffset = 0;
 let _scheduleAutoScroll = true;
 let taskListCompletedCollapsed = true;
 let taskListCompletedShowAll = false;
+let _scheduleIntersectionObserver = null; // 当前日程视图的 IO，重渲染前 disconnect 防泄漏
+let _scheduleGroupedTasks = null; // 日程视图按日期分组的缓存，供局部更新复用
+let _scheduleFilteredCache = null; // filterTasks 结果缓存，避免每次渲染全量扫描
 
 function getTaskListGroup(task) {
     const now = new Date();
@@ -213,7 +216,7 @@ function renderTaskListView(container) {
                     <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
                         ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                     </button>
-                    <span class="flex-1 text-sm ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
+                    <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
                     ${renderFocusButton(task.id)}
                     <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                         ${tagCapsules}
@@ -269,92 +272,19 @@ function showCompletedTasksPage() {
     renderView();
 }
 
-function renderScheduleView(container) {
-    const filteredTasks = filterTasks(tasks).filter(t => t.startTime);
-
-    // 按日期和时间排序任务
-    const sortedTasks = [...filteredTasks].sort((a, b) => {
-        return new Date(a.startTime) - new Date(b.startTime);
-    });
-
-    // 按日期分组任务
-    const groupedTasks = {};
-    sortedTasks.forEach(task => {
-        const date = new Date(task.startTime);
-        const dateKey = date.toDateString();
-        if (!groupedTasks[dateKey]) {
-            groupedTasks[dateKey] = [];
-        }
-        groupedTasks[dateKey].push(task);
-
-        // 跨天任务：如果开始日期已过但截止日期未过，也添加到截止日期的分组
-        if (task.endTime) {
-            const now = new Date();
-            const startDate = new Date(task.startTime);
-            const endDate = new Date(task.endTime);
-            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const startDayStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-            const endDayStart = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-            const endDayTomorrow = new Date(endDayStart);
-            endDayTomorrow.setDate(endDayTomorrow.getDate() + 1);
-
-            // 开始日期已过，截止日期未过 → 显示在截止日期列表
-            if (startDayStart < todayStart && now < endDayTomorrow) {
-                const endDateKey = endDayStart.toDateString();
-                if (endDateKey !== dateKey) {
-                    if (!groupedTasks[endDateKey]) {
-                        groupedTasks[endDateKey] = [];
-                    }
-                    groupedTasks[endDateKey].push(task);
-                }
-            }
-        }
-    });
-
-    Object.keys(groupedTasks).forEach(dateKey => {
-        groupedTasks[dateKey] = sortTasksByCompletion(groupedTasks[dateKey]);
-    });
-
+// 构建单个日期卡片 HTML（抽出供懒加载与勾选局部更新复用）
+function buildScheduleDayCardHtml(date, dayTasks) {
     const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
-    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
-
-    // 计算月份范围（当前月 - 3个月 到 当前月 + 9个月，共1年）
-    const currentDate = new Date();
     const today = new Date();
-    const startMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() - 3 + scheduleMonthOffset, 1);
-    const endMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 9 + scheduleMonthOffset, 0);
+    const isToday = date.toDateString() === today.toDateString();
+    const day = date.getDate();
+    const dayOfWeek = weekDays[date.getDay()];
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const tasks = dayTasks || [];
 
-    let html = `
-        <div class="schedule-container" style="height: 100%; overflow-y: auto; padding-bottom: 100px;">
-            <div class="space-y-8">
-    `;
-
-    // 按月份生成日期列表
-    const currentMonth = new Date(startMonth);
-    while (currentMonth <= endMonth) {
-        const year = currentMonth.getFullYear();
-        const month = currentMonth.getMonth();
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-        let monthHasTasks = false;
-        let monthHtml = '';
-
-        // 遍历这个月的每一天
-        for (let day = 1; day <= daysInMonth; day++) {
-            const date = new Date(year, month, day);
-            const dateKey = date.toDateString();
-            const dayTasks = groupedTasks[dateKey] || [];
-
-            // 只显示有任务的日期或今天
-            const today = new Date();
-            const isToday = date.toDateString() === today.toDateString();
-
-            if (dayTasks.length > 0 || isToday) {
-                monthHasTasks = true;
-                const dayOfWeek = weekDays[date.getDay()];
-                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-
-                monthHtml += `
+    return `
                     <div class="bg-theme-secondary rounded-xl shadow-theme p-4 ${isToday ? 'ring-2 ring-blue-500' : ''} schedule-day-drop" data-drop-date="${dateStr}" ondragover="handleScheduleDragOver(event)" ondragleave="handleScheduleDragLeave(event)" ondrop="handleScheduleDrop(event)">
                         <div class="flex items-center gap-4 mb-4">
                             <div class="text-center min-w-[60px]">
@@ -366,7 +296,7 @@ function renderScheduleView(container) {
                             <div class="flex-1">
                                 <div class="relative pl-6">
                                     <div class="absolute left-0 top-0 bottom-0 w-0.5 bg-theme"></div>
-                                    ${dayTasks.map((task, taskIndex) => {
+                                    ${tasks.map((task, taskIndex) => {
                                         const startTime = new Date(task.startTime);
                                         const startHour = startTime.getHours().toString().padStart(2, '0');
                                         const startMin = startTime.getMinutes().toString().padStart(2, '0');
@@ -394,10 +324,10 @@ function renderScheduleView(container) {
                                                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                                                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
                                                     </div>
-                                                    <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
+                                                    <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                                                         ${task.title || '新任务'}
                                                     </div>
-                                                    ${task.notes ? `<div class="text-xs text-theme-secondary mt-1">${task.notes}</div>` : ''}
+                                                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-1">${task.notes}</div>` : '')}
                                                 </div>
                                             </div>
                                         `;
@@ -407,19 +337,159 @@ function renderScheduleView(container) {
                         </div>
                     </div>
                 `;
+}
+
+// 构建单个月份的日卡片 HTML（供懒加载按需调用）
+function buildScheduleMonthDaysHtml(year, month, groupedTasks) {
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+    let monthHtml = '';
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month, day);
+        const dateKey = date.toDateString();
+        const dayTasks = groupedTasks[dateKey] || [];
+        const isToday = date.toDateString() === today.toDateString();
+        if (dayTasks.length > 0 || isToday) {
+            monthHtml += buildScheduleDayCardHtml(date, dayTasks);
+        }
+    }
+    return monthHtml;
+}
+
+// 局部刷新：重渲染指定日期的日卡片（仅当该月已懒加载填充时）
+function refreshScheduleDayCard(dateKey) {
+    if (!_scheduleGroupedTasks) return;
+    const dayTasks = _scheduleGroupedTasks[dateKey];
+    const date = new Date(dateKey);
+    if (isNaN(date.getTime())) return;
+    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const el = document.querySelector(`.schedule-day-drop[data-drop-date="${dateStr}"]`);
+    if (!el) return; // 所在月份尚未懒加载填充，无需更新
+    el.outerHTML = buildScheduleDayCardHtml(date, dayTasks || []);
+}
+
+// 勾选任务后局部更新：重排受影响日期分组并重渲染其日卡片，避免全量 renderView
+function refreshScheduleDayCardsForTask(taskId) {
+    if (!_scheduleGroupedTasks) return false; // 日程视图尚未渲染，交由调用方全量渲染
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || !task.startTime) return true; // 无开始时间任务不在日程视图，无需更新
+    const keys = new Set();
+    const startKey = new Date(task.startTime).toDateString();
+    if (_scheduleGroupedTasks[startKey]) keys.add(startKey);
+    if (task.endTime) {
+        const endKey = new Date(task.endTime).toDateString();
+        if (_scheduleGroupedTasks[endKey]) keys.add(endKey);
+    }
+    keys.forEach(k => {
+        _scheduleGroupedTasks[k] = sortTasksByCompletion(_scheduleGroupedTasks[k]);
+        refreshScheduleDayCard(k);
+    });
+    return true; // 已处理：任务不在可见分组时也无需全量渲染
+}
+
+
+// 缓存 filter+排序+分组 的整条流水线结果，按筛选状态 + 当天日期签名复用。
+// 勾选任务（仅 completed 变化）不会失效，因任务对象引用共享、completed 已实时更新；
+// 结构性变更（增删/改期/服务端刷新）由 invalidateScheduleFilterCache 主动失效。
+function invalidateScheduleFilterCache() {
+    _scheduleFilteredCache = null;
+}
+
+function getScheduleGroupedTasks() {
+    const tagKey = (currentTagIds || []).join(',');
+    const todayKey = new Date().toDateString();
+    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey;
+    if (_scheduleFilteredCache && _scheduleFilteredCache.sig === sig) {
+        return _scheduleFilteredCache.grouped;
+    }
+
+    const filteredTasks = filterTasks(tasks).filter(t => t.startTime);
+    // startTime 为 ISO 字符串，直接字典序比较，避免反复 new Date
+    const sortedTasks = [...filteredTasks].sort((a, b) => {
+        const sa = a.startTime || '';
+        const sb = b.startTime || '';
+        if (sa < sb) return -1;
+        if (sa > sb) return 1;
+        return 0;
+    });
+
+    const groupedTasks = {};
+    sortedTasks.forEach(task => {
+        const date = new Date(task.startTime);
+        const dateKey = date.toDateString();
+        if (!groupedTasks[dateKey]) groupedTasks[dateKey] = [];
+        groupedTasks[dateKey].push(task);
+
+        // 跨天任务：开始日期已过但截止日期未过 → 也加入截止日期分组
+        if (task.endTime) {
+            const now = new Date();
+            const startDate = new Date(task.startTime);
+            const endDate = new Date(task.endTime);
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const startDayStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+            const endDayStart = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+            const endDayTomorrow = new Date(endDayStart);
+            endDayTomorrow.setDate(endDayTomorrow.getDate() + 1);
+            if (startDayStart < todayStart && now < endDayTomorrow) {
+                const endDateKey = endDayStart.toDateString();
+                if (endDateKey !== dateKey) {
+                    if (!groupedTasks[endDateKey]) groupedTasks[endDateKey] = [];
+                    groupedTasks[endDateKey].push(task);
+                }
             }
         }
+    });
 
-        // 只添加有内容的月份
-        if (monthHasTasks || monthNames[month] === monthNames[today.getMonth()]) {
+    Object.keys(groupedTasks).forEach(dateKey => {
+        groupedTasks[dateKey] = sortTasksByCompletion(groupedTasks[dateKey]);
+    });
+
+    _scheduleFilteredCache = { sig: sig, grouped: groupedTasks };
+    return groupedTasks;
+}
+
+function renderScheduleView(container) {
+    // 数据准备（filter+排序+分组）走缓存，避免每次全量扫描 5518 条
+    const groupedTasks = getScheduleGroupedTasks();
+    _scheduleGroupedTasks = groupedTasks; // 供勾选任务的局部更新复用
+
+    // 计算月份范围（当前月 - 3个月 到 当前月 + 9个月，共约1年）
+    const currentDate = new Date();
+    const today = new Date();
+    const startMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() - 3 + scheduleMonthOffset, 1);
+    const endMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 9 + scheduleMonthOffset, 0);
+
+    // 预计算哪些月份含有任务，避免为空月份构建日卡片 HTML
+    const monthsWithTasks = new Set();
+    Object.keys(groupedTasks).forEach(dateKey => {
+        const d = new Date(dateKey);
+        monthsWithTasks.add(d.getFullYear() + '-' + d.getMonth());
+    });
+    const _todayMonthKey = today.getFullYear() + '-' + today.getMonth();
+
+    let html = `
+        <div class="schedule-container" style="height: 100%; overflow-y: auto; padding-bottom: 100px;">
+            <div class="space-y-8">
+    `;
+
+    // 生成月份外壳：日卡片 HTML 延迟到接近视口时再构建（IntersectionObserver 懒加载），
+    // 避免一次性渲染数千个 DOM 节点。今天所在月份及相邻月份稍后立即填充，保证"滚动到今天"可用。
+    const currentMonth = new Date(startMonth);
+    while (currentMonth <= endMonth) {
+        const year = currentMonth.getFullYear();
+        const month = currentMonth.getMonth();
+        const monthKey = year + '-' + month;
+        const isCurrentMonth = monthKey === _todayMonthKey;
+
+        if (monthsWithTasks.has(monthKey) || isCurrentMonth) {
+            const monthLabel = `${year}-${(month + 1).toString().padStart(2, '0')}`;
             html += `
-                <div class="mb-6" data-schedule-month="${year}-${(month + 1).toString().padStart(2, '0')}">
+                <div class="mb-6" data-schedule-month="${monthLabel}">
                     <h3 class="text-xl font-bold text-theme-primary mb-4">
                         ${year}年${month + 1}月
                     </h3>
-                    <div class="space-y-4">
-                        ${monthHtml || '<div class="text-center text-theme-muted py-8">本月暂无日程</div>'}
-                    </div>
+                    <div class="space-y-4 schedule-month-content" data-sm-year="${year}" data-sm-month="${month}" data-populated="false"></div>
                 </div>
             `;
         }
@@ -430,19 +500,18 @@ function renderScheduleView(container) {
 
     html += `
             </div>
-
-            <!-- 底部悬浮导航 -->
-            <div class="fixed bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3 z-50">
-                <button onclick="navigateScheduleMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <h2 id="schedule-nav-month" class="text-xl font-bold text-theme-primary min-w-[160px] text-center">
-                    ${new Date().getFullYear()}年${new Date().getMonth() + 1}月
-                </h2>
-                <button onclick="navigateScheduleMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-            </div>
+        </div>
+        <!-- 底部悬浮导航 -->
+        <div class="fixed bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3 z-50">
+            <button onclick="navigateScheduleMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
+                <i class="fas fa-chevron-left"></i>
+            </button>
+            <h2 id="schedule-nav-month" class="text-xl font-bold text-theme-primary min-w-[240px] text-center">
+                ${new Date().getFullYear()}年${new Date().getMonth() + 1}月
+            </h2>
+            <button onclick="navigateScheduleMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
+                <i class="fas fa-chevron-right"></i>
+            </button>
         </div>
     `;
 
@@ -451,8 +520,53 @@ function renderScheduleView(container) {
 
     container.innerHTML = html;
 
-    // 添加滚动监听，更新底部导航栏显示当前可见月份
+    // 日程视图懒加载：仅构建接近视口的月份日卡片，减少初始 DOM 节点
     const scheduleScrollContainer = container.querySelector('.schedule-container');
+    const _populateScheduleMonth = (contentEl) => {
+        if (!contentEl || contentEl.dataset.populated === 'true') return;
+        const y = parseInt(contentEl.dataset.smYear, 10);
+        const m = parseInt(contentEl.dataset.smMonth, 10);
+
+        // 滚动锚定：若被填充月份位于视口上方，填充后其高度增长会下推可见内容，
+        // 导致滚动位置"跳动"。记录其后继月份位置，填充后补偿 scrollTop 使可见内容保持不动。
+        let needAnchor = false, anchorEl = null, anchorTopBefore = 0, selfHeightBefore = 0;
+        if (scheduleScrollContainer) {
+            const containerTop = scheduleScrollContainer.getBoundingClientRect().top;
+            if (contentEl.getBoundingClientRect().top < containerTop) {
+                needAnchor = true;
+                selfHeightBefore = contentEl.getBoundingClientRect().height;
+                anchorEl = contentEl.parentElement ? contentEl.parentElement.nextElementSibling : null;
+                if (anchorEl) anchorTopBefore = anchorEl.getBoundingClientRect().top;
+            }
+        }
+
+        const daysHtml = buildScheduleMonthDaysHtml(y, m, groupedTasks);
+        contentEl.innerHTML = daysHtml || '<div class="text-center text-theme-muted py-8">本月暂无日程</div>';
+        contentEl.dataset.populated = 'true';
+
+        // 视口上方月份填充后，按内容下移量补偿 scrollTop，消除跳动
+        if (needAnchor && scheduleScrollContainer) {
+            let delta;
+            if (anchorEl) {
+                delta = anchorEl.getBoundingClientRect().top - anchorTopBefore;
+            } else {
+                delta = contentEl.getBoundingClientRect().height - selfHeightBefore;
+            }
+            if (delta) scheduleScrollContainer.scrollTop += delta;
+        }
+    };
+    const _scheduleMonthEls = container.querySelectorAll('.schedule-month-content');
+    // 始终立即填充今天所在月份及相邻月份（保证"滚动到今天"与初始可见区域有内容）
+    _scheduleMonthEls.forEach(el => {
+        const y = parseInt(el.dataset.smYear, 10);
+        const m = parseInt(el.dataset.smMonth, 10);
+        const sameYear = y === today.getFullYear();
+        if (sameYear && Math.abs((m - today.getMonth() + 12) % 12) <= 1) {
+            _populateScheduleMonth(el);
+        }
+    });
+
+    // 添加滚动监听，更新底部导航栏显示当前可见月份
     if (scheduleScrollContainer) {
         // 同步恢复滚动位置，消除刷新时从顶部（往期任务）跳到今天的跳动
         if (!_scheduleAutoScroll && savedScrollTop > 0) {
@@ -464,7 +578,9 @@ function renderScheduleView(container) {
             const monthSections = scheduleScrollContainer.querySelectorAll('[data-schedule-month]');
             if (monthSections.length === 0) return;
             const containerRect = scheduleScrollContainer.getBoundingClientRect();
-            const centerY = containerRect.top + containerRect.height / 3;
+            // 使用靠近顶部的阈值（与自动滚动到今天的偏移量一致），
+            // 避免1/3处检测到下一个月（如今天7月29日位于顶部时，1/3处已到8月）
+            const centerY = containerRect.top + 20;
             let visibleMonth = null;
             for (let i = monthSections.length - 1; i >= 0; i--) {
                 const rect = monthSections[i].getBoundingClientRect();
@@ -481,8 +597,43 @@ function renderScheduleView(container) {
                 navMonth.textContent = `${y}年${parseInt(m)}月`;
             }
         });
-        // 初始触发一次
-        setTimeout(() => scheduleScrollContainer.dispatchEvent(new Event('scroll')), 100);
+        // 非自动滚动时立即触发一次（自动滚动场景由下方200ms处统一触发，避免时序冲突）
+        if (!_scheduleAutoScroll) {
+            setTimeout(() => scheduleScrollContainer.dispatchEvent(new Event('scroll')), 100);
+        }
+
+        // 视口附近（含已恢复的滚动位置）的月份立即填充，其余由 IntersectionObserver 懒加载
+        const cRect = scheduleScrollContainer.getBoundingClientRect();
+        const buffer = scheduleScrollContainer.clientHeight || 400;
+        _scheduleMonthEls.forEach(el => {
+            if (el.dataset.populated === 'true') return;
+            const r = el.getBoundingClientRect();
+            if (r.bottom > cRect.top - buffer && r.top < cRect.bottom + buffer) {
+                _populateScheduleMonth(el);
+            }
+        });
+        if ('IntersectionObserver' in window) {
+            // 断开上一次渲染的 observer，避免频繁重渲染累积泄漏
+            if (_scheduleIntersectionObserver) {
+                _scheduleIntersectionObserver.disconnect();
+                _scheduleIntersectionObserver = null;
+            }
+            const scheduleIO = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        _populateScheduleMonth(entry.target);
+                        scheduleIO.unobserve(entry.target);
+                    }
+                });
+            }, { root: scheduleScrollContainer, rootMargin: '600px 0px 600px 0px' });
+            _scheduleIntersectionObserver = scheduleIO;
+            _scheduleMonthEls.forEach(el => {
+                if (el.dataset.populated !== 'true') scheduleIO.observe(el);
+            });
+        } else {
+            // 不支持 IntersectionObserver：全部填充（降级保证功能可用）
+            _scheduleMonthEls.forEach(el => _populateScheduleMonth(el));
+        }
     }
 
     if (_scheduleAutoScroll) {
@@ -496,6 +647,10 @@ function renderScheduleView(container) {
                     const cardRect = todayCard.getBoundingClientRect();
                     scrollContainer.scrollTop += cardRect.top - containerRect.top - 20;
                 }
+            }
+            // 滚动到今天后触发一次，确保导航栏显示今天的月份
+            if (scheduleScrollContainer) {
+                scheduleScrollContainer.dispatchEvent(new Event('scroll'));
             }
         }, 200);
     }

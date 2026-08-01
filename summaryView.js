@@ -39,8 +39,9 @@ function renderSummaryView(container) {
         ? generateTimeBasedContent(filteredTasks)
         : generateListBasedContent(filteredTasks);
 
-    // 左栏数据：今日完成率（始终今日，仅受清单筛选影响）
-    const todayData = getTodayCompletionData();
+    // 左栏数据：今日完成率（昨天时间范围时显示昨日数据，仅受清单筛选影响）
+    const isYesterday = summaryTimeRange === 'yesterday';
+    const todayData = getTodayCompletionData(isYesterday ? -1 : 0);
     // 左栏数据：完成趋势（跟随时间范围，仅显示已过日期，仅受清单筛选影响）
     const trendData = getCompletionTrendData();
 
@@ -86,9 +87,9 @@ function renderSummaryView(container) {
             <div class="flex-1 min-h-0 flex gap-4 px-4 pb-4">
                 <!-- 左栏：数据洞察与可视化 (45%) -->
                 <div class="flex flex-col gap-4" style="width: 45%; min-width: 0;">
-                    <!-- 模块一：今日概况（整合任务+专注） -->
+                    <!-- 模块一：今日/昨日概况（整合任务+专注） -->
                     <div class="bg-theme-secondary rounded-xl shadow-theme p-5 flex-shrink-0">
-                        ${renderTodayOverviewCard(todayData)}
+                        ${renderTodayOverviewCard(todayData, isYesterday)}
                     </div>
                     <!-- 模块二：完成趋势 -->
                     <div class="bg-theme-secondary rounded-xl shadow-theme p-5 flex-1 min-h-0 flex flex-col">
@@ -149,9 +150,11 @@ function renderSummaryView(container) {
 // 今日总任务 = 今天新创建且已完成的任务 + 截止日期是今天的任务（无论是否完成） + 从过去延期到今天的未完成任务
 // 排除未来日期的任务，以及没有设置日期且不在今天执行的任务
 // 仅受清单筛选影响，不受优先级/状态/时间范围筛选影响
-function getTodayCompletionData() {
+// dateOffset: 0=今天（默认），-1=昨天
+function getTodayCompletionData(dateOffset = 0) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    today.setDate(today.getDate() + dateOffset);
 
     const todayTasks = tasks.filter(task => {
         // 清单筛选
@@ -201,9 +204,10 @@ function getTodayCompletionData() {
     return { completed, total, remaining, importantCompleted, newCount };
 }
 
-function renderTodayOverviewCard(data) {
+function renderTodayOverviewCard(data, isYesterday = false) {
     const percent = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 0;
     const isAllClear = data.total > 0 && data.completed === data.total;
+    const overviewTitle = isYesterday ? '昨日概况' : '今日概况';
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
     // 基础参数
@@ -230,31 +234,34 @@ function renderTodayOverviewCard(data) {
     // 最短长度（周期起止时的长度）
     const minCometLength = Math.max(maxCometLength * 0.25, 4);
 
-    // 专注数据
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // 专注数据（根据 isYesterday 切换为昨日数据）
+    const focusDate = new Date();
+    focusDate.setHours(0, 0, 0, 0);
+    if (isYesterday) focusDate.setDate(focusDate.getDate() - 1);
     const history = typeof pomodoroHistory !== 'undefined' ? pomodoroHistory : [];
-    const todayPomodoros = history.filter(p => {
+    const focusPomodoros = history.filter(p => {
         const pDate = new Date(p.date);
         pDate.setHours(0, 0, 0, 0);
-        return pDate.getTime() === today.getTime();
+        return pDate.getTime() === focusDate.getTime();
     }).length;
     const focusDuration = (typeof pomodoroState !== 'undefined' && pomodoroState.focusDuration)
         ? pomodoroState.focusDuration
         : (settings.focusDuration || 25);
-    const todayMinutes = todayPomodoros * focusDuration;
+    const focusMinutes = focusPomodoros * focusDuration;
+    const focusLabel = isYesterday ? '昨日专注' : '今日专注';
+    const durationLabel = isYesterday ? '昨日时长' : '今日时长';
 
     // 信息项：统一使用数字在上、标签在下的样式，无独立底色
-    const infoItem = (value, label, extraAttrs = '') =>
+    // valueClass 可选，用于在特定条件下给数字加强调色（如高优完成>4时变橙色）
+    const infoItem = (value, label, extraAttrs = '', valueClass = 'text-theme-primary') =>
         `<div class="text-center" ${extraAttrs}>
-            <div class="text-lg font-bold text-theme-primary">${value}</div>
+            <div class="text-lg font-bold ${valueClass}">${value}</div>
             <div class="text-xs text-theme-muted mt-0.5">${label}</div>
         </div>`;
 
     let html = `
         <div class="flex items-center justify-between mb-3">
-            <h3 class="text-base font-semibold text-theme-primary">今日概况</h3>
-            ${data.importantCompleted > 0 ? `<span class="text-xs px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 flex items-center gap-1"><i class="fas fa-bolt text-xs"></i> 高优 ${data.importantCompleted}</span>` : ''}
+            <h3 class="text-base font-semibold text-theme-primary">${overviewTitle}</h3>
         </div>
     `;
 
@@ -316,10 +323,11 @@ function renderTodayOverviewCard(data) {
             </div>
             <div class="flex-1 min-w-0 grid grid-cols-3 gap-x-2 gap-y-3">
                 ${infoItem(data.completed + '<span class="text-xs text-theme-muted"> / ' + data.total + '</span>', '已完成')}
+                ${infoItem(data.importantCompleted, '高优完成', 'title="高优任务指标记为重要的任务" style="cursor:help"', data.importantCompleted > 4 ? 'text-orange-500' : 'text-theme-primary')}
                 ${infoItem(data.remaining, '剩余待办')}
                 ${infoItem(data.newCount || 0, '新增任务')}
-                ${infoItem(todayPomodoros, '今日专注', 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
-                ${infoItem(formatFocusMinutes(todayMinutes), '今日时长', 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
+                ${infoItem(focusPomodoros, focusLabel, 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
+                ${infoItem(formatFocusMinutes(focusMinutes), durationLabel, 'onclick="openPomodoroStats()" style="cursor:pointer" title="查看番茄专注统计"')}
             </div>
         </div>
     `;
@@ -528,7 +536,8 @@ function getCompletionTrendData() {
         case 'today':
         case 'yesterday':
         case 'last3days':
-            // 这三个选项统一展示过去 7 天（到今天）的统计信息
+        case 'week':
+            // 这些选项统一展示过去 7 天（到今天）的统计信息
             for (let i = 6; i >= 0; i--) {
                 const d = new Date(today);
                 d.setDate(d.getDate() - i);
@@ -536,24 +545,20 @@ function getCompletionTrendData() {
                 labels.push((d.getMonth() + 1) + '/' + d.getDate());
             }
             break;
-        case 'week':
         case 'lastweek': {
             const dayOffset = settings.weekStart === 'monday' ? 1 : 0;
             let weekStart = new Date(today);
             weekStart.setDate(weekStart.getDate() - weekStart.getDay() + dayOffset);
             if (today.getDay() === 0 && dayOffset === 1) weekStart.setDate(weekStart.getDate() - 7);
-            if (summaryTimeRange === 'lastweek') weekStart.setDate(weekStart.getDate() - 7);
+            weekStart.setDate(weekStart.getDate() - 7);
             const dayNames = settings.weekStart === 'monday'
                 ? ['一', '二', '三', '四', '五', '六', '日']
                 : ['日', '一', '二', '三', '四', '五', '六'];
             for (let i = 0; i < 7; i++) {
                 const d = new Date(weekStart);
                 d.setDate(d.getDate() + i);
-                // 仅显示已过日期（包括今天）；上周全部显示
-                if (summaryTimeRange === 'lastweek' || d <= today) {
-                    dates.push(d);
-                    labels.push(dayNames[i]);
-                }
+                dates.push(d);
+                labels.push(dayNames[i]);
             }
             break;
         }
@@ -642,22 +647,53 @@ function renderCompletionTrendCard(trendData) {
         return html;
     }
 
-    // 平滑曲线路径生成（Catmull-Rom 转 Bezier，等价于 ECharts smooth: true）
+    // 单调三次插值（Fritsch-Carlson 方法）：保证曲线平滑且不超出数据点 y 范围
+    // 无过冲、无震荡，局部极值处切线自动归零，首末段与中段曲率一致
     function generateSmoothPath(points) {
         if (points.length < 2) return '';
         if (points.length === 2) {
             return `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)} L ${points[1].x.toFixed(1)} ${points[1].y.toFixed(1)}`;
         }
+        const n = points.length;
+        // 1. 计算相邻点间的斜率
+        const slopes = [];
+        for (let i = 0; i < n - 1; i++) {
+            const dx = points[i + 1].x - points[i].x;
+            slopes.push(dx !== 0 ? (points[i + 1].y - points[i].y) / dx : 0);
+        }
+        // 2. 计算每个点的切线：端点取相邻斜率，内部点在极值处归零
+        const tangents = new Array(n);
+        tangents[0] = slopes[0];
+        tangents[n - 1] = slopes[n - 2];
+        for (let i = 1; i < n - 1; i++) {
+            tangents[i] = (slopes[i - 1] * slopes[i] <= 0) ? 0 : (slopes[i - 1] + slopes[i]) / 2;
+        }
+        // 3. 单调性约束：防止切线过陡导致过冲
+        for (let i = 0; i < n - 1; i++) {
+            if (slopes[i] === 0) {
+                tangents[i] = 0;
+                tangents[i + 1] = 0;
+            } else {
+                const alpha = tangents[i] / slopes[i];
+                const beta = tangents[i + 1] / slopes[i];
+                const h = Math.hypot(alpha, beta);
+                if (h > 3) {
+                    const tau = 3 / h;
+                    tangents[i] = tau * alpha * slopes[i];
+                    tangents[i + 1] = tau * beta * slopes[i];
+                }
+            }
+        }
+        // 4. 转换为 cubic bezier 路径（Hermite → Bezier）
         let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-        for (let i = 0; i < points.length - 1; i++) {
-            const p0 = i === 0 ? points[0] : points[i - 1];
+        for (let i = 0; i < n - 1; i++) {
             const p1 = points[i];
             const p2 = points[i + 1];
-            const p3 = i + 2 < points.length ? points[i + 2] : points[i + 1];
-            const cp1x = p1.x + (p2.x - p0.x) / 6;
-            const cp1y = p1.y + (p2.y - p0.y) / 6;
-            const cp2x = p2.x - (p3.x - p1.x) / 6;
-            const cp2y = p2.y - (p3.y - p1.y) / 6;
+            const dx = (p2.x - p1.x) / 3;
+            const cp1x = p1.x + dx;
+            const cp1y = p1.y + tangents[i] * dx;
+            const cp2x = p2.x - dx;
+            const cp2y = p2.y - tangents[i + 1] * dx;
             path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
         }
         return path;
@@ -674,61 +710,59 @@ function renderCompletionTrendCard(trendData) {
     const innerWidth = chartWidth - padding.left - padding.right;
     const colWidth = innerWidth / dates.length;
 
-    // === 1. 柱状图（已完成任务） ===
+    // === 1. 折线图（已完成任务） ===
     const maxCompleted = Math.max(...dailyData.map(d => d.completedCount), 0);
     const displayMaxCompleted = Math.max(maxCompleted, 3);
-    const barWidth = Math.min(18, colWidth * 0.5);
 
     let barSvg = '';
+    barSvg += `<defs><linearGradient id="trend-completed-gradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent-color)" stop-opacity="0.4"/><stop offset="100%" stop-color="var(--accent-color)" stop-opacity="0"/></linearGradient></defs>`;
     for (let i = 0; i <= 2; i++) {
         const y = padding.top + innerHeight * (1 - i / 2);
         const value = Math.round(displayMaxCompleted * i / 2);
         barSvg += `<line x1="${padding.left}" y1="${y.toFixed(1)}" x2="${(chartWidth - padding.right).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--border-color)" stroke-width="0.5" stroke-dasharray="2,2"/>`;
         barSvg += `<text x="${padding.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${value}</text>`;
     }
-    dailyData.forEach((d, i) => {
+    const completedPoints = dailyData.map((d, i) => {
         const x = padding.left + colWidth * (i + 0.5);
-        const barH = displayMaxCompleted > 0 ? (d.completedCount / displayMaxCompleted) * innerHeight : 0;
-        const barY = padding.top + innerHeight - barH;
-        if (d.completedCount > 0) {
-            barSvg += `<rect x="${(x - barWidth / 2).toFixed(1)}" y="${barY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barH.toFixed(1)}" rx="3" fill="var(--accent-color)" opacity="0.85"/>`;
-            barSvg += `<text x="${x.toFixed(1)}" y="${(barY - 3).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-secondary)" font-weight="600">${d.completedCount}</text>`;
+        const y = padding.top + innerHeight * (1 - d.completedCount / displayMaxCompleted);
+        return { x, y, value: d.completedCount };
+    });
+    if (completedPoints.length >= 2) {
+        const smoothPath = generateSmoothPath(completedPoints);
+        // 面积填充基线在图表底部（0 值位置），填充曲线下方区域
+        const baselineY = padding.top + innerHeight;
+        const areaPath = smoothPath + ` L ${completedPoints[completedPoints.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)} L ${completedPoints[0].x.toFixed(1)} ${baselineY.toFixed(1)} Z`;
+        barSvg += `<path d="${areaPath}" fill="url(#trend-completed-gradient)"/>`;
+        barSvg += `<path d="${smoothPath}" fill="none" stroke="var(--accent-color)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+    }
+    completedPoints.forEach(p => {
+        if (p.value > 0) {
+            barSvg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="var(--accent-color)" stroke="var(--bg-secondary)" stroke-width="1.5"/>`;
+            barSvg += `<text x="${p.x.toFixed(1)}" y="${(p.y - 8).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--accent-color)" font-weight="600">${p.value}</text>`;
         }
-        barSvg += `<text x="${x.toFixed(1)}" y="${(chartHeight - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${labels[i]}</text>`;
+    });
+    labels.forEach((label, i) => {
+        const x = padding.left + colWidth * (i + 0.5);
+        barSvg += `<text x="${x.toFixed(1)}" y="${(chartHeight - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
     });
 
-    // === 2. 折线图（完成率趋势） ===
-    // Y 轴 0-100%，仅取有数据的点（completionRate !== null）
+    // === 2. 柱状图（完成率趋势） ===
+    const barWidth = Math.min(18, colWidth * 0.5);
     let rateSvg = '';
-    rateSvg += `<defs><linearGradient id="trend-rate-gradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent-secondary)" stop-opacity="0.4"/><stop offset="100%" stop-color="var(--accent-secondary)" stop-opacity="0"/></linearGradient></defs>`;
-    // Y 轴刻度：0%, 50%, 100%
     [0, 50, 100].forEach(value => {
         const y = padding.top + innerHeight * (1 - value / 100);
         rateSvg += `<line x1="${padding.left}" y1="${y.toFixed(1)}" x2="${(chartWidth - padding.right).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--border-color)" stroke-width="0.5" stroke-dasharray="2,2"/>`;
         rateSvg += `<text x="${padding.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${value}%</text>`;
     });
-    const ratePoints = dailyData.map((d, i) => {
+    dailyData.forEach((d, i) => {
         const x = padding.left + colWidth * (i + 0.5);
-        const rate = d.completionRate != null ? d.completionRate : 0;
-        const y = padding.top + innerHeight * (1 - rate / 100);
-        return { x, y, value: d.completionRate };
-    });
-    if (ratePoints.length >= 2) {
-        const smoothPath = generateSmoothPath(ratePoints);
-        const baselineY = padding.top + innerHeight;
-        const areaPath = smoothPath + ` L ${ratePoints[ratePoints.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)} L ${ratePoints[0].x.toFixed(1)} ${baselineY.toFixed(1)} Z`;
-        rateSvg += `<path d="${areaPath}" fill="url(#trend-rate-gradient)"/>`;
-        rateSvg += `<path d="${smoothPath}" fill="none" stroke="var(--accent-secondary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
-    }
-    ratePoints.forEach(p => {
-        if (p.value != null) {
-            rateSvg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="var(--accent-color)" stroke="var(--bg-secondary)" stroke-width="1.5"/>`;
-            rateSvg += `<text x="${p.x.toFixed(1)}" y="${(p.y - 8).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--accent-color)" font-weight="600">${p.value}%</text>`;
+        const barH = d.completionRate != null ? (d.completionRate / 100) * innerHeight : 0;
+        const barY = padding.top + innerHeight - barH;
+        if (d.completionRate != null) {
+            rateSvg += `<rect x="${(x - barWidth / 2).toFixed(1)}" y="${barY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barH.toFixed(1)}" rx="3" fill="var(--accent-secondary)" opacity="0.85"/>`;
+            rateSvg += `<text x="${x.toFixed(1)}" y="${(barY - 3).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-secondary)" font-weight="600">${d.completionRate}%</text>`;
         }
-    });
-    labels.forEach((label, i) => {
-        const x = padding.left + colWidth * (i + 0.5);
-        rateSvg += `<text x="${x.toFixed(1)}" y="${(chartHeight - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
+        rateSvg += `<text x="${x.toFixed(1)}" y="${(chartHeight - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${labels[i]}</text>`;
     });
 
     // === 3. 折线图（新建任务）——已移除，仅保留柱状图和完成率折线图 ===
@@ -738,7 +772,7 @@ function renderCompletionTrendCard(trendData) {
         <div class="flex-1 min-h-0 flex flex-col gap-2">
             <div class="flex flex-col flex-1 min-h-0">
                 <div class="text-xs text-theme-secondary mb-1 flex items-center gap-1 flex-shrink-0">
-                    <span class="inline-block w-3 h-3 rounded-sm" style="background: var(--accent-color)"></span>已完成任务
+                    <span class="inline-block w-4 h-0.5" style="background: var(--accent-color)"></span>已完成任务
                 </div>
                 <div class="flex-1 min-h-0 overflow-hidden">
                     <svg viewBox="0 0 ${chartWidth} ${chartHeight}" class="w-full h-full" preserveAspectRatio="xMidYMid meet">
@@ -748,7 +782,7 @@ function renderCompletionTrendCard(trendData) {
             </div>
             <div class="flex flex-col flex-1 min-h-0">
                 <div class="text-xs text-theme-secondary mb-1 flex items-center gap-1 flex-shrink-0">
-                    <span class="inline-block w-4 h-0.5" style="background: var(--accent-secondary)"></span>完成率趋势
+                    <span class="inline-block w-3 h-3 rounded-sm" style="background: var(--accent-secondary)"></span>完成率趋势
                 </div>
                 <div class="flex-1 min-h-0 overflow-hidden">
                     <svg viewBox="0 0 ${chartWidth} ${chartHeight}" class="w-full h-full" preserveAspectRatio="xMidYMid meet">

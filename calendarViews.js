@@ -3,6 +3,8 @@
 let weekViewHourStart = 6;
 let weekViewHourEnd = 22;
 let weekAllDayCollapsed = {};
+// 月视图滚动位置保持：跨重渲染保存/恢复 transform 偏移量
+let _monthSavedScrollTop = null;
 
 function renderWeekView(container) {
     const weekStart = new Date(currentDate);
@@ -86,7 +88,7 @@ function renderWeekView(container) {
     });
     allDayHtml += '</div></div>';
     
-    let timeGridHtml = `<div class="week-time-grid" style="height: 100%; overflow-y: auto; position: relative; padding-bottom: 80px;" id="week-time-grid">`;
+    let timeGridHtml = `<div class="week-time-grid" style="height: 100%; overflow-y: auto; position: relative; padding-bottom: 100px;" id="week-time-grid">`;
     
     timeGridHtml += allDayHtml;
     
@@ -174,6 +176,10 @@ function renderWeekView(container) {
         ? `${formatMonthYear(weekDays[0])} - ${formatMonthYear(weekDays[6])}`
         : formatMonthYear(weekDays[0]);
 
+    // 保存旧网格的滚动位置（若存在），用于拖动后等重渲染场景保持视图位置
+    const existingGrid = container.querySelector('#week-time-grid');
+    const savedScrollTop = existingGrid ? existingGrid.scrollTop : null;
+
     const bottomNavHtml = `
         <div class="fixed bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3 z-50">
             <button onclick="navigateWeek(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
@@ -186,26 +192,19 @@ function renderWeekView(container) {
         </div>
     `;
 
-    // 保存旧网格的滚动位置（若存在），用于拖动后等重渲染场景保持视图位置
-    const existingGrid = container.querySelector('#week-time-grid');
-    const savedScrollTop = existingGrid ? existingGrid.scrollTop : null;
-
     container.innerHTML = `<div class="h-full flex flex-col">${headerHtml}${hasAnyTasks ? timeGridHtml : ''}${bottomNavHtml}</div>`;
 
-    if (hasAnyTasks && isCurrentWeek(weekDays)) {
-        setTimeout(() => {
-            const grid = document.getElementById('week-time-grid');
-            if (grid) {
-                if (savedScrollTop !== null) {
-                    // 重渲染（如拖动任务后）：恢复之前的滚动位置
-                    grid.scrollTop = savedScrollTop;
-                } else {
-                    // 首次渲染/切换到周视图：滚动到当前时刻
-                    const scrollTarget = Math.max(0, (currentHour - weekViewHourStart - 1) * hourHeight);
-                    grid.scrollTop = scrollTarget;
-                }
-            }
-        }, 50);
+    // 同步恢复滚动位置，消除自动刷新时的跳动
+    const newGrid = document.getElementById('week-time-grid');
+    if (newGrid) {
+        if (savedScrollTop !== null) {
+            // 重渲染（如数据同步、拖动任务后）：恢复之前的滚动位置
+            newGrid.scrollTop = savedScrollTop;
+        } else if (hasAnyTasks && isCurrentWeek(weekDays)) {
+            // 首次渲染/切换到当前周：滚动到当前时刻
+            const scrollTarget = Math.max(0, (currentHour - weekViewHourStart - 1) * hourHeight);
+            setTimeout(() => { newGrid.scrollTop = scrollTarget; }, 50);
+        }
     }
 }
 
@@ -467,23 +466,36 @@ function renderMonthView(container) {
     for (let i = 1; i <= lastDay.getDate(); i++) {
         days.push(new Date(year, month, i));
     }
-    const remainingDays = 42 - days.length;
-    for (let i = 1; i <= remainingDays; i++) {
+    // 动态计算尾部填充：仅填充到当月最后一天所在周的末尾，不强制6行
+    const lastDayOfWeek = lastDay.getDay();
+    let tailFill;
+    if (dayOffset === 1) {
+        // 周一开始：一周为周一→周日，最后一天之后填充到周日
+        tailFill = (7 - lastDayOfWeek) % 7;
+    } else {
+        // 周日开始：一周为周日→周六，最后一天之后填充到周六
+        tailFill = (6 - lastDayOfWeek + 7) % 7;
+    }
+    for (let i = 1; i <= tailFill; i++) {
         days.push(new Date(year, month + 1, i));
     }
-    
+
     container.innerHTML = `
-        <div id="month-view-container">
-            <div class="grid grid-cols-7 gap-2" id="month-grid">
+        <div id="month-view-container" class="h-full flex flex-col overflow-hidden relative">
+            <div class="grid grid-cols-7 gap-2 flex-shrink-0">
                 ${weekdayNames.map(d => `
                     <div class="text-center text-sm font-medium text-theme-secondary py-2">${d}</div>
                 `).join('')}
+            </div>
+            <div id="month-scroll" class="flex-1 min-h-0" style="overflow: hidden; position: relative;">
+            <div class="grid grid-cols-7 gap-2" id="month-grid" style="grid-auto-rows: 145px;">
                 ${days.map(date => {
                     const dateStr = formatDate(date);
                     const dayTasks = getTasksForDate(date);
                     const isToday = isSameDay(date, new Date());
                     const isCurrentMonth = date.getMonth() === month;
-                    const displayTasks = dayTasks.slice(0, 3);
+                    const displayCount = 3;
+                    const displayTasks = dayTasks.slice(0, displayCount);
 
                     let lunarHtml = '';
                     let holidayBadge = '';
@@ -526,13 +538,13 @@ function renderMonthView(container) {
                     }
 
                     return `
-                        <div class="calendar-day bg-theme-secondary rounded-xl shadow-theme p-2 min-h-[100px] relative ${isToday ? 'today' : ''} ${!isCurrentMonth ? 'opacity-40' : ''} border border-theme drop-zone group"
+                        <div class="calendar-day bg-theme-secondary rounded-xl shadow-theme p-2 relative ${isToday ? 'today' : ''} ${!isCurrentMonth ? 'opacity-40' : ''} border border-theme drop-zone group"
                              data-date="${dateStr}"
                              ondragover="handleTaskDragOver(event)"
                              ondrop="handleMonthDrop(event, '${dateStr}')">
                             <div class="grid items-center mb-2" style="grid-template-columns: 1fr auto 1fr">
                                 <div class="flex justify-start">${holidayBadge || weekBadge || ''}</div>
-                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-blue-500 text-white font-bold' : 'font-medium text-theme-primary'}">${date.getDate()}</span>
+                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-blue-500 text-white font-bold' : 'font-medium text-theme-primary'} ${dayTasks.length > displayCount ? 'cursor-pointer hover:text-blue-500' : ''}" ${dayTasks.length > displayCount ? `onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"` : ''}>${date.getDate()}</span>
                                 <div class="flex justify-end">${lunarHtml || ''}</div>
                             </div>
                             <div class="space-y-1">
@@ -554,13 +566,15 @@ function renderMonthView(container) {
                                         </div>
                                     `;
                                 }).join('')}
-                                ${dayTasks.length > 3 ? `<div class="relative text-xs"><span class="text-blue-500 cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')">+${dayTasks.length - 3}更多</span><span class="text-blue-500 cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
+                                ${dayTasks.length > displayCount ? `<div class="relative text-xs"><span class="text-blue-500 cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')">+${dayTasks.length - displayCount}更多</span><span class="text-blue-500 cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
                             </div>
-                            ${dayTasks.length <= 3 ? `<button class="absolute bottom-1 right-1 text-blue-500 text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</button>` : ''}
+                            ${dayTasks.length <= displayCount ? `<button class="absolute bottom-1 right-1 text-blue-500 text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</button>` : ''}
                         </div>
                     `;
                 }).join('')}
             </div>
+            </div>
+            <!-- 底部悬浮导航 -->
             <div class="fixed bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3 z-50">
                 <button onclick="navigateMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-left"></i>
@@ -572,6 +586,63 @@ function renderMonthView(container) {
             </div>
         </div>
     `;
+
+    // 手动滚动：用 transform 替代 CSS overflow，确保跨浏览器兼容
+    const monthScroll = container.querySelector('#month-scroll');
+    const monthGrid = container.querySelector('#month-grid');
+    if (monthScroll && monthGrid) {
+        // 基于已知参数计算高度，不依赖 offsetHeight（可能被父容器压缩）
+        const numRows = Math.ceil(monthGrid.children.length / 7);
+        const rowHeight = 145;
+        const gap = 8;
+        // 为底部悬浮导航栏预留空间，避免末行被遮挡
+        const navPadding = 100;
+        const gridHeight = numRows * rowHeight + (numRows - 1) * gap + navPadding;
+        // 显式设置grid高度，防止被父容器压缩
+        monthGrid.style.height = gridHeight + 'px';
+
+        // 恢复上次滚动位置（用于数据同步等重渲染场景，避免跳动）
+        let scrollTop = _monthSavedScrollTop !== null ? _monthSavedScrollTop : 0;
+
+        function applyScroll() {
+            monthGrid.style.transform = `translateY(${-scrollTop}px)`;
+        }
+
+        function getMaxScroll() {
+            return Math.max(0, gridHeight - monthScroll.clientHeight);
+        }
+
+        monthScroll.addEventListener('wheel', function(e) {
+            const maxScroll = getMaxScroll();
+            if (maxScroll <= 0) return;
+            e.preventDefault();
+            scrollTop = Math.max(0, Math.min(maxScroll, scrollTop + e.deltaY));
+            _monthSavedScrollTop = scrollTop;
+            applyScroll();
+        }, { passive: false });
+
+        // 如果当前查看的月份包含今日，且无保存的滚动位置，自动定位到今日所在行
+        const todayCell = monthGrid.querySelector('.calendar-day.today');
+        if (todayCell && _monthSavedScrollTop === null) {
+            setTimeout(() => {
+                const maxScroll = getMaxScroll();
+                if (maxScroll <= 0) return;
+                const cellTop = todayCell.offsetTop;
+                const cellHeight = todayCell.offsetHeight;
+                const viewHeight = monthScroll.clientHeight;
+                scrollTop = Math.max(0, Math.min(maxScroll, cellTop - (viewHeight - cellHeight) / 2));
+                _monthSavedScrollTop = scrollTop;
+                applyScroll();
+            }, 50);
+        } else {
+            // 恢复保存的滚动位置
+            const maxScroll = getMaxScroll();
+            scrollTop = Math.max(0, Math.min(maxScroll, scrollTop));
+            _monthSavedScrollTop = scrollTop;
+            applyScroll();
+        }
+    }
+
 }
 
 // ==================== 月视图日期浮层（替代内联展开） ====================
@@ -626,10 +697,10 @@ function openMonthDayPopover(dateStr) {
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
                     </div>
-                    <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
+                    <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                         ${escapeHtml(task.title || '新任务')}
                     </div>
-                    ${task.notes ? `<div class="text-xs text-theme-secondary mt-1">${escapeHtml(task.notes)}</div>` : ''}
+                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-1">${escapeHtml(task.notes)}</div>` : '')}
                 </div>
             </div>
         `;
@@ -731,5 +802,6 @@ function closeMonthDayPopover() {
 function navigateMonth(direction) {
     closeMonthDayPopover();
     currentDate.setMonth(currentDate.getMonth() + direction);
+    _monthSavedScrollTop = null; // 切换月份时重置滚动位置
     renderView();
 }
