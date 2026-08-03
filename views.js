@@ -76,7 +76,7 @@ function updateViewButtons() {
 
 function renderView() {
     const container = document.getElementById('view-container');
-    // 清空顶部导航栏（由各视图自行填充）
+    // 清空底部导航栏（由各视图自行填充）
     const navBar = document.getElementById('view-nav-bar');
     if (navBar) navBar.innerHTML = '';
     // 离开摘要页时停止彗星动画，防止 rAF 泄漏

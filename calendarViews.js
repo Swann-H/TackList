@@ -88,7 +88,7 @@ function renderWeekView(container) {
     });
     allDayHtml += '</div></div>';
     
-    let timeGridHtml = `<div class="week-time-grid" style="height: 100%; overflow-y: auto; position: relative; padding-bottom: 80px;" id="week-time-grid">`;
+    let timeGridHtml = `<div class="week-time-grid" style="height: 100%; overflow-y: auto; position: relative; padding-bottom: 180px;" id="week-time-grid">`;
     
     timeGridHtml += allDayHtml;
     
@@ -182,16 +182,16 @@ function renderWeekView(container) {
 
     container.innerHTML = `<div class="h-full flex flex-col">${headerHtml}${hasAnyTasks ? timeGridHtml : ''}</div>`;
 
-    // 填充顶部导航栏
+    // 填充底部导航栏
     const _navBar = document.getElementById('view-nav-bar');
     if (_navBar) {
         _navBar.innerHTML = `
-            <div class="flex items-center gap-2 bg-theme-secondary/80 backdrop-blur-sm rounded-lg p-1">
-                <button onclick="navigateWeek(-1)" class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
+                <button onclick="navigateWeek(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-left"></i>
                 </button>
-                <h2 class="text-base font-bold text-theme-primary min-w-[240px] text-center">${weekTitle}</h2>
-                <button onclick="navigateWeek(1)" class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+                <h2 class="text-xl font-bold text-theme-primary min-w-[240px] text-center">${weekTitle}</h2>
+                <button onclick="navigateWeek(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-right"></i>
                 </button>
             </div>
@@ -492,7 +492,7 @@ function renderMonthView(container) {
                 `).join('')}
             </div>
             <div id="month-scroll" class="flex-1 min-h-0" style="overflow: hidden; position: relative;">
-            <div class="grid grid-cols-7 gap-2" id="month-grid" style="grid-auto-rows: 145px;">
+            <div class="grid grid-cols-7 gap-2" id="month-grid" style="grid-auto-rows: 150px;">
                 ${days.map(date => {
                     const dateStr = formatDate(date);
                     const dayTasks = getTasksForDate(date);
@@ -548,7 +548,7 @@ function renderMonthView(container) {
                              ondrop="handleMonthDrop(event, '${dateStr}')">
                             <div class="grid items-center mb-2" style="grid-template-columns: 1fr auto 1fr">
                                 <div class="flex justify-start">${holidayBadge || weekBadge || ''}</div>
-                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-blue-500 text-white font-bold' : 'font-medium text-theme-primary'} ${dayTasks.length > displayCount ? 'cursor-pointer hover:text-blue-500' : ''}" ${dayTasks.length > displayCount ? `onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"` : ''}>${date.getDate()}</span>
+                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-blue-500 text-white font-bold' : 'font-medium text-theme-primary'} ${dayTasks.length > displayCount ? (isToday ? 'cursor-pointer hover:bg-blue-600' : 'cursor-pointer hover:text-blue-500') : ''}" ${dayTasks.length > displayCount ? `onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"` : ''}>${date.getDate()}</span>
                                 <div class="flex justify-end">${lunarHtml || ''}</div>
                             </div>
                             <div class="space-y-1">
@@ -581,16 +581,16 @@ function renderMonthView(container) {
         </div>
     `;
 
-    // 填充顶部导航栏
+    // 填充底部导航栏
     const _navBar = document.getElementById('view-nav-bar');
     if (_navBar) {
         _navBar.innerHTML = `
-            <div class="flex items-center gap-2 bg-theme-secondary/80 backdrop-blur-sm rounded-lg p-1">
-                <button onclick="navigateMonth(-1)" class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
+                <button onclick="navigateMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-left"></i>
                 </button>
-                <h2 class="text-base font-bold text-theme-primary min-w-[240px] text-center">${year}年${month + 1}月</h2>
-                <button onclick="navigateMonth(1)" class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+                <h2 class="text-xl font-bold text-theme-primary min-w-[240px] text-center">${year}年${month + 1}月</h2>
+                <button onclick="navigateMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-right"></i>
                 </button>
             </div>
@@ -603,9 +603,9 @@ function renderMonthView(container) {
     if (monthScroll && monthGrid) {
         // 基于已知参数计算高度，不依赖 offsetHeight（可能被父容器压缩）
         const numRows = Math.ceil(monthGrid.children.length / 7);
-        const rowHeight = 145;
+        const rowHeight = 150;
         const gap = 8;
-        const gridHeight = numRows * rowHeight + (numRows - 1) * gap;
+        const gridHeight = numRows * rowHeight + (numRows - 1) * gap + 80; // +80px底部空间，避免最末行被导航栏遮挡
         // 显式设置grid高度，防止被父容器压缩
         monthGrid.style.height = gridHeight + 'px';
 
@@ -809,7 +809,16 @@ function closeMonthDayPopover() {
 
 function navigateMonth(direction) {
     closeMonthDayPopover();
-    currentDate.setMonth(currentDate.getMonth() + direction);
+    // 修复日期溢出：直接 setMonth 会在 "31日 + 目标月无31天" 时跳到下下月
+    // （如 1月31日 +1 → 3月3日）。改为先计算目标月的天数上限，
+    // 取 min(原日期, 目标月天数) 作为目标日期，避免溢出。
+    const origDay = currentDate.getDate();
+    const year = currentDate.getFullYear();
+    const targetMonth = currentDate.getMonth() + direction;
+    // 目标月的最后一天：下个月的第0天
+    const lastDayOfTargetMonth = new Date(year, targetMonth + 1, 0).getDate();
+    const safeDay = Math.min(origDay, lastDayOfTargetMonth);
+    currentDate = new Date(year, targetMonth, safeDay);
     _monthSavedScrollTop = null; // 切换月份时重置滚动位置
     renderView();
 }

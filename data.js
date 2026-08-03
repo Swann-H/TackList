@@ -982,6 +982,14 @@ function updateBgBlur() {
     const blur = document.getElementById('settings-bg-blur').value;
     document.getElementById('bg-blur-value').textContent = blur;
     document.documentElement.style.setProperty('--bg-blur', blur + 'px');
+    // 方案A：blur=0 时彻底关闭 backdrop-filter 并提升底色不透明度。
+    // backdrop-filter: blur(0px) 在多数浏览器仍会创建合成层并触发 backdrop 采样，
+    // 既不省性能，又因半透明底色导致文字与背景图重叠不可读。
+    if (parseInt(blur) === 0) {
+        document.documentElement.setAttribute('data-blur', 'off');
+    } else {
+        document.documentElement.removeAttribute('data-blur');
+    }
 }
 
 function applyBackgroundImage() {
@@ -993,7 +1001,14 @@ function applyBackgroundImage() {
         bgImage.style.opacity = (settings.bgOpacity || 100) / 100;
         bgImage.classList.remove('hidden');
         document.body.classList.add('has-bg-image');
-        document.documentElement.style.setProperty('--bg-blur', (settings.bgBlur ?? 10) + 'px');
+        const blurVal = settings.bgBlur ?? 10;
+        document.documentElement.style.setProperty('--bg-blur', blurVal + 'px');
+        // 方案A：同步 data-blur 标记，blur=0 时触发 CSS 关闭 backdrop-filter 并提升底色
+        if (parseInt(blurVal) === 0) {
+            document.documentElement.setAttribute('data-blur', 'off');
+        } else {
+            document.documentElement.removeAttribute('data-blur');
+        }
         analyzeBgImageBrightness();
     } else {
         bgImage.style.backgroundImage = 'none';
@@ -1001,6 +1016,7 @@ function applyBackgroundImage() {
         bgImage.classList.add('hidden');
         document.body.classList.remove('has-bg-image');
         document.documentElement.style.removeProperty('--bg-blur');
+        document.documentElement.removeAttribute('data-blur');
         bgImageBrightness = 0.5;
         updateBgTextAdaptation();
     }

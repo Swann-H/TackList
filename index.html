@@ -102,6 +102,9 @@
         .text-blue-400 { color: var(--accent-light) !important; }
         .hover\:text-blue-500:hover { color: var(--accent-color) !important; }
         .hover\:text-blue-600:hover { color: var(--accent-hover) !important; }
+        /* "今天"按钮固定使用蓝色，不跟随主题色变化 */
+        #today-btn { color: #3b82f6 !important; border-color: #3b82f6 !important; }
+        #today-btn:hover { color: #ffffff !important; background-color: #3b82f6 !important; }
         /* 边框 */
         .border-blue-500 { border-color: var(--accent-color) !important; }
         .border-blue-600 { border-color: var(--accent-hover) !important; }
@@ -264,22 +267,82 @@
             backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
         }
-        /* 日程视图任务卡片优先级底色：毛玻璃效果 */
-        body.has-bg-image .schedule-task-card {
-            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-        }
-        /* 任务列表项优先级底色：毛玻璃效果 */
-        body.has-bg-image .task-list-item {
-            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-        }
+        /* 日程视图任务卡片优先级底色：方案B 已移除嵌套 backdrop-filter，
+           子元素仅保留半透明优先级底色，复用父容器的模糊效果，避免嵌套模糊的性能开销 */
+        /* 任务列表项优先级底色：同上，已移除嵌套 backdrop-filter */
         /* 摘要视图切换按钮：毛玻璃效果 */
         body.has-bg-image .summary-view-toggle-active {
             background-color: rgba(59, 130, 246, 0.35) !important;
             backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             color: white !important;
+        }
+
+        /* ===== 方案A：blur=0 时彻底关闭 backdrop-filter，提升底色不透明度保证可读性 =====
+           backdrop-filter: blur(0px) 在多数浏览器仍会创建合成层并触发 backdrop 采样，
+           既不省性能，又因半透明底色（0.55）导致文字与背景图重叠不可读。
+           blur=0 时由 JS 在 <html> 上设置 data-blur="off"，触发以下 override：
+           1) 全部禁用 backdrop-filter   2) 底色从 0.55 提升到 0.92 保证文字可读 */
+        html[data-blur="off"] body.has-bg-image .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image .bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image .calendar-day,
+        html[data-blur="off"] body.has-bg-image .quadrant-card,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel,
+        html[data-blur="off"] body.has-bg-image .week-header-sticky,
+        html[data-blur="off"] body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-all-tasks-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-next7days-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-summary-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image .view-btn-active,
+        html[data-blur="off"] body.has-bg-image .summary-view-toggle-active,
+        html[data-blur="off"] body.has-bg-image #main-content .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel.bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-date-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-time-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-end-date-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-end-time-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-reminder-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-repeat-picker {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        /* --bg-secondary 系容器底色提到 0.92 */
+        html[data-blur="off"] body.has-bg-image .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #main-content .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel.bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel,
+        html[data-blur="off"] body.has-bg-image .calendar-day,
+        html[data-blur="off"] body.has-bg-image .quadrant-card {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.92) !important;
+        }
+        /* --bg-tertiary 系容器底色提到 0.92（下拉选择器提到 0.95） */
+        html[data-blur="off"] body.has-bg-image .bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-all-tasks-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-next7days-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-summary-btn.bg-theme-tertiary {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.92) !important;
+        }
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-date-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-time-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-end-date-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-end-time-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-reminder-picker,
+        html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-repeat-picker {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.95) !important;
+        }
+        /* --bg-primary 系（周视图头部）底色提到 0.92 */
+        html[data-blur="off"] body.has-bg-image .week-header-sticky {
+            background-color: rgba(var(--bg-primary-rgb, 255,255,255), 0.92) !important;
+        }
+        /* 高亮按钮底色提到 0.85 */
+        html[data-blur="off"] body.has-bg-image .view-btn-active,
+        html[data-blur="off"] body.has-bg-image .summary-view-toggle-active {
+            background-color: rgba(59, 130, 246, 0.85) !important;
         }
         /* 下拉选择器选项：跟随主题色，避免深色模式下白底白字 */
         select option {
@@ -313,17 +376,8 @@
         body.has-bg-image .week-weekend-bg {
             background-color: rgba(156, 163, 175, 0.08) !important;
         }
-        /* 周视图时刻区域任务：毛玻璃效果 */
-        body.has-bg-image .week-task-item {
-            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-        }
-        /* 月视图任务项：毛玻璃效果 */
-        body.has-bg-image .month-task-item {
-            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
-        }
-        
+        /* 周视图时刻区域任务：方案B 已移除嵌套 backdrop-filter，复用父容器模糊 */
+        /* 月视图任务项：同上，已移除嵌套 backdrop-filter */
         /* 日程视图任务卡片悬停效果 */
         .schedule-task-card {
             position: relative;
@@ -367,7 +421,13 @@
             overflow-y: auto;
             min-height: 0;
         }
-        
+
+        /* 底部导航栏：空时隐藏（非月/周/日程视图不显示） */
+        #view-nav-bar:empty { display: none; }
+        /* 底部导航栏：覆盖在内容上方，悬浮居中，内容延伸至导航栏下方，仅最底部抬高避免遮挡 */
+        #view-nav-bar:not(:empty) { pointer-events: none; }
+        #view-nav-bar:not(:empty) > * { pointer-events: auto; }
+
         /* 侧边栏底部按钮样式 */
         .sidebar-bottom-buttons {
             padding: 1rem;
@@ -1474,11 +1534,9 @@
                     </div>
                 </div>
 
-                <div id="view-nav-bar" class="flex items-center gap-2"></div>
-
                 <div class="flex items-center gap-3">
-                    <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 flex items-center justify-center hover:text-white transition group relative" style="border-color:#3b82f6;color:#3b82f6" onmouseover="this.style.backgroundColor='#3b82f6'" onmouseout="this.style.backgroundColor=''" title="今天">
-                        <i class="fas fa-calendar-day"></i>
+                    <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition group relative" title="今天">
+                        <i class="fas fa-bullseye"></i>
                     </button>
                     <button onclick="togglePlanPanel()" id="plan-btn" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition group relative" title="计划">
                         <i class="fas fa-clipboard-list"></i>
@@ -1491,10 +1549,13 @@
                     </button>
                 </div>
             </header>
-            
-            <!-- 视图容器 -->
-            <div id="view-container" class="flex-1 min-h-0">
-                <!-- 动态内容 -->
+
+            <!-- 视图容器 + 底部导航栏（导航栏悬浮覆盖在内容上方，内容延伸至导航栏下方，仅最底部抬高避免遮挡） -->
+            <div class="flex-1 min-h-0 relative">
+                <div id="view-container" class="h-full">
+                    <!-- 动态内容 -->
+                </div>
+                <div id="view-nav-bar" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20"></div>
             </div>
         </main>
         
@@ -2754,7 +2815,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.4</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.5</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">

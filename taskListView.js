@@ -565,18 +565,18 @@ function renderScheduleView(container) {
         }
     });
 
-    // 填充顶部导航栏
+    // 填充底部导航栏
     const _navBar = document.getElementById('view-nav-bar');
     if (_navBar) {
         _navBar.innerHTML = `
-            <div class="flex items-center gap-2 bg-theme-secondary/80 backdrop-blur-sm rounded-lg p-1">
-                <button onclick="navigateScheduleMonth(-1)" class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
+                <button onclick="navigateScheduleMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-left"></i>
                 </button>
-                <h2 id="schedule-nav-month" class="text-base font-bold text-theme-primary min-w-[240px] text-center">
+                <h2 id="schedule-nav-month" class="text-xl font-bold text-theme-primary min-w-[240px] text-center">
                     ${new Date().getFullYear()}年${new Date().getMonth() + 1}月
                 </h2>
-                <button onclick="navigateScheduleMonth(1)" class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition text-theme-primary">
+                <button onclick="navigateScheduleMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
                     <i class="fas fa-chevron-right"></i>
                 </button>
             </div>
