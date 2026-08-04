@@ -6,10 +6,39 @@ let currentView = 'task';
 let currentListId = null;
 let currentFilter = null;
 let currentTagIds = []; // 当前标签筛选（并集）
-let currentFilterId = null; // 当前自定义过滤器ID
+let currentFilterId = null;
 let currentDate = new Date();
 let currentTaskMode = 'text';
 let holidayData = {};
+
+// 日期边界缓存：避免每个任务都重复构造 todayStart/tomorrowStart 等 7 个 Date 对象。
+// 跨天失效：缓存中记录计算时的日期签名（年-月-日），若取用时发现已跨天则自动重建。
+let _dateBoundsCache = null;
+function getDateBounds() {
+    const now = new Date();
+    const todaySig = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    if (_dateBoundsCache && _dateBoundsCache._sig === todaySig) {
+        return _dateBoundsCache;
+    }
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const dayAfterTomorrowStart = new Date(todayStart);
+    dayAfterTomorrowStart.setDate(dayAfterTomorrowStart.getDate() + 2);
+    const threeDaysLaterStart = new Date(todayStart);
+    threeDaysLaterStart.setDate(threeDaysLaterStart.getDate() + 3);
+    const sevenDaysLaterEnd = new Date(todayStart);
+    sevenDaysLaterEnd.setDate(sevenDaysLaterEnd.getDate() + 7);
+    sevenDaysLaterEnd.setHours(23, 59, 59, 999);
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    _dateBoundsCache = {
+        _sig: todaySig,
+        now, todayStart, tomorrowStart, dayAfterTomorrowStart,
+        threeDaysLaterStart, sevenDaysLaterEnd, yesterdayStart
+    };
+    return _dateBoundsCache;
+}
 
 // 番茄计时器状态
 let pomodoroState = {
@@ -615,171 +644,197 @@ function getQuadrantColorClass(task) {
 }
 
 // 工具函数
+// filterTasks：单次遍历合并所有条件，避免链式 .filter() 重复扫描与中间数组分配。
+// 各条件被预计算为闭包/集合，循环内一次判断全部通过才入结果数组。
 function filterTasks(taskList) {
-    let filtered = taskList;
-    
-    if (currentListId) {
-        filtered = filtered.filter(t => t.listId === currentListId);
+    // 预计算各筛选条件（在循环外完成，避免每任务重复计算）
+    const hasListFilter = !!currentListId;
+    const hasTagFilter = currentTagIds && currentTagIds.length > 0;
+    const tagSet = hasTagFilter ? new Set(currentTagIds) : null;
+
+    // 最近7天筛选的时间边界
+    let recent7StartMs = 0, recent7EndMs = 0;
+    const isRecent7 = currentFilter === 'recent7days';
+    if (isRecent7) {
+        const b = getDateBounds();
+        recent7StartMs = b.todayStart.getTime();
+        recent7EndMs = b.sevenDaysLaterEnd.getTime();
     }
-    
-    if (currentFilter === 'recent7days') {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todayStartTimestamp = todayStart.getTime();
-        const day7End = new Date(todayStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-        filtered = filtered.filter(task => {
-            if (!task.startTime) return false;
-            const taskDate = new Date(task.startTime);
-            return taskDate.getTime() >= todayStartTimestamp && taskDate.getTime() < day7End.getTime();
-        });
-    }
-    
-    // 标签筛选（并集：任务的tagIds与currentTagIds有交集即通过）
-    if (currentTagIds && currentTagIds.length > 0) {
-        filtered = filtered.filter(task => {
-            const taskTags = task.tags || task.tagIds || [];
-            return taskTags.some(tagId => currentTagIds.includes(tagId));
-        });
-    }
-    
-    // 自定义过滤器筛选
+
+    // 自定义过滤器条件预解析
+    let cf = null; // { listSet?, tagSet?, important?, urgent?, timeCheck?: (task)=>bool }
     if (currentFilterId) {
         const customFilter = (settings.filters || []).find(f => f.id === currentFilterId);
         if (customFilter && customFilter.conditions) {
             const c = customFilter.conditions;
-            
-            // 清单筛选
-            if (c.listIds && c.listIds.length > 0) {
-                filtered = filtered.filter(t => c.listIds.includes(t.listId));
-            }
-            
-            // 标签筛选（交集）
-            if (c.tagIds && c.tagIds.length > 0) {
-                filtered = filtered.filter(task => {
-                    const taskTags = task.tags || [];
-                    return taskTags.some(tagId => c.tagIds.includes(tagId));
-                });
-            }
-            
-            // 重要筛选
-            if (c.important === true) {
-                filtered = filtered.filter(t => t.important);
-            } else if (c.important === false) {
-                filtered = filtered.filter(t => !t.important);
-            }
-            
-            // 紧急筛选
-            if (c.urgent === true) {
-                filtered = filtered.filter(t => t.urgent);
-            } else if (c.urgent === false) {
-                filtered = filtered.filter(t => !t.urgent);
-            }
-            
-            // 时间范围筛选
+            cf = {};
+            if (c.listIds && c.listIds.length > 0) cf.listSet = new Set(c.listIds);
+            if (c.tagIds && c.tagIds.length > 0) cf.tagSet = new Set(c.tagIds);
+            if (c.important === true) cf.important = true;
+            else if (c.important === false) cf.important = false;
+            if (c.urgent === true) cf.urgent = true;
+            else if (c.urgent === false) cf.urgent = false;
             if (c.timeRange) {
-                const now = new Date();
-                const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const todayEnd = new Date(todayStart.getTime() + 86400000);
+                const b = getDateBounds();
                 const dayOffset = settings.weekStart === 'monday' ? 1 : 0;
-                
+                const todayEnd = new Date(b.todayStart.getTime() + 86400000);
+                let rangeStart = null, rangeEnd = null, mode = 'range'; // 'range' | 'overdue' | 'nodate'
                 switch (c.timeRange) {
                     case 'today':
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= todayStart && new Date(t.startTime) < todayEnd);
-                        break;
+                        rangeStart = b.todayStart; rangeEnd = todayEnd; break;
                     case 'yesterday':
-                        const yesterdayStart = new Date(todayStart.getTime() - 86400000);
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= yesterdayStart && new Date(t.startTime) < todayStart);
-                        break;
+                        rangeStart = b.yesterdayStart; rangeEnd = b.todayStart; break;
                     case 'last3days':
-                        const last3Start = new Date(todayStart.getTime() - 2 * 86400000);
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= last3Start && new Date(t.startTime) < todayEnd);
-                        break;
-                    case 'week':
-                        const weekStart = new Date(todayStart);
-                        weekStart.setDate(weekStart.getDate() - weekStart.getDay() + dayOffset);
-                        if (todayStart.getDay() === 0 && dayOffset === 1) weekStart.setDate(weekStart.getDate() - 7);
-                        const weekEnd = new Date(weekStart.getTime() + 7 * 86400000);
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= weekStart && new Date(t.startTime) < weekEnd);
-                        break;
-                    case 'lastweek':
-                        const lastWeekStart = new Date(todayStart);
-                        lastWeekStart.setDate(lastWeekStart.getDate() - lastWeekStart.getDay() + dayOffset - 7);
-                        if (todayStart.getDay() === 0 && dayOffset === 1) lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-                        const lastWeekEnd = new Date(lastWeekStart.getTime() + 7 * 86400000);
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= lastWeekStart && new Date(t.startTime) < lastWeekEnd);
-                        break;
+                        rangeStart = new Date(b.todayStart.getTime() - 2 * 86400000); rangeEnd = todayEnd; break;
+                    case 'week': {
+                        const ws = new Date(b.todayStart);
+                        ws.setDate(ws.getDate() - ws.getDay() + dayOffset);
+                        if (b.todayStart.getDay() === 0 && dayOffset === 1) ws.setDate(ws.getDate() - 7);
+                        rangeStart = ws; rangeEnd = new Date(ws.getTime() + 7 * 86400000); break;
+                    }
+                    case 'lastweek': {
+                        const lws = new Date(b.todayStart);
+                        lws.setDate(lws.getDate() - lws.getDay() + dayOffset - 7);
+                        if (b.todayStart.getDay() === 0 && dayOffset === 1) lws.setDate(lws.getDate() - 7);
+                        rangeStart = lws; rangeEnd = new Date(lws.getTime() + 7 * 86400000); break;
+                    }
                     case 'month':
-                        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= monthStart && new Date(t.startTime) < monthEnd);
-                        break;
+                        rangeStart = new Date(b.now.getFullYear(), b.now.getMonth(), 1);
+                        rangeEnd = new Date(b.now.getFullYear(), b.now.getMonth() + 1, 1); break;
                     case 'lastmonth':
-                        const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-                        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
-                        filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= lastMonthStart && new Date(t.startTime) < lastMonthEnd);
-                        break;
+                        rangeStart = new Date(b.now.getFullYear(), b.now.getMonth() - 1, 1);
+                        rangeEnd = new Date(b.now.getFullYear(), b.now.getMonth(), 1); break;
                     case 'overdue':
-                        filtered = filtered.filter(t => t.startTime && !t.completed && new Date(t.startTime) < todayStart);
-                        break;
+                        mode = 'overdue'; rangeEnd = b.todayStart; break;
                     case 'nodate':
-                        filtered = filtered.filter(t => !t.startTime);
-                        break;
+                        mode = 'nodate'; break;
                     case 'custom':
                         if (c.customStartDate && c.customEndDate) {
-                            const customStart = new Date(c.customStartDate);
-                            const customEnd = new Date(c.customEndDate);
-                            customEnd.setHours(23, 59, 59, 999);
-                            filtered = filtered.filter(t => t.startTime && new Date(t.startTime) >= customStart && new Date(t.startTime) <= customEnd);
+                            rangeStart = new Date(c.customStartDate);
+                            rangeEnd = new Date(c.customEndDate);
+                            rangeEnd.setHours(23, 59, 59, 999);
                         }
                         break;
                 }
+                const _rs = rangeStart, _re = rangeEnd, _mode = mode;
+                cf.timeCheck = (task) => {
+                    if (_mode === 'nodate') return !task.startTime;
+                    if (!task.startTime) return false;
+                    const d = new Date(task.startTime);
+                    if (_mode === 'overdue') return !task.completed && d < _re;
+                    return d >= _rs && d < _re;
+                };
             }
         }
     }
-    
-    // 过滤已归档清单的任务
-    const archivedListIds = lists.filter(l => l.archived).map(l => l.id);
-    if (archivedListIds.length > 0) {
-        filtered = filtered.filter(t => !archivedListIds.includes(t.listId));
-    }
 
-    if (!settings.showCompleted && settings.showCompleted !== undefined) {
-        filtered = filtered.filter(t => !t.completed);
+    // 归档清单集合
+    const archivedSet = new Set();
+    lists.forEach(l => { if (l.archived) archivedSet.add(l.id); });
+    const hasArchived = archivedSet.size > 0;
+
+    const hideCompleted = !settings.showCompleted && settings.showCompleted !== undefined;
+
+    // 单次遍历合并所有条件
+    const filtered = [];
+    for (let i = 0; i < taskList.length; i++) {
+        const task = taskList[i];
+
+        // 清单筛选
+        if (hasListFilter && task.listId !== currentListId) continue;
+
+        // 标签筛选（并集）
+        if (hasTagFilter) {
+            const taskTags = task.tags || task.tagIds || [];
+            let pass = false;
+            for (let j = 0; j < taskTags.length; j++) {
+                if (tagSet.has(taskTags[j])) { pass = true; break; }
+            }
+            if (!pass) continue;
+        }
+
+        // 最近7天筛选
+        if (isRecent7) {
+            if (!task.startTime) continue;
+            const t = new Date(task.startTime).getTime();
+            if (t < recent7StartMs || t >= recent7EndMs) continue;
+        }
+
+        // 自定义过滤器
+        if (cf) {
+            if (cf.listSet && !cf.listSet.has(task.listId)) continue;
+            if (cf.tagSet) {
+                const taskTags = task.tags || [];
+                let pass = false;
+                for (let j = 0; j < taskTags.length; j++) {
+                    if (cf.tagSet.has(taskTags[j])) { pass = true; break; }
+                }
+                if (!pass) continue;
+            }
+            if (cf.important === true && !task.important) continue;
+            if (cf.important === false && task.important) continue;
+            if (cf.urgent === true && !task.urgent) continue;
+            if (cf.urgent === false && task.urgent) continue;
+            if (cf.timeCheck && !cf.timeCheck(task)) continue;
+        }
+
+        // 归档清单
+        if (hasArchived && archivedSet.has(task.listId)) continue;
+
+        // 完成态
+        if (hideCompleted && task.completed) continue;
+
+        filtered.push(task);
     }
-    
     return filtered;
 }
 
 // 生成标签胶囊HTML（用于各视图中的任务项）
 // maxDisplay: 最多显示几个标签胶囊，超出显示+N
 // position: 'left' 或 'right'，决定胶囊在任务标题的哪一侧
+// 使用 _getTagsByIdMap() 预构建索引，消除每任务 allTags.find 的 O(N×M) 线性查找
+let _tagsByIdMapCache = null;
+let _tagsByIdMapSig = null;
+function _getTagsByIdMap() {
+    const allTags = settings.tags || [];
+    // 签名：长度 + 末尾标签ID，捕获 push/splice 等原地修改（引用不变但内容已变）
+    const last = allTags.length > 0 ? allTags[allTags.length - 1].id : '';
+    const sig = allTags.length + '|' + last;
+    if (_tagsByIdMapCache && _tagsByIdMapSig === sig) return _tagsByIdMapCache;
+    const m = new Map();
+    for (let i = 0; i < allTags.length; i++) m.set(allTags[i].id, allTags[i]);
+    _tagsByIdMapCache = m;
+    _tagsByIdMapSig = sig;
+    return m;
+}
+
 function renderTagCapsules(task, maxDisplay = 2, position = 'left') {
     const taskTags = task.tags || [];
     if (taskTags.length === 0) return '';
-    
-    const allTags = settings.tags || [];
+
+    const tagMap = _getTagsByIdMap();
     const displayTags = taskTags.slice(0, maxDisplay);
     const remaining = taskTags.length - maxDisplay;
-    
+
     const capsules = displayTags.map(tagId => {
-        const tag = allTags.find(t => t.id === tagId);
+        const tag = tagMap.get(tagId);
         if (!tag) return '';
         const displayName = tag.name.length > 8 ? tag.name.substring(0, 8) + '…' : tag.name;
         return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: ${tag.color}">${displayName}</span>`;
     }).filter(Boolean).join('');
-    
+
     const moreHtml = remaining > 0 ? `<span class="text-[10px] text-theme-muted cursor-pointer hover:text-theme-primary transition" onclick="event.stopPropagation(); expandTagCapsules(this, '${task.id}')" title="点击展开全部标签">+${remaining}</span>` : '';
-    
+
     // 隐藏的完整标签列表
     const allCapsules = taskTags.map(tagId => {
-        const tag = allTags.find(t => t.id === tagId);
+        const tag = tagMap.get(tagId);
         if (!tag) return '';
         const displayName = tag.name.length > 8 ? tag.name.substring(0, 8) + '…' : tag.name;
         return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: ${tag.color}">${displayName}</span>`;
     }).filter(Boolean).join('');
-    
+
     const hiddenFull = taskTags.length > maxDisplay ? `<span class="hidden tag-capsules-full">${allCapsules}</span>` : '';
-    
+
     return `<span class="inline-flex items-center gap-1 flex-shrink-0 tag-capsules-container" data-task-id="${task.id}">${capsules}${moreHtml}${hiddenFull}</span>`;
 }
 

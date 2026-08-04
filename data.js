@@ -120,6 +120,7 @@ async function refreshDataFromServer() {
         if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
         if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
         if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
+        if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
         // 多标签页同步过来的新 tasks 会让番茄任务推荐列表缓存失效，必须清空。
         // 否则面板打开时仍展示旧数据，违反“多标签页任务同步”的一致性预期。
         if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
@@ -410,6 +411,7 @@ function updateHolidayCountdown() {
 function saveData() {
     // 结构性变更（增删/改期/设置等）经此保存，令日程视图流水线缓存失效
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
+    if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
     // 本地 tasks 已变更，番茄任务推荐列表缓存同样需要失效，下次打开面板时重新排序
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
     // 节流：500ms 内只发送一次，避免高频写入冲突
@@ -473,6 +475,7 @@ function _doSaveData() {
 // 立即保存（不走节流），用于导入等一次性操作
 function saveDataImmediate() {
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
+    if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
     // 本地 tasks 已变更，番茄任务推荐列表缓存同样需要失效
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
     _saveInFlight = true; // 标记保存正在进行，防止 refreshDataFromServer 覆盖本地数据
@@ -488,8 +491,13 @@ function saveDataImmediate() {
 function saveTaskPatch(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return Promise.resolve();
-    // 单任务变更（如完成/取消完成）同样会影响番茄任务推荐列表的排序，需失效缓存
+    // 单任务变更（如完成/取消完成）同样会影响各视图派生缓存，需同步失效。
+    // 风险防范：任何写入 tasks 的操作都必须清空视图层缓存，否则会出现：
+    //   - 内存泄漏：缓存持有已删除任务的引用，GC 无法回收
+    //   - 数据不同步：缓存返回旧分组/过滤结果，界面不更新
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
+    if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
+    if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
     _saveInFlight = true; // 防止刷新覆盖本地未持久化的变更
     return fetch('/api/tasks/' + encodeURIComponent(taskId), {
         method: 'PATCH',
@@ -537,6 +545,7 @@ function _mergeServerData(serverData) {
     pomodoroHistory = deduplicatePomodoroHistory(serverData.pomodoroHistory || pomodoroHistory);
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
+    if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
 }
 
 function importData(file) {
@@ -922,6 +931,7 @@ async function loadData() {
     // 数据加载完成后重建专注时长缓存与搜索索引（覆盖上方所有恢复分支）
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
+    if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
 }
 
 // 主题系统

@@ -1913,6 +1913,9 @@
                     <button onclick="postponeOverdueTasks()" id="postpone-btn" class="hidden w-10 h-10 rounded-full border-2 border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-500 hover:text-white transition group relative" title="顺延任务">
                         <i class="fas fa-forward"></i>
                     </button>
+                    <button onclick="toggleAllTaskListGroups()" id="toggle-all-groups-btn" class="hidden w-10 h-10 rounded-full border-2 border-teal-500 text-teal-500 flex items-center justify-center hover:bg-teal-500 hover:text-white transition group relative" title="全部展开">
+                        <i class="fas fa-angles-down"></i>
+                    </button>
                     <button onclick="openAddTaskModal()" id="add-task-btn" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务">
                         <i class="fas fa-plus"></i>
                     </button>
@@ -1924,6 +1927,7 @@
                             <button id="mobile-more-today" onclick="closeMobileMoreMenu(); goToToday()"><i class="fas fa-bullseye w-5"></i>今天</button>
                             <button id="mobile-more-plan" onclick="closeMobileMoreMenu(); togglePlanPanel()"><i class="fas fa-clipboard-list w-5"></i>计划</button>
                             <button id="mobile-more-postpone" onclick="closeMobileMoreMenu(); postponeOverdueTasks()"><i class="fas fa-forward w-5"></i>顺延</button>
+                            <button id="mobile-more-toggle-groups" onclick="closeMobileMoreMenu(); toggleAllTaskListGroups()"><i class="fas fa-angles-down w-5"></i>全部展开</button>
                         </div>
                     </div>
                 </div>
@@ -3209,7 +3213,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.6</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.7</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">

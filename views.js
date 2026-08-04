@@ -72,6 +72,15 @@ function updateViewButtons() {
             todayBtn.classList.add('hidden');
         }
     }
+
+    const toggleGroupsBtn = document.getElementById('toggle-all-groups-btn');
+    if (toggleGroupsBtn) {
+        if (currentView === 'task' && currentListId !== '__archived__') {
+            toggleGroupsBtn.classList.remove('hidden');
+        } else {
+            toggleGroupsBtn.classList.add('hidden');
+        }
+    }
 }
 
 function renderView() {

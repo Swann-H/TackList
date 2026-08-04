@@ -3527,10 +3527,18 @@ function toggleTaskComplete(taskId) {
         renderLists();
         if (typeof renderTags === 'function') renderTags();
         // 日程视图下非结构性变更走局部更新，避免全量重渲染（保持滚动位置、消除跳动）
-        if (structuralChange
-            || currentView !== 'schedule'
-            || typeof refreshScheduleDayCardsForTask !== 'function'
-            || !refreshScheduleDayCardsForTask(taskId)) {
+        if (structuralChange) {
+            // 结构性变更（如重复任务生成）必然全量重渲染
+            renderView();
+        } else if (currentView === 'schedule'
+            && typeof refreshScheduleDayCardsForTask === 'function'
+            && refreshScheduleDayCardsForTask(taskId)) {
+            // 日程视图局部更新成功
+        } else if (currentView === 'task'
+            && typeof refreshTaskListItemForToggle === 'function'
+            && refreshTaskListItemForToggle(taskId)) {
+            // 任务列表视图局部更新成功
+        } else {
             renderView();
         }
 

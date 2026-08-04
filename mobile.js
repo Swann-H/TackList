@@ -147,7 +147,8 @@ function _syncMobileMoreMenu() {
     const pairs = [
         ['today-btn', 'mobile-more-today'],
         ['plan-btn', 'mobile-more-plan'],
-        ['postpone-btn', 'mobile-more-postpone']
+        ['postpone-btn', 'mobile-more-postpone'],
+        ['toggle-all-groups-btn', 'mobile-more-toggle-groups']
     ];
     pairs.forEach(([srcId, dstId]) => {
         const src = document.getElementById(srcId);
