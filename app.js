@@ -50,6 +50,7 @@ function openSettingsModal() {
     document.getElementById('settings-default-duration').value = settings.defaultDuration !== undefined ? settings.defaultDuration : 30;
     document.getElementById('settings-default-view').value = settings.defaultView || 'task';
     document.getElementById('settings-week-start').value = settings.weekStart || 'monday';
+    document.getElementById('settings-no-date-position').value = settings.noDateTaskPosition || 'last';
     document.getElementById('settings-show-completed').checked = settings.showCompleted !== false;
     document.getElementById('settings-show-lunar').checked = settings.showLunar !== false;
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
@@ -423,6 +424,7 @@ function saveSettings(silent) {
     settings.defaultDuration = parseInt(document.getElementById('settings-default-duration').value) || 30;
     settings.defaultView = document.getElementById('settings-default-view').value;
     settings.weekStart = document.getElementById('settings-week-start').value;
+    settings.noDateTaskPosition = document.getElementById('settings-no-date-position').value;
     settings.showCompleted = document.getElementById('settings-show-completed').checked;
     settings.showLunar = document.getElementById('settings-show-lunar').checked;
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;

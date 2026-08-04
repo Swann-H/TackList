@@ -24,3 +24,9 @@ documents/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent workspace data
+.workbuddy/
+
+# Reference/backup app copy
+TackList-reference/

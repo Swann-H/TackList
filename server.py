@@ -45,6 +45,7 @@ DEFAULT_DATA = {
         "weekStart": "monday",
         "showCompleted": True,
         "showLunar": True,
+        "noDateTaskPosition": "last",
         "focusDuration": 25,
         "shortBreakDuration": 5,
         "longBreakDuration": 15,

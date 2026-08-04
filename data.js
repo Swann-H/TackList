@@ -736,6 +736,7 @@ const DEFAULT_SETTINGS = {
     weekStart: 'monday',
     showCompleted: true,
     showLunar: true,
+    noDateTaskPosition: 'last',
     focusDuration: 25,
     shortBreakDuration: 5,
     longBreakDuration: 15,

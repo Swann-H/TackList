@@ -1396,6 +1396,369 @@
             border-color: var(--accent-color, #3b82f6);
             background-color: rgba(59, 130, 246, 0.08);
         }
+
+        /* ==================== 移动端适配（依据《移动端显示适配.md》v3.0） ==================== */
+        /* 4.2 消除移动端 300ms 点击延迟并禁止双击缩放 */
+        html, body, button, [onclick], input, select, textarea, a, label { touch-action: manipulation; }
+
+        /* 移动端专用元素：桌面端隐藏 */
+        #mobile-fab, #sidebar-overlay, #mobile-more-btn, #sidebar-close-btn { display: none; }
+        .mobile-collapse-arrow, .mobile-q-arrow { display: none; }
+
+        /* 长按动作面板（Action Sheet，全平台样式，仅移动端会创建） */
+        #mobile-action-sheet { position: fixed; inset: 0; z-index: 70; }
+        #mobile-action-sheet .mobile-as-mask { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+        #mobile-action-sheet .mobile-as-panel {
+            position: absolute; left: 0; right: 0; bottom: 0;
+            background: var(--bg-secondary); border-radius: 16px 16px 0 0;
+            padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+            animation: mobileSheetUp 0.25s ease;
+            box-shadow: 0 -8px 30px rgba(0,0,0,0.25);
+        }
+        @keyframes mobileSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        #mobile-action-sheet .mobile-as-title {
+            padding: 12px 16px; font-size: 13px; color: var(--text-muted);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            border-bottom: 1px solid var(--border-color);
+        }
+        #mobile-action-sheet .mobile-as-item {
+            display: flex; align-items: center; gap: 12px; width: 100%;
+            padding: 14px 16px; min-height: 52px; font-size: 15px;
+            color: var(--text-primary); border-radius: 10px;
+        }
+        #mobile-action-sheet .mobile-as-item:hover { background: var(--bg-tertiary); }
+        #mobile-action-sheet .mobile-as-danger { color: #ef4444; }
+        #mobile-action-sheet .mobile-as-cancel {
+            justify-content: center; margin-top: 4px;
+            border-top: 1px solid var(--border-color); border-radius: 0;
+            color: var(--text-secondary);
+        }
+
+        @media (max-width: 768px) {
+            /* ---- 4.1 视口高度：使用 dvh 避免动态地址栏遮挡 ---- */
+            #app-container { min-height: 100dvh !important; }
+            #main-content { height: 100dvh !important; padding: 12px !important; }
+
+            /* ---- 5.1 侧边栏：左侧抽屉 ---- */
+            #sidebar {
+                position: fixed !important;
+                left: 0 !important;
+                top: 0;
+                bottom: 0;
+                width: 280px !important;
+                height: 100dvh !important;
+                min-height: 100dvh !important;
+                max-height: 100dvh !important;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease !important;
+                z-index: 51;
+                box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+            }
+            body.sidebar-open #sidebar { transform: translateX(0); }
+            #sidebar-overlay {
+                display: block;
+                position: fixed;
+                inset: 0;
+                z-index: 50;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s ease;
+            }
+            body.sidebar-open #sidebar-overlay { opacity: 1; pointer-events: auto; }
+            .mobile-menu-btn { display: inline-flex !important; }
+            #sidebar-close-btn { display: flex !important; }
+            #sidebar button { min-height: 40px; }
+            #sidebar .sidebar-action-btn { width: 44px !important; height: 44px !important; font-size: 1rem; }
+            #sidebar .group-hover\:opacity-100 { opacity: 1 !important; }
+            .mobile-collapse-header { cursor: pointer; user-select: none; -webkit-user-select: none; }
+            .mobile-collapse-arrow { display: inline-block !important; margin-right: 6px; width: 12px; transition: transform 0.2s ease; }
+            .mobile-collapse-header.mobile-collapsed .mobile-collapse-arrow { transform: rotate(-90deg); }
+            #sidebar .mobile-collapse-content.mobile-collapsed { display: none; }
+
+            /* ---- 5.2 顶部导航 ---- */
+            #main-header { margin-bottom: 12px !important; gap: 8px; }
+            #header-left { flex: 1; min-width: 0; gap: 8px !important; }
+            #view-tabs {
+                flex: 1;
+                min-width: 0;
+                overflow-x: auto;
+                overflow-y: hidden;
+                white-space: nowrap;
+                scrollbar-width: none;
+                -webkit-overflow-scrolling: touch;
+            }
+            #view-tabs::-webkit-scrollbar { display: none; }
+            #view-tabs > button {
+                flex-shrink: 0;
+                height: 40px;
+                padding: 0 14px !important;
+                display: inline-flex;
+                align-items: center;
+                white-space: nowrap;
+            }
+            #today-btn, #plan-btn, #postpone-btn, #add-task-btn { display: none !important; }
+            #mobile-more-btn { display: flex !important; flex-shrink: 0; }
+            #mobile-more-menu {
+                position: absolute;
+                right: 0;
+                top: calc(100% + 8px);
+                z-index: 60;
+                min-width: 148px;
+                border-radius: 12px;
+                padding: 6px;
+                background: var(--bg-secondary);
+                border: 1px solid var(--border-color);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+            }
+            #mobile-more-menu > button {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                width: 100%;
+                padding: 12px 14px;
+                min-height: 44px;
+                border-radius: 8px;
+                font-size: 14px;
+                color: var(--text-primary);
+                text-align: left;
+            }
+            #mobile-more-menu > button:hover { background: var(--bg-tertiary); }
+            #mobile-more-menu > button.hidden { display: none; }
+
+            /* ---- 4.3/6.1 添加任务 FAB ---- */
+            #mobile-fab {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                position: fixed;
+                right: 16px;
+                bottom: calc(20px + env(safe-area-inset-bottom));
+                width: 56px;
+                height: 56px;
+                border-radius: 50%;
+                z-index: 45;
+                background: var(--accent-color);
+                color: #ffffff;
+                font-size: 20px;
+                border: none;
+                box-shadow: 0 6px 16px rgba(0,0,0,0.28);
+                transition: transform 0.25s ease, opacity 0.25s ease;
+            }
+            #mobile-fab.fab-mini { transform: scale(0.72); opacity: 0.55; }
+            #mobile-fab.fab-hidden { transform: scale(0); opacity: 0; pointer-events: none; }
+            /* 周/月/日程视图底部有悬浮导航栏时抬高 FAB 避免遮挡 */
+            body:has(#view-nav-bar:not(:empty)) #mobile-fab { bottom: calc(84px + env(safe-area-inset-bottom)); }
+
+            /* ---- 5.3 任务列表：卡片式 + 大触控区 ---- */
+            .task-list-item { padding: 12px 12px 12px 14px !important; min-height: 56px; row-gap: 2px; flex-wrap: wrap; }
+            .task-list-item > button:first-of-type { position: relative; flex-shrink: 0; }
+            .task-list-item > button:first-of-type::after { content: ''; position: absolute; inset: -12px; }
+            .task-list-item > span.flex-1 { min-width: calc(100% - 88px); }
+            .task-list-item > div.text-xs {
+                flex: 1 1 auto;
+                min-width: 0;
+                padding-left: 32px;
+                color: var(--text-muted) !important;
+                font-size: 11px !important;
+                overflow: hidden;
+            }
+            .task-list-item > span.text-xs { font-size: 11px !important; }
+            .task-list-item .mobile-priority-icon { margin-left: 6px; }
+            .pomodoro-focus-btn { opacity: 1 !important; width: 32px !important; height: 32px !important; }
+            .pomodoro-focus-btn .pf-icon-outline { display: none !important; }
+            .pomodoro-focus-btn .pf-icon-solid { display: inline-block !important; font-size: 15px; }
+            /* 分组标题吸顶 */
+            [data-task-group] > div:first-child {
+                position: sticky;
+                top: -1px;
+                z-index: 8;
+                background: var(--bg-secondary);
+                margin-left: -16px;
+                margin-right: -16px;
+                padding: 4px 16px;
+            }
+
+            /* ---- 5.9/5.10 任务详情 & 计划面板：全屏页 ---- */
+            #task-detail-panel, #plan-panel {
+                position: fixed !important;
+                top: 0 !important;
+                right: 0 !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                width: 100% !important;
+                height: 100dvh !important;
+                min-height: 100dvh !important;
+                z-index: 52 !important;
+                border: none !important;
+            }
+            /* 命令面板模态浮层模式：移动端同样全屏 */
+            #task-detail-panel.fixed { transform: none !important; max-height: 100dvh !important; box-shadow: none !important; }
+            #task-detail-panel:not(.hidden), #plan-panel:not(.hidden) { animation: mobilePanelIn 0.28s ease; }
+            @keyframes mobilePanelIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+            #task-detail-panel > div:last-child,
+            #plan-panel > div:last-child { padding-bottom: calc(1rem + env(safe-area-inset-bottom)) !important; }
+            #detail-task-title { font-size: 18px !important; }
+            #task-detail-panel input[type="date"], #task-detail-panel input[type="time"] { min-height: 40px; }
+
+            /* ---- 5.12 设置/弹窗：全屏页 ---- */
+            #settings-modal, #add-task-modal { padding: 0 !important; align-items: stretch !important; }
+            #settings-modal > div:first-child, #add-task-modal > div:first-child {
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                border-radius: 0 !important;
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+            }
+            #settings-content-scroll { padding: 16px !important; }
+            #settings-content-scroll h3 { position: sticky; top: -17px; z-index: 5; background: var(--bg-secondary); padding: 8px 0; }
+
+            /* ---- 6.2 命令面板：全屏搜索页 ---- */
+            #command-palette-overlay { padding-top: 0 !important; align-items: stretch !important; }
+            #command-palette {
+                max-width: 100% !important;
+                width: 100% !important;
+                height: 100dvh;
+                border-radius: 0 !important;
+                display: flex;
+                flex-direction: column;
+            }
+            #command-palette-results { max-height: none !important; flex: 1 1 auto; }
+            #command-palette-results > * { min-height: 56px; }
+
+            /* ---- 5.4 日程视图 ---- */
+            .schedule-day-drop { padding: 12px !important; }
+            .schedule-day-drop > div:first-child { gap: 12px !important; margin-bottom: 12px !important; }
+            .schedule-task-item { gap: 8px !important; }
+            .schedule-task-item > div.w-8 { width: 28px; }
+            .schedule-task-card { padding: 10px !important; }
+            .schedule-task-item button[class*="rounded-full"],
+            .quadrant-drop-zone button[class*="rounded-full"] { position: relative; }
+            .schedule-task-item button[class*="rounded-full"]::after,
+            .quadrant-drop-zone button[class*="rounded-full"]::after { content: ''; position: absolute; inset: -10px; }
+
+            /* ---- 5.5 周视图：单日模式 ---- */
+            .mobile-week-hidden { display: none !important; }
+            .mobile-week-day-header { cursor: pointer; }
+            .mobile-week-day-header.mobile-week-selected > div:first-child {
+                background: var(--accent-bg);
+                border-radius: 8px;
+                margin: 2px;
+            }
+            #week-time-grid .week-header-sticky > div.flex-shrink-0:first-child,
+            #week-time-grid > div.flex > div.flex-shrink-0:first-child { width: 40px !important; }
+
+            /* ---- 5.6 月视图 ---- */
+            #month-grid { grid-auto-rows: minmax(60px, 1fr) !important; gap: 4px !important; }
+            #month-scroll { overflow-y: auto !important; }
+            #month-view-container > div:first-child { gap: 4px !important; }
+            .calendar-day { padding: 4px !important; border-radius: 8px !important; overflow: hidden; }
+            .calendar-day > div:first-child { margin-bottom: 2px !important; font-size: 12px; }
+            .calendar-day .w-7.h-7 { width: 22px !important; height: 22px !important; }
+            .calendar-day > div.space-y-1 { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+            .calendar-day > div.space-y-1 > * { margin-top: 0 !important; }
+            .calendar-day .month-task-item {
+                display: inline-block;
+                width: 6px !important;
+                height: 6px !important;
+                min-width: 6px;
+                padding: 0 !important;
+                border-radius: 50% !important;
+                border-left-width: 6px !important;
+                background-color: transparent !important;
+                overflow: hidden;
+                flex-shrink: 0;
+            }
+            .calendar-day .month-task-item > span { display: none; }
+            .calendar-day > button.absolute { display: none; }
+            .calendar-day .relative.text-xs span.absolute { display: none; }
+            .calendar-day .relative.text-xs { font-size: 10px; width: 100%; }
+            /* 月视图日期浮层：全屏页 */
+            #month-day-popover {
+                inset: 0 !important;
+                transform: none !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+                border-radius: 0 !important;
+            }
+
+            /* ---- 5.7 四象限：纵向排列 + 卡片折叠 ---- */
+            #quadrants-container {
+                display: flex !important;
+                flex-direction: column;
+                gap: 12px !important;
+                overflow-y: auto;
+                padding-bottom: 80px;
+            }
+            .quadrant-card { flex-shrink: 0; }
+            .quadrant-card .quadrant-drop-zone { max-height: 38vh !important; }
+            .quadrant-card.mobile-q-collapsed .quadrant-drop-zone,
+            .quadrant-card.mobile-q-collapsed > div.mb-2 { display: none !important; }
+            .mobile-q-arrow { display: inline-block !important; margin-left: 6px; transition: transform 0.2s ease; }
+            .quadrant-card.mobile-q-collapsed .mobile-q-arrow { transform: rotate(-90deg); }
+            .quadrant-drag-handle .fa-arrows-alt { display: none; }
+            .quadrant-drag-handle { cursor: pointer !important; }
+
+            /* ---- 5.8 摘要视图：纵向堆叠 ---- */
+            .summary-container > div:first-child { flex-wrap: wrap; gap: 8px !important; padding: 12px 12px 8px !important; }
+            .summary-container select { font-size: 13px !important; padding: 6px 8px !important; max-width: 46vw; }
+            .summary-container > div:nth-child(2) {
+                flex-direction: column;
+                overflow-y: auto;
+                padding: 0 12px 12px !important;
+                gap: 12px !important;
+            }
+            .summary-container > div:nth-child(2) > div:first-child { width: 100% !important; flex: none !important; }
+            #summary-content-scroll { flex: none !important; min-height: 50vh; }
+            .summary-container h1.text-2xl { font-size: 20px !important; }
+
+            /* ---- 5.11 番茄专注页 ---- */
+            #pomodoro-bg-container { flex-direction: column; }
+            #pomodoro-left-panel { flex: 1 1 auto !important; padding: 16px !important; }
+            #pomodoro-right-panel {
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                top: auto;
+                max-height: 48%;
+                z-index: 30;
+                overflow-y: auto;
+                border-radius: 20px 20px 0 0;
+                padding: 16px !important;
+                box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
+            }
+            #pomodoro-circle { width: min(62vw, 260px) !important; height: min(62vw, 260px) !important; margin-bottom: 16px !important; }
+            #pomodoro-time { font-size: clamp(2.4rem, 13vw, 4rem) !important; }
+            #pomodoro-phase { font-size: 18px !important; }
+            #pomodoro-main-btns { gap: 12px !important; flex-wrap: wrap; justify-content: center; }
+            #pomodoro-main-btns > button { min-height: 52px; padding-left: 22px !important; padding-right: 22px !important; }
+            #pomodoro-stats-btn { top: 16px !important; right: 16px !important; bottom: auto !important; }
+            #pomodoro-settings-btn { top: 16px !important; right: 56px !important; bottom: auto !important; }
+            #pomodoro-toggle-panel-btn { top: 16px !important; right: 96px !important; bottom: auto !important; }
+            #pomodoro-fullscreen-btn { top: 16px !important; right: 136px !important; bottom: auto !important; }
+            #pomodoro-back-btn { padding: 8px; }
+            #pomodoro-task-panel { width: 100% !important; }
+
+            /* ---- 底部悬浮导航栏紧凑化 ---- */
+            #view-nav-bar { bottom: 8px !important; }
+            #view-nav-bar > div { gap: 12px !important; padding: 10px 16px !important; }
+            #view-nav-bar h2 { min-width: 0 !important; font-size: 16px !important; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #view-nav-bar button { min-width: 36px; min-height: 36px; }
+
+            /* ---- 6.5 Hover 状态解除：触屏常驻显示 ---- */
+            .detail-tag-chip .tag-remove-btn { visibility: visible; }
+        }
+
+        /* ---- 640px 以下手机精细适配 ---- */
+        @media (max-width: 640px) {
+            #view-tabs > button { padding: 0 12px !important; font-size: 14px; }
+            .schedule-container h3 { font-size: 17px !important; }
+            #main-content h2.text-2xl { font-size: 20px !important; }
+            #pomodoro-circle { width: min(70vw, 240px) !important; height: min(70vw, 240px) !important; }
+        }
     </style>
 </head>
 <body class="min-h-screen">
@@ -1411,6 +1774,9 @@
                     <i class="fas fa-calendar-check text-blue-500"></i>
                     <h1 class="text-xl font-bold text-theme-primary">日程管理</h1>
                 </div>
+                <button onclick="closeMobileSidebar()" id="sidebar-close-btn" class="p-2 hover:bg-theme-tertiary rounded-lg transition items-center justify-center" title="关闭">
+                    <i class="fas fa-times text-theme-muted"></i>
+                </button>
             </div>
             
             <!-- 清单列表区域 -->
@@ -1523,9 +1889,12 @@
         <!-- 主内容区 -->
         <main id="main-content" class="flex-1 main-content p-6 flex flex-col h-screen overflow-hidden">
             <!-- 顶部导航 -->
-            <header class="flex items-center justify-between mb-6 flex-shrink-0">
-                <div class="flex items-center gap-4">
-                    <div class="flex gap-2 bg-theme-secondary rounded-lg p-1">
+            <header class="flex items-center justify-between mb-6 flex-shrink-0" id="main-header">
+                <div class="flex items-center gap-4" id="header-left">
+                    <button onclick="toggleMobileSidebar()" id="mobile-menu-btn" class="mobile-menu-btn w-10 h-10 items-center justify-center text-theme-primary flex-shrink-0 rounded-lg hover:bg-theme-tertiary" title="菜单">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <div class="flex gap-2 bg-theme-secondary rounded-lg p-1" id="view-tabs">
                         <button onclick="switchView('task')" id="view-btn-task" data-view="task" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">任务</button>
                         <button onclick="switchView('schedule')" id="view-btn-schedule" data-view="schedule" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">日程</button>
                         <button onclick="switchView('week')" id="view-btn-week" data-view="week" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">周</button>
@@ -1534,7 +1903,7 @@
                     </div>
                 </div>
 
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3" id="header-actions">
                     <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition group relative" title="今天">
                         <i class="fas fa-bullseye"></i>
                     </button>
@@ -1544,9 +1913,19 @@
                     <button onclick="postponeOverdueTasks()" id="postpone-btn" class="hidden w-10 h-10 rounded-full border-2 border-orange-500 text-orange-500 flex items-center justify-center hover:bg-orange-500 hover:text-white transition group relative" title="顺延任务">
                         <i class="fas fa-forward"></i>
                     </button>
-                    <button onclick="openAddTaskModal()" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务">
+                    <button onclick="openAddTaskModal()" id="add-task-btn" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务">
                         <i class="fas fa-plus"></i>
                     </button>
+                    <div class="relative">
+                        <button onclick="toggleMobileMoreMenu(event)" id="mobile-more-btn" class="w-10 h-10 rounded-full border-2 border-theme text-theme-secondary flex items-center justify-center transition" title="更多">
+                            <i class="fas fa-ellipsis-h"></i>
+                        </button>
+                        <div id="mobile-more-menu" class="hidden">
+                            <button id="mobile-more-today" onclick="closeMobileMoreMenu(); goToToday()"><i class="fas fa-bullseye w-5"></i>今天</button>
+                            <button id="mobile-more-plan" onclick="closeMobileMoreMenu(); togglePlanPanel()"><i class="fas fa-clipboard-list w-5"></i>计划</button>
+                            <button id="mobile-more-postpone" onclick="closeMobileMoreMenu(); postponeOverdueTasks()"><i class="fas fa-forward w-5"></i>顺延</button>
+                        </div>
+                    </div>
                 </div>
             </header>
 
@@ -1827,6 +2206,13 @@
         </aside>
     </div>
     
+    <!-- 移动端侧边栏遮罩 -->
+    <div id="sidebar-overlay" class="modal-overlay" onclick="closeMobileSidebar()"></div>
+    <!-- 移动端悬浮添加按钮（FAB） -->
+    <button id="mobile-fab" onclick="openAddTaskModal()" aria-label="添加任务" title="添加任务">
+        <i class="fas fa-plus"></i>
+    </button>
+
     <!-- Toast通知容器 -->
     <div id="toast-container" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex flex-col-reverse items-center gap-4 pointer-events-none w-[90%] max-w-sm">
     </div>
@@ -2002,7 +2388,7 @@
                 <button onclick="togglePomodoroRightPanel()" id="pomodoro-toggle-panel-btn" class="absolute bottom-4 right-16 text-white hover:text-gray-200 p-2" title="收起概况">
                     <i id="pomodoro-toggle-panel-icon" class="fas fa-angles-right text-xl"></i>
                 </button>
-                <button onclick="togglePomodoroFullscreen()" class="absolute bottom-4 right-4 text-white hover:text-gray-200 p-2" title="全屏">
+                <button onclick="togglePomodoroFullscreen()" id="pomodoro-fullscreen-btn" class="absolute bottom-4 right-4 text-white hover:text-gray-200 p-2" title="全屏">
                     <i class="fas fa-expand text-xl"></i>
                 </button>
                 
@@ -2494,6 +2880,14 @@
                                     <option value="sunday">周日</option>
                                 </select>
                             </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">无日期任务显示位置</label>
+                                <p class="text-xs text-theme-secondary mb-1">未设置时间的任务在任务/日程视图中的位置</p>
+                                <select id="settings-no-date-position" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="first">优先显示</option>
+                                    <option value="last">最末显示</option>
+                                </select>
+                            </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="text-sm font-medium text-theme-primary">显示已完成任务</label>
@@ -2815,7 +3209,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.5</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.6</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3084,5 +3478,6 @@
     <script src="easterEgg.js"></script>
     <script src="holiday.js"></script>
     <script src="app.js"></script>
+<script src="mobile.js"></script>
 </body>
 </html>

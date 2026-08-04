@@ -1056,6 +1056,8 @@ function saveDetailTimeConfig() {
     if (newStartTime) {
         task.startTime = newStartTime;
         task.isAllDay = isAllDay;
+        // 手动修改时间后，清除顺延保留的原始时间
+        delete task._originalStartTime;
     } else {
         delete task.startTime;
         task.isAllDay = false;
@@ -2000,7 +2002,7 @@ function saveTaskDetail() {
     const dateValue = document.getElementById('detail-task-date').value;
     const timeValue = document.getElementById('detail-task-time').value;
     const isAllDay = !timeValue;
-    
+
     if (dateValue && timeValue && !isAllDay) {
         task.startTime = new Date(`${dateValue}T${timeValue}`).toISOString();
         task.isAllDay = false;
@@ -2011,6 +2013,8 @@ function saveTaskDetail() {
         delete task.startTime;
         task.isAllDay = false;
     }
+    // 手动修改时间后，清除顺延保留的原始时间
+    delete task._originalStartTime;
     
     if (isTimeRangeMode) {
         const endDateValue = document.getElementById('detail-task-end-date').value;
@@ -2745,7 +2749,7 @@ function saveTaskDetailWithoutClose() {
     const dateValue = document.getElementById('detail-task-date').value;
     const timeValue = document.getElementById('detail-task-time').value;
     const isAllDay = !timeValue;
-    
+
     if (dateValue && timeValue && !isAllDay) {
         task.startTime = new Date(`${dateValue}T${timeValue}`).toISOString();
         task.isAllDay = false;
@@ -2756,6 +2760,8 @@ function saveTaskDetailWithoutClose() {
         delete task.startTime;
         task.isAllDay = false;
     }
+    // 手动修改时间后，清除顺延保留的原始时间
+    delete task._originalStartTime;
     
     if (isTimeRangeMode) {
         const endDateValue = document.getElementById('detail-task-end-date').value;
@@ -3326,7 +3332,11 @@ function createNextRepeatTask(task) {
     if (!task.startTime) return null;
 
     const repeatMode = task.repeat.repeatMode || 'startTime';
-    const baseDate = repeatMode === 'completeTime' ? new Date() : new Date(task.startTime);
+    // startTime模式下，若任务被顺延，startTime 已被改为顺延日期，
+    // 应以原始设定时间作为重复基准，避免周/月基准被顺延日期带偏
+    const baseDate = repeatMode === 'completeTime'
+        ? new Date()
+        : new Date(task._originalStartTime || task.startTime);
     const completeTime = new Date();
     let nextDate = null;
 
@@ -3465,6 +3475,8 @@ function createNextRepeatTask(task) {
     newTask.completed = false;
     newTask.completedAt = null;
     newTask.createdAt = new Date().toISOString();
+    // 新任务的 startTime 即为新的重复基准，清除顺延保留的原始时间
+    delete newTask._originalStartTime;
 
     if (task.isAllDay) {
         newTask.startTime = new Date(formatDate(nextDate) + 'T00:00:00').toISOString();
@@ -3558,6 +3570,11 @@ function postponeOverdueTasks() {
     
     const today = new Date();
     overdueTasks.forEach(task => {
+        // 保留原始设定时间，供 startTime 重复模式计算下次周期使用
+        // （顺延只改本次显示日期，不应偏移重复基准）
+        if (!task._originalStartTime) {
+            task._originalStartTime = task.startTime;
+        }
         const oldStart = new Date(task.startTime);
         oldStart.setFullYear(today.getFullYear(), today.getMonth(), today.getDate());
         task.startTime = oldStart.toISOString();
