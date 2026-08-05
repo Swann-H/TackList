@@ -562,6 +562,8 @@ let isTimeRangeMode = false;
 let detailReadOnly = false;
 
 function onDetailAllDayChange() {
+    const detailPanel = document.getElementById('task-detail-panel');
+    if (!detailPanel || detailPanel.classList.contains('hidden')) return;
     const timeInput = document.getElementById('detail-task-time');
     const endTimeInput = document.getElementById('detail-task-end-time');
     const timeValue = timeInput.value;

@@ -2430,9 +2430,14 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                     <div class="flex flex-col flex-1 min-h-0">
                         <div class="flex items-center justify-between mb-3 group">
                             <h3 class="text-lg font-semibold text-theme-primary">历史记录</h3>
-                            <button onclick="openPomodoroStatsRecords()" class="text-xs text-theme-muted hover:text-white transition opacity-0 group-hover:opacity-100" title="查看更多">
-                                查看更多 <i class="fas fa-arrow-right ml-0.5"></i>
-                            </button>
+                            <div class="flex items-center gap-3">
+                                <button onclick="openPomodoroAddRecord()" class="text-xs text-theme-muted hover:text-white transition opacity-0 group-hover:opacity-100" title="新增记录">
+                                    <i class="fas fa-plus mr-0.5"></i>新增记录
+                                </button>
+                                <button onclick="openPomodoroStatsRecords()" class="text-xs text-theme-muted hover:text-white transition opacity-0 group-hover:opacity-100" title="查看更多">
+                                    查看更多 <i class="fas fa-arrow-right ml-0.5"></i>
+                                </button>
+                            </div>
                         </div>
                         <div id="pomodoro-history" class="space-y-2 overflow-y-auto flex-1 min-h-0">
                         </div>
@@ -2541,6 +2546,65 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                 <div id="stats-records" class="max-h-96 overflow-y-auto"></div>
             </div>
         </div>
+        </div>
+    </div>
+
+    <!-- 新增专注记录弹窗 -->
+    <div id="pomodoro-add-record-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center overflow-y-auto py-8" onclick="closePomodoroAddRecord()">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-md mx-4 fade-in shadow-2xl" onclick="event.stopPropagation()">
+            <div class="p-6 border-b border-theme">
+                <h2 class="text-xl font-bold text-theme-primary"><i class="fas fa-plus-circle text-green-500 mr-2"></i>新增专注记录</h2>
+            </div>
+            <div class="p-6 space-y-4">
+                <!-- 开始时间（必填） -->
+                <div>
+                    <label class="block text-sm font-medium text-theme-secondary mb-1.5">开始时间 <span class="text-red-500">*</span></label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="relative">
+                            <input type="date" id="add-record-start-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openAddRecordDatePicker(this, 'add-record-start-date-picker')" onchange="onAddRecordStartChange()">
+                            <div id="add-record-start-date-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                        </div>
+                        <div class="relative">
+                            <input type="time" id="add-record-start-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openTimePicker(this, 'add-record-start-time-picker')" onchange="onAddRecordStartChange()">
+                            <div id="add-record-start-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 结束时间（选填） -->
+                <div>
+                    <label class="block text-sm font-medium text-theme-secondary mb-1.5">结束时间</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="relative">
+                            <input type="date" id="add-record-end-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openAddRecordDatePicker(this, 'add-record-end-date-picker')" onchange="onAddRecordEndTimeChange()">
+                            <div id="add-record-end-date-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                        </div>
+                        <div class="relative">
+                            <input type="time" id="add-record-end-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openTimePicker(this, 'add-record-end-time-picker')" onchange="onAddRecordEndTimeChange()">
+                            <div id="add-record-end-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 番茄数（选填） -->
+                <div>
+                    <label class="block text-sm font-medium text-theme-secondary mb-1.5">番茄数</label>
+                    <input type="number" id="add-record-pomodoro-count" min="0.5" step="0.5" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary" placeholder="输入后将自动计算结束时间" onchange="onAddRecordPomodoroCountChange()">
+                </div>
+
+                <!-- 关联任务（选填） -->
+                <div>
+                    <label class="block text-sm font-medium text-theme-secondary mb-1.5">关联任务 <span class="text-xs text-theme-muted">（选填，默认一般专注）</span></label>
+                    <button type="button" onclick="openPomodoroAddRecordTaskPanel()" class="w-full px-3 py-1.5 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-tertiary flex items-center justify-between transition">
+                        <span id="add-record-task-text" class="flex items-center truncate"><i class="fas fa-circle text-gray-400 mr-2 text-xs"></i>一般专注</span>
+                        <i class="fas fa-chevron-right text-xs flex-shrink-0 ml-2"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="p-6 border-t border-theme flex justify-end gap-2">
+                <button onclick="closePomodoroAddRecord()" class="px-4 py-2 text-sm border border-theme rounded-lg text-theme-secondary hover:bg-theme-tertiary transition">取消</button>
+                <button onclick="submitPomodoroAddRecord()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition">确认</button>
+            </div>
         </div>
     </div>
 
@@ -3121,7 +3185,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                     </div>
 
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.7</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.8</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">

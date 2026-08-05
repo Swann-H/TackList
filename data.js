@@ -542,7 +542,16 @@ function _mergeServerData(serverData) {
     lists = serverLists.length > 0 ? serverLists : lists;
     applySettings(serverData.settings);
     quadrantOrder = serverData.quadrantOrder || quadrantOrder;
-    pomodoroHistory = deduplicatePomodoroHistory(serverData.pomodoroHistory || pomodoroHistory);
+    // 合并 pomodoroHistory：以服务器数据为基础，但保留本地新增的记录
+    // （如手动新增的专注记录，可能尚未被服务器保存，版本冲突时不能丢失）
+    const serverHistory = serverData.pomodoroHistory || [];
+    const serverHistoryKeys = new Set(
+        serverHistory.map(h => (h.startedAt || '') + '|' + (h.taskId || ''))
+    );
+    const localOnlyRecords = pomodoroHistory.filter(
+        h => !serverHistoryKeys.has((h.startedAt || '') + '|' + (h.taskId || ''))
+    );
+    pomodoroHistory = deduplicatePomodoroHistory([...serverHistory, ...localOnlyRecords]);
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();

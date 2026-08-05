@@ -752,6 +752,9 @@ function renderPomodoroPage() {
                         <div class="flex items-center justify-between">
                             <span class="text-sm text-theme-secondary">${startStr} - ${endStr}</span>
                             <div class="flex items-center gap-1 flex-shrink-0">
+                                <button onclick="event.stopPropagation(); deletePomodoroRecord(${recordIdx})" class="${pomodoroRecordDeleteConfirmingIdx === recordIdx ? 'flex text-red-500' : 'hidden group-hover:flex text-white/40 hover:text-white'} items-center justify-center w-5 h-5 rounded hover:bg-white/15 transition" title="${pomodoroRecordDeleteConfirmingIdx === recordIdx ? '再次单击确认删除' : '删除'}">
+                                    <i class="fas fa-trash text-xs"></i>
+                                </button>
                                 <button onclick="event.stopPropagation(); openRelinkTaskPanel(${recordIdx})" class="hidden group-hover:flex items-center justify-center w-5 h-5 rounded hover:bg-white/15 text-white/40 hover:text-white transition" title="关联任务">
                                     <i class="fas fa-link text-xs"></i>
                                 </button>
@@ -877,6 +880,15 @@ function openPomodoroTaskPanel() {
 function closePomodoroTaskPanel() {
     document.getElementById('pomodoro-task-panel').classList.add('translate-x-full');
     document.getElementById('pomodoro-task-panel-overlay').classList.add('hidden');
+    // 如果任务选择面板是从"新增专注记录"弹窗中打开的，关闭后重新显示弹窗
+    if (_addRecordTaskPanelOpen) {
+        _addRecordTaskPanelOpen = false;
+        const modal = document.getElementById('pomodoro-add-record-modal');
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+    }
 }
 
 function selectPomodoroTask(taskId) {
@@ -2223,6 +2235,388 @@ function relinkTask(recordIdx, taskId) {
     showToast('专注记录已重新关联', 'success');
 }
 
+// 新增记录弹窗专用日期选择器：今天/昨天/前天/上周最后一个工作日
+function openAddRecordDatePicker(inputEl, pickerId) {
+    const picker = document.getElementById(pickerId);
+    if (!picker) return;
+
+    document.querySelectorAll('.date-picker-dropdown').forEach(p => {
+        if (p.id !== pickerId) p.classList.add('hidden');
+    });
+    document.querySelectorAll('.time-picker-dropdown').forEach(p => {
+        p.classList.add('hidden');
+    });
+
+    if (!picker.classList.contains('hidden')) {
+        picker.classList.add('hidden');
+        return;
+    }
+
+    picker.innerHTML = '';
+    const now = new Date();
+    const shortDayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    const weekStartsOnMonday = settings.weekStart === 'monday';
+
+    function formatDate(date) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    function addDateOption(label, date) {
+        const dateStr = formatDate(date);
+        const item = document.createElement('div');
+        item.className = 'px-3 py-1.5 text-sm cursor-pointer text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition flex justify-between items-center';
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = label;
+        const dateSpan = document.createElement('span');
+        dateSpan.className = 'text-xs opacity-60';
+        dateSpan.textContent = dateStr;
+        item.appendChild(labelSpan);
+        item.appendChild(dateSpan);
+        item.dataset.value = dateStr;
+        item.onclick = (e) => {
+            e.stopPropagation();
+            inputEl.value = dateStr;
+            picker.classList.add('hidden');
+            inputEl.dispatchEvent(new Event('change'));
+        };
+        picker.appendChild(item);
+    }
+
+    // 1. 今天
+    addDateOption('今天', now);
+
+    // 2. 昨天
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    addDateOption('昨天', yesterday);
+
+    // 3. 前天
+    const dayBeforeYesterday = new Date(now);
+    dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
+    addDateOption('前天', dayBeforeYesterday);
+
+    // 4. 上周最后一个工作日（显示为"上周X"）
+    const currentWeekStart = getWeekStartDate(now, weekStartsOnMonday);
+    const lastWeekStart = new Date(currentWeekStart);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const lastWeekLastWorkday = findLastWorkdayOfWeek(lastWeekStart, weekStartsOnMonday);
+    if (lastWeekLastWorkday) {
+        const dayName = shortDayNames[lastWeekLastWorkday.getDay()];
+        addDateOption('上周' + dayName, lastWeekLastWorkday);
+    }
+
+    picker.classList.remove('hidden');
+    picker.classList.add('date-picker-dropdown');
+
+    requestAnimationFrame(() => {
+        const currentValue = inputEl.value;
+        if (currentValue) {
+            const targetItem = picker.querySelector(`[data-value="${currentValue}"]`);
+            if (targetItem) {
+                targetItem.scrollIntoView({ block: 'center' });
+            }
+        }
+    });
+}
+
+// ==================== 手动新增专注记录 ====================
+// 记录弹窗中最后填写的字段（'endTime' 或 'pomodoroCount'），决定互算优先级
+let _addRecordLastFilled = null;
+// 弹窗中当前关联的任务ID（null = 一般专注）
+let _addRecordTaskId = null;
+// 标记任务选择面板是否从"新增专注记录"弹窗中打开（关闭面板时据此恢复弹窗显示）
+let _addRecordTaskPanelOpen = false;
+
+// ==================== 删除专注记录（二次确认）====================
+// 当前处于"删除确认中"的记录索引，-1 表示无。同一时刻只允许一条记录处于确认状态。
+let pomodoroRecordDeleteConfirmingIdx = -1;
+
+// 删除专注记录：第一次点击进入确认态（图标变红），3秒内再次点击才真正删除
+function deletePomodoroRecord(recordIdx) {
+    if (recordIdx == null || recordIdx < 0 || recordIdx >= pomodoroHistory.length) return;
+
+    // 统计页可见时需要同步刷新，否则删除后列表不更新
+    const statsPageVisible = !document.getElementById('pomodoro-stats-page')?.classList.contains('hidden');
+    const refreshAll = () => {
+        renderPomodoroPage();
+        if (statsPageVisible) renderPomodoroStats();
+    };
+
+    if (pomodoroRecordDeleteConfirmingIdx === recordIdx) {
+        // 第二次点击：确认删除
+        pomodoroRecordDeleteConfirmingIdx = -1;
+        const removed = pomodoroHistory.splice(recordIdx, 1)[0];
+        rebuildFocusMinutesCache();
+        refreshAll();
+        // 立即保存，避免版本冲突丢失
+        saveDataImmediate().then(() => {
+            refreshAll();
+        });
+        const taskName = (removed && removed.taskName) ? removed.taskName : '一般专注';
+        showToast(`已删除专注记录（${taskName}）`, 'success');
+        return;
+    }
+
+    // 第一次点击：进入确认状态，重置其他记录的确认态
+    pomodoroRecordDeleteConfirmingIdx = recordIdx;
+    refreshAll();
+
+    // 3秒后自动取消确认（参考清单删除的交互）
+    setTimeout(() => {
+        if (pomodoroRecordDeleteConfirmingIdx === recordIdx) {
+            pomodoroRecordDeleteConfirmingIdx = -1;
+            refreshAll();
+        }
+    }, 3000);
+}
+
+function openPomodoroAddRecord() {
+    // 重置字段，默认日期为今日
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    document.getElementById('add-record-start-date').value = todayStr;
+    document.getElementById('add-record-start-time').value = '';
+    document.getElementById('add-record-end-date').value = todayStr;
+    document.getElementById('add-record-end-time').value = '';
+    document.getElementById('add-record-pomodoro-count').value = '';
+    _addRecordLastFilled = null;
+    _addRecordTaskId = null;
+    _addRecordTaskPanelOpen = false;
+
+    updateAddRecordTaskDisplay();
+
+    const modal = document.getElementById('pomodoro-add-record-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closePomodoroAddRecord() {
+    // 如果任务选择面板正打开，一并关闭（不重新显示弹窗）
+    if (_addRecordTaskPanelOpen) {
+        _addRecordTaskPanelOpen = false;
+        document.getElementById('pomodoro-task-panel').classList.add('translate-x-full');
+        document.getElementById('pomodoro-task-panel-overlay').classList.add('hidden');
+    }
+    const modal = document.getElementById('pomodoro-add-record-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    if (typeof closeAllTimePickers === 'function') closeAllTimePickers();
+}
+
+// 更新关联任务按钮的显示文本
+function updateAddRecordTaskDisplay() {
+    const textEl = document.getElementById('add-record-task-text');
+    if (_addRecordTaskId) {
+        const task = tasks.find(t => t.id === _addRecordTaskId);
+        if (task) {
+            const list = task.listId ? lists.find(l => l.id === task.listId) : null;
+            const listColor = list ? list.color : '#9ca3af';
+            textEl.innerHTML = `<span class="w-2 h-2 rounded-full inline-block mr-2 flex-shrink-0" style="background-color: ${listColor}"></span><span class="truncate">${escapeHtml(task.title)}</span>`;
+            return;
+        }
+    }
+    textEl.innerHTML = '<i class="fas fa-circle text-gray-400 mr-2 text-xs"></i>一般专注';
+}
+
+// 打开关联任务的滑入面板（复用现有面板）
+function openPomodoroAddRecordTaskPanel() {
+    document.getElementById('pomodoro-task-panel-title').textContent = '关联任务';
+    renderPomodoroTaskList(
+        (taskId) => `selectPomodoroAddRecordTask(${taskId ? `'${taskId}'` : 'null'})`,
+        _addRecordTaskId
+    );
+    // 隐藏弹窗避免层级冲突，关闭面板时由 closePomodoroTaskPanel 恢复显示
+    const modal = document.getElementById('pomodoro-add-record-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    _addRecordTaskPanelOpen = true;
+
+    document.getElementById('pomodoro-task-panel').classList.remove('translate-x-full');
+    document.getElementById('pomodoro-task-panel-overlay').classList.remove('hidden');
+}
+
+function selectPomodoroAddRecordTask(taskId) {
+    closePomodoroTaskPanel();
+    _addRecordTaskId = taskId || null;
+    updateAddRecordTaskDisplay();
+}
+
+// 获取弹窗中的开始时间 Date 对象（无效则返回 null）
+function _getAddRecordStart() {
+    const d = document.getElementById('add-record-start-date').value;
+    const t = document.getElementById('add-record-start-time').value;
+    if (!d || !t) return null;
+    return new Date(`${d}T${t}`);
+}
+
+// 获取弹窗中的结束时间 Date 对象（无效则返回 null）
+function _getAddRecordEnd() {
+    const d = document.getElementById('add-record-end-date').value;
+    const t = document.getElementById('add-record-end-time').value;
+    if (!d || !t) return null;
+    return new Date(`${d}T${t}`);
+}
+
+// 将 Date 格式化为 input[type=date] 的 YYYY-MM-DD 格式
+function _formatDateInput(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+// 将 Date 格式化为 input[type=time] 的 HH:MM 格式
+function _formatTimeInput(date) {
+    const h = String(date.getHours()).padStart(2, '0');
+    const m = String(date.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+}
+
+// 开始时间变化时，根据最后填写的字段重新计算另一项
+function onAddRecordStartChange() {
+    const start = _getAddRecordStart();
+    if (!start) return;
+
+    if (_addRecordLastFilled === 'pomodoroCount') {
+        // 番茄数为准：根据番茄数重算结束时间
+        _recalcEndFromPomodoro(start);
+    } else if (_addRecordLastFilled === 'endTime') {
+        // 结束时间为准：根据结束时间重算番茄数
+        _recalcPomodoroFromEnd(start);
+    }
+}
+
+// 结束时间变化时：标记最后填写为 endTime，重算番茄数
+function onAddRecordEndTimeChange() {
+    const end = _getAddRecordEnd();
+    if (!end) return; // 结束时间未完整填写，不做处理
+
+    _addRecordLastFilled = 'endTime';
+
+    const start = _getAddRecordStart();
+    if (!start) return; // 开始时间尚未填写，待开始时间填好后由 onAddRecordStartChange 触发重算
+
+    _recalcPomodoroFromEnd(start, end);
+}
+
+// 番茄数变化时：标记最后填写为 pomodoroCount，重算结束时间
+function onAddRecordPomodoroCountChange() {
+    const count = parseFloat(document.getElementById('add-record-pomodoro-count').value);
+    if (isNaN(count) || count <= 0) return;
+
+    _addRecordLastFilled = 'pomodoroCount';
+
+    const start = _getAddRecordStart();
+    if (!start) return; // 开始时间尚未填写，待开始时间填好后由 onAddRecordStartChange 触发重算
+
+    _recalcEndFromPomodoro(start, count);
+}
+
+// 根据结束时间反算番茄数
+function _recalcPomodoroFromEnd(start, end) {
+    if (!end) end = _getAddRecordEnd();
+    if (!end || end <= start) return;
+
+    const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
+    const durationMin = Math.round((end - start) / 60000);
+    const count = durationMin / fd;
+    // 保留1位小数（如 1.5 番茄），整数则省略小数
+    const display = count % 1 === 0 ? String(count) : count.toFixed(1);
+    document.getElementById('add-record-pomodoro-count').value = display;
+}
+
+// 根据番茄数反算结束时间
+function _recalcEndFromPomodoro(start, count) {
+    if (!count) {
+        const raw = document.getElementById('add-record-pomodoro-count').value;
+        count = parseFloat(raw);
+    }
+    if (!count || count <= 0) return;
+
+    const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
+    const durationMin = Math.round(count * fd);
+    const end = new Date(start.getTime() + durationMin * 60000);
+
+    document.getElementById('add-record-end-date').value = _formatDateInput(end);
+    document.getElementById('add-record-end-time').value = _formatTimeInput(end);
+}
+
+// 提交新增专注记录
+function submitPomodoroAddRecord() {
+    const start = _getAddRecordStart();
+    if (!start) {
+        showToast('请填写开始时间（日期和时间）', 'warning');
+        return;
+    }
+
+    const end = _getAddRecordEnd();
+    const pomodoroCount = parseFloat(document.getElementById('add-record-pomodoro-count').value);
+    const hasEnd = !!end;
+    const hasCount = !isNaN(pomodoroCount) && pomodoroCount > 0;
+
+    if (!hasEnd && !hasCount) {
+        showToast('请填写结束时间或番茄数（至少一项）', 'warning');
+        return;
+    }
+
+    let finalEnd, durationMin;
+
+    if (_addRecordLastFilled === 'pomodoroCount' && hasCount) {
+        // 番茄数为准
+        const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
+        durationMin = Math.max(1, Math.round(pomodoroCount * fd));
+        finalEnd = new Date(start.getTime() + durationMin * 60000);
+    } else if (hasEnd) {
+        // 结束时间为准（或默认）
+        if (end <= start) {
+            showToast('结束时间必须晚于开始时间', 'warning');
+            return;
+        }
+        durationMin = Math.max(1, Math.round((end - start) / 60000));
+        finalEnd = end;
+    } else {
+        // 仅有番茄数
+        const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
+        durationMin = Math.max(1, Math.round(pomodoroCount * fd));
+        finalEnd = new Date(start.getTime() + durationMin * 60000);
+    }
+
+    // 校验：结束时间不能超过当前时刻
+    const now = new Date();
+    if (finalEnd > now) {
+        showToast('结束时间不能超过当前时刻', 'warning');
+        return;
+    }
+
+    // 构造记录（与服务器端 _do_pomodoro_complete 的结构一致）
+    const task = _addRecordTaskId ? tasks.find(t => t.id === _addRecordTaskId) : null;
+    const startedAtISO = start.toISOString();
+    const endedAtISO = finalEnd.toISOString();
+
+    const record = {
+        date: endedAtISO,
+        startedAt: startedAtISO,
+        endedAt: endedAtISO,
+        duration: durationMin,
+        taskName: task ? task.title : '一般专注',
+        taskId: _addRecordTaskId || null
+    };
+
+    pomodoroHistory.push(record);
+    rebuildFocusMinutesCache();
+    renderPomodoroPage();
+    closePomodoroAddRecord();
+    showToast('专注记录已添加', 'success');
+    // 立即保存（不走节流），保存完成后重新渲染确保数据同步
+    saveDataImmediate().then(() => {
+        renderPomodoroPage();
+    });
+}
+
 function openBoringModal() {
     boringState.shownThings = [];
     boringState.swapCount = 0;
@@ -3028,6 +3422,7 @@ function renderStatsRecords() {
                 '<div class="flex items-center justify-between">' +
                 '<span class="text-sm text-theme-secondary"><i class="fas fa-clock mr-1"></i>' + startStr + ' - ' + endStr + '</span>' +
                 '<div class="flex items-center gap-1 flex-shrink-0">' +
+                '<button onclick="event.stopPropagation(); deletePomodoroRecord(' + recordIdx + ')" class="' + (pomodoroRecordDeleteConfirmingIdx === recordIdx ? 'flex text-red-500' : 'hidden group-hover:flex text-theme-muted hover:text-blue-500') + ' items-center justify-center w-5 h-5 rounded hover:bg-theme-primary transition" title="' + (pomodoroRecordDeleteConfirmingIdx === recordIdx ? '再次单击确认删除' : '删除') + '"><i class="fas fa-trash text-xs"></i></button>' +
                 '<button onclick="event.stopPropagation(); openRelinkTaskPanel(' + recordIdx + ')" class="hidden group-hover:flex items-center justify-center w-5 h-5 rounded hover:bg-theme-primary text-theme-muted hover:text-blue-500 transition" title="关联任务"><i class="fas fa-link text-xs"></i></button>' +
                 '<span class="text-xs text-theme-muted">' + duration + 'm</span>' +
                 '</div></div>' +
