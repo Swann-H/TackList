@@ -1182,26 +1182,26 @@ const BUILTIN_PALETTES = {
             border: '#23322c'
         }
     },
-    rose: {
+    amber: {
         light: {
-            accent: '#F43F5E', accentHover: '#e11d48',
-            accentSecondary: '#FB7185', accentBg: '#fff1f2', accentBgStrong: '#ffe4e6',
-            accentTextDark: '#e11d48', accentLight: '#FB7185',
-            bgPrimary: '#fef7f8', bgPrimaryRgb: '254,247,248',
+            accent: '#F59E0B', accentHover: '#D97706',
+            accentSecondary: '#FBBF24', accentBg: '#FEF3C7', accentBgStrong: '#FDE68A',
+            accentTextDark: '#B45309', accentLight: '#FBBF24',
+            bgPrimary: '#FFFBEB', bgPrimaryRgb: '255,251,235',
             bgSecondary: '#ffffff', bgSecondaryRgb: '255,255,255',
-            bgTertiary: '#ffe4e6', bgTertiaryRgb: '255,228,230',
-            textPrimary: '#4c0519', textSecondary: '#6b7280', textMuted: '#78716c',
-            border: '#fecdd3'
+            bgTertiary: '#FEF3C7', bgTertiaryRgb: '254,243,199',
+            textPrimary: '#451A03', textSecondary: '#57534E', textMuted: '#92400E',
+            border: '#FDE68A'
         },
         dark: {
-            accent: '#F43F5E', accentHover: '#e11d48',
-            accentSecondary: '#FB7185', accentBg: 'rgba(244,63,94,0.15)', accentBgStrong: 'rgba(244,63,94,0.25)',
-            accentTextDark: '#fda4af', accentLight: '#fda4af',
-            bgPrimary: '#1a1014', bgPrimaryRgb: '26,16,20',
-            bgSecondary: '#241319', bgSecondaryRgb: '36,19,25',
-            bgTertiary: '#331c24', bgTertiaryRgb: '51,28,36',
-            textPrimary: '#fef2f5', textSecondary: '#fda4af', textMuted: '#f87171',
-            border: '#331c24'
+            accent: '#FBBF24', accentHover: '#FCD34D',
+            accentSecondary: '#F59E0B', accentBg: 'rgba(245,158,11,0.15)', accentBgStrong: 'rgba(245,158,11,0.25)',
+            accentTextDark: '#FCD34D', accentLight: '#FCD34D',
+            bgPrimary: '#1A1407', bgPrimaryRgb: '26,20,7',
+            bgSecondary: '#261D0A', bgSecondaryRgb: '38,29,10',
+            bgTertiary: '#322510', bgTertiaryRgb: '50,37,16',
+            textPrimary: '#FEF3C7', textSecondary: '#FCD34D', textMuted: '#FBBF24',
+            border: '#322510'
         }
     }
 };
@@ -1283,7 +1283,7 @@ function generatePaletteFromAccent(hex) {
 }
 
 // 根据调色板名解析出调色板对象（用于应用和预览）
-// 支持的 key：none / builtin:blue / builtin:green / builtin:rose / custom:<hex> / vibrant / muted / dark
+// 支持的 key：none / builtin:blue / builtin:green / builtin:amber / custom:<hex> / vibrant / muted / dark
 // 优先级：用户编辑后的 customPalettes > 内置 BUILTIN_PALETTES / themePaletteColors
 function resolvePaletteObject(name) {
     if (!name || name === 'none') return null;
@@ -1303,6 +1303,24 @@ function resolvePaletteObject(name) {
         return settings.themePaletteColors[name];
     }
     return null;
+}
+
+// 修复旧版本遗留数据：内置配色被用户编辑后，深色变体(dark)的次级背景
+// 可能被误存为白色(#fff)，导致深色模式下出现白色面板。此类纯白的次级背景
+// 对深色变体而言必然是错误的，直接丢弃该内置配色的自定义记录，回退到修正后的内置值。
+function repairStalePaletteCustoms() {
+    if (!settings.customPalettes) return;
+    const WHITE_VALUES = ['#ffffff', '#fff', 'rgb(255,255,255)', 'rgba(255,255,255,1)'];
+    Object.keys(BUILTIN_PALETTES).forEach(function (key) {
+        const name = 'builtin:' + key;
+        const p = settings.customPalettes[name];
+        if (p && p.dark && WHITE_VALUES.indexOf(String(p.dark.bgSecondary).toLowerCase()) !== -1) {
+            delete settings.customPalettes[name];
+        }
+    });
+    if (settings.customPalettes && Object.keys(settings.customPalettes).length === 0) {
+        settings.customPalettes = null;
+    }
 }
 
 // ==================== 背景图主题色提取（从背景图生成 3 套调色板） ====================

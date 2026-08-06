@@ -17,7 +17,7 @@ function switchView(view) {
     currentView = view;
     const mainHeader = document.querySelector('#main-content > header');
     if (mainHeader) {
-        if (view === 'summary' || view === 'filterEdit') {
+        if (view === 'summary' || view === 'filterEdit' || view === 'countdown') {
             mainHeader.classList.add('hidden');
         } else {
             mainHeader.classList.remove('hidden');
@@ -113,6 +113,13 @@ function renderView() {
             break;
         case 'summary':
             renderSummaryView(container);
+            break;
+        case 'countdown':
+            if (typeof renderCountdownView === 'function') {
+                renderCountdownView(container);
+            } else {
+                renderTaskListView(container);
+            }
             break;
         case 'filterEdit':
             renderFilterEditView(container);

@@ -1428,9 +1428,9 @@ function _renderPalettePreviews(palettes) {
 
 // 配色显示名称映射
 const PALETTE_DISPLAY_NAMES = {
-    'builtin:blue': '蓝色',
-    'builtin:green': '绿色',
-    'builtin:rose': '玫红',
+    'builtin:blue': '星夜',
+    'builtin:green': '春野',
+    'builtin:amber': '夕照',
     'vibrant': '鲜艳',
     'muted': '柔和',
     'dark': '深色'
@@ -1706,7 +1706,7 @@ function resetPaletteEdit(paletteKey) {
 
 // 渲染配色卡片上的撤销按钮（仅当该配色有编辑记录时显示）
 function _renderPaletteResetButtons() {
-    const paletteKeys = ['builtin:blue', 'builtin:green', 'builtin:rose', 'vibrant', 'muted', 'dark'];
+    const paletteKeys = ['builtin:blue', 'builtin:green', 'builtin:amber', 'vibrant', 'muted', 'dark'];
     paletteKeys.forEach(key => {
         const btn = document.querySelector('.palette-reset-btn[data-palette-key="' + key + '"]');
         if (btn) {

@@ -558,6 +558,10 @@ function updateSidebarHighlight() {
         btn.classList.remove('bg-blue-50', 'text-blue-600', 'bg-theme-tertiary', 'font-semibold');
     });
 
+    // 清除侧边栏倒计时框高亮
+    const cdBox = document.getElementById('holiday-countdown');
+    if (cdBox) cdBox.classList.remove('cd-active');
+
     // 高亮当前视图对应的按钮
     if (currentFilterId) {
         // 自定义过滤器激活时
@@ -575,6 +579,8 @@ function updateSidebarHighlight() {
     } else if (currentView === 'summary') {
         const btn = document.getElementById('sidebar-summary-btn');
         if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+    } else if (currentView === 'countdown') {
+        if (cdBox) cdBox.classList.add('cd-active');
     } else if (currentView === 'task' && currentListId) {
         if (currentListId === '__archived__') {
             const btn = document.getElementById('sidebar-archived-btn');

@@ -324,87 +324,10 @@ function checkHolidayDataUpdate() {
 }
 
 function updateHolidayCountdown() {
-    const labelEl = document.getElementById('holiday-countdown-label');
-    const numberEl = document.getElementById('holiday-countdown-number');
-    const dateEl = document.getElementById('holiday-countdown-date');
-    if (!labelEl || !numberEl || !dateEl) return;
-
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const currentYear = now.getFullYear().toString();
-    const currentYearData = holidayData[currentYear];
-    const nextYearData = holidayData[(now.getFullYear() + 1).toString()];
-
-    let holidayGroups = {};
-
-    function collectGroups(yearStr, yearData) {
-        if (!yearData || !yearData.holidays) return;
-        const holidays = yearData.holidays;
-        const sortedDates = Object.keys(holidays).sort();
-        let i = 0;
-        while (i < sortedDates.length) {
-            const name = holidays[sortedDates[i]];
-            const groupDates = [sortedDates[i]];
-            let j = i + 1;
-            while (j < sortedDates.length && holidays[sortedDates[j]] === name) {
-                const prevDate = new Date(parseInt(yearStr), parseInt(sortedDates[j - 1].split('-')[0]) - 1, parseInt(sortedDates[j - 1].split('-')[1]));
-                const currDate = new Date(parseInt(yearStr), parseInt(sortedDates[j].split('-')[0]) - 1, parseInt(sortedDates[j].split('-')[1]));
-                const diff = (currDate - prevDate) / 86400000;
-                if (diff === 1) {
-                    groupDates.push(sortedDates[j]);
-                    j++;
-                } else {
-                    break;
-                }
-            }
-            if (groupDates.length > 2) {
-                if (!holidayGroups[name] || new Date(yearStr + '-' + groupDates[0]) < holidayGroups[name].startDate) {
-                    holidayGroups[name] = {
-                        startDate: new Date(yearStr + '-' + groupDates[0]),
-                        firstDateStr: groupDates[0],
-                        count: groupDates.length
-                    };
-                }
-            }
-            i = j;
-        }
-    }
-
-    collectGroups(currentYear, currentYearData);
-    collectGroups((now.getFullYear() + 1).toString(), nextYearData);
-
-    let nextHoliday = null;
-    let minDiff = Infinity;
-    for (const name in holidayGroups) {
-        const group = holidayGroups[name];
-        const diff = (group.startDate - now) / 86400000;
-        if (diff > 0 && diff < minDiff) {
-            minDiff = Math.ceil(diff);
-            nextHoliday = { name: name, startDate: group.startDate, days: Math.max(0, minDiff - 1) };
-        }
-    }
-
-    if (nextHoliday) {
-        labelEl.textContent = '距' + nextHoliday.name + '还有';
-        numberEl.textContent = nextHoliday.days;
-        const m = nextHoliday.startDate.getMonth() + 1;
-        const d = nextHoliday.startDate.getDate();
-        dateEl.textContent = m + '月' + d + '日起';
-        
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        if (nextHoliday.days === 3) {
-            numberEl.style.color = isDark ? '#FFB74D' : '#E67E22';
-        } else if (nextHoliday.days === 2) {
-            numberEl.style.color = isDark ? '#FF8A65' : '#E65100';
-        } else if (nextHoliday.days === 1) {
-            numberEl.style.color = isDark ? '#EF5350' : '#C62828';
-        } else {
-            numberEl.style.color = '';
-        }
-    } else {
-        labelEl.textContent = '暂无假期信息';
-        numberEl.textContent = '-';
-        dateEl.textContent = '';
+    // 展示职责已迁移至 countdown.js 的 renderSidebarCountdown（支持固定多个倒计时）；
+    // 此处保留同名函数以便 holiday.js / 节假日抓取逻辑继续调用。
+    if (typeof renderSidebarCountdown === 'function') {
+        renderSidebarCountdown();
     }
 }
 
@@ -792,11 +715,15 @@ const DEFAULT_SETTINGS = {
     customPalettes: null, // 用户编辑后的自定义调色板 { builtin:blue: {light:{...}, dark:{...}}, ... }
     holidayApiUrl: '',
     tags: [],
-    filters: []
+    filters: [],
+    countdowns: [],
+    pinnedCountdowns: []
 };
 
 function applySettings(parsed) {
     settings = Object.assign({}, DEFAULT_SETTINGS, parsed || {});
+    // 修复旧版本遗留：内置配色深色变体次级背景被误存为白色（详见 utils.js repairStalePaletteCustoms）
+    if (typeof repairStalePaletteCustoms === 'function') repairStalePaletteCustoms();
     pomodoroState.focusDuration = settings.focusDuration;
     pomodoroState.shortBreakDuration = settings.shortBreakDuration || 5;
     pomodoroState.longBreakDuration = settings.longBreakDuration || 15;

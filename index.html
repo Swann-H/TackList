@@ -572,7 +572,203 @@
             font-size: 0.6rem;
             color: var(--text-secondary);
         }
-        
+
+        /* 倒计时管理：双栏展示 + Pin 开关 */
+        #holiday-countdown.cd-active {
+            background: transparent;
+            border-color: #3b82f6;
+        }
+        .cd-dual {
+            display: flex;
+            align-items: stretch;
+        }
+        .cd-dual-item {
+            flex: 1;
+            min-width: 0;
+        }
+        .cd-divider {
+            width: 0;
+            align-self: stretch;
+            border-left: 1.5px dashed var(--border-color);
+            margin: 0 6px;
+        }
+        .cd-dual .holiday-countdown-number {
+            font-size: 1.25rem;
+        }
+        .cd-dual .holiday-countdown-label {
+            font-size: 0.6rem;
+        }
+        .countdown-container {
+            background: var(--bg-secondary, #ffffff);
+            height: auto;
+            max-height: 100%;
+            overflow-y: auto;
+        }
+        body.has-bg-image .countdown-container {
+            background-color: transparent !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        .cd-pin {
+            width: 38px;
+            height: 22px;
+            border-radius: 9999px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            position: relative;
+            transition: background 0.2s, border-color 0.2s;
+            flex-shrink: 0;
+        }
+        .cd-pin .cd-pin-knob {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            transition: left 0.2s;
+        }
+        .cd-pin-on {
+            background: var(--accent-color, #3b82f6);
+            border-color: var(--accent-color, #3b82f6);
+        }
+        .cd-pin-on .cd-pin-knob {
+            left: 18px;
+        }
+
+        /* 倒计时管理：卡片 + 固定槽（槽位即侧边栏预览，全宽并排） */
+        .cd-slots {
+            display: flex;
+            justify-content: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .cd-slot {
+            width: 200px;
+            max-width: 100%;
+            min-height: 86px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: default;
+        }
+        .cd-slot.cd-dragover,
+        .cd-card.cd-dragover {
+            border-color: #3b82f6;
+        }
+        .cd-slot.cd-dragover {
+            background: rgba(59, 130, 246, 0.06);
+        }
+        .cd-slot-empty {
+            color: var(--text-muted, #9ca3af);
+            font-size: 0.72rem;
+            line-height: 1.3;
+        }
+        .cd-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 0.75rem;
+            align-items: start;
+        }
+        .cd-card {
+            display: flex;
+            align-items: center;
+            cursor: grab;
+        }
+        .cd-card:active {
+            cursor: grabbing;
+        }
+        .cd-card.dragging {
+            opacity: 0.5;
+        }
+        /* 系统默认卡片的“系统”字样：放置在编辑按钮同一区域（右侧），仅悬浮显示 */
+        .cd-sys-tag {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            right: 0.3rem;
+            font-size: 0.7rem;
+            color: var(--text-muted, #9ca3af);
+            background: transparent;
+            padding: 1px 6px;
+            border-radius: 9999px;
+            opacity: 0;
+            transition: opacity 0.15s;
+            pointer-events: none;
+        }
+        .cd-card:hover .cd-sys-tag {
+            opacity: 1;
+        }
+        .cd-card.cd-pinned {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+        }
+        .cd-add-card {
+            min-height: 64px;
+        }
+
+        /* 倒计时管理：卡片采用与侧边栏倒计时框一致的样式（透明虚线框） */
+        .cd-card.holiday-countdown-box::before,
+        .cd-card.holiday-countdown-box::after {
+            display: none; /* 卡片网格中不显示侧边栏连接圆点，保持整洁 */
+        }
+        /* 第 1 行名称与第 3 行日期字号放大，与卡片名称字号一致 */
+        .cd-card .holiday-countdown-label {
+            font-size: inherit;
+            font-weight: 600;
+            color: var(--text-primary);
+            letter-spacing: normal;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .cd-card .holiday-countdown-date {
+            font-size: inherit;
+        }
+        .cd-side-body {
+            flex: 1;
+            min-width: 0;
+            padding: 0 1.4rem; /* 为左右悬浮图标预留空间，保证内容居中不被遮挡 */
+        }
+        /* 悬浮才显示的图标按钮（无边框，仅图标） */
+        .cd-icon-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            background: transparent;
+            border-radius: 9999px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s, background 0.15s, color 0.15s;
+            font-size: 0.95rem;
+        }
+        .cd-card:hover .cd-icon-btn {
+            opacity: 1;
+        }
+        .cd-icon-btn:hover {
+            background: var(--bg-tertiary);
+        }
+        .cd-pin-btn {
+            left: 0.3rem;
+        }
+        .cd-pin-btn.active {
+            color: var(--accent-color, #3b82f6);
+        }
+        .cd-edit-btn {
+            right: 0.3rem;
+            color: var(--accent-color, #3b82f6);
+        }
+
         /* 响应式设计 */
         @media (max-width: 768px) {
             .sidebar {
@@ -1848,7 +2044,7 @@
             <!-- 底部功能按钮区域 - 固定在底部 -->
             <div id="sidebar-bottom-buttons" class="sidebar-bottom-buttons flex-shrink-0 border-t border-theme">
                 <!-- 假期倒计时 -->
-                <div id="holiday-countdown" class="holiday-countdown-box">
+                <div id="holiday-countdown" class="holiday-countdown-box" style="cursor:pointer" title="点击管理倒计时" onclick="switchView('countdown')">
                     <div class="holiday-countdown-label" id="holiday-countdown-label">距—还有</div>
                     <div>
                         <span class="holiday-countdown-number" id="holiday-countdown-number">-</span>
@@ -2838,22 +3034,22 @@
                                     <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-blue"></div>
                                         <div class="flex items-center justify-between">
-                                            <div class="text-xs text-theme-secondary">蓝色</div>
+                                            <div class="text-xs text-theme-secondary">星夜</div>
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
                                     <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-green"></div>
                                         <div class="flex items-center justify-between">
-                                            <div class="text-xs text-theme-secondary">绿色</div>
+                                            <div class="text-xs text-theme-secondary">春野</div>
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:rose')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:rose" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
-                                        <div class="palette-color-bar mb-1" data-palette="builtin-rose"></div>
+                                    <button onmousedown="startPalettePreview('builtin:amber')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:amber" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="builtin-amber"></div>
                                         <div class="flex items-center justify-between">
-                                            <div class="text-xs text-theme-secondary">玫红</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:rose')" data-palette-key="builtin:rose" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <div class="text-xs text-theme-secondary">夕照</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:amber')" data-palette-key="builtin:amber" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
                                 </div>
@@ -3277,7 +3473,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.8</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.4.9</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3544,6 +3740,7 @@
     <script src="pomodoro.js"></script>
     <script src="commandPalette.js"></script>
     <script src="easterEgg.js"></script>
+    <script src="countdown.js"></script>
     <script src="holiday.js"></script>
     <script src="app.js"></script>
 <script src="mobile.js"></script>
