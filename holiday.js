@@ -9,29 +9,71 @@ let holidayEditing = null;
 let holidayDeleteConfirming = null;
 let holidayDeleteTimer = null;
 
-// 切换到节假日管理页面
-function switchToHolidayPage() {
+// 节假日视图返回来源与进入前视图（用于"返回"时回到正确入口）
+let holidayReturnSource = 'settings';   // 'settings' | 'countdown' | 其它
+let holidayPrevView = 'task';           // 进入 holiday 视图前的 currentView
+
+// 切换到节假日管理视图（真正的视图方案：渲染进 #view-container，左侧侧边栏保持可见）
+function switchToHolidayPage(source) {
+    holidayReturnSource = source || 'settings';
+    holidayPrevView = (typeof currentView !== 'undefined') ? currentView : 'task';
     closeSettingsModal();
-    // 关闭任务详情栏（避免在节假日页面上显示）
+    // 关闭任务详情栏（避免在节假日视图上显示）
     if (typeof closeTaskDetailPanel === 'function') closeTaskDetailPanel();
-    document.getElementById('holiday-page').classList.remove('hidden');
-    document.getElementById('sidebar-bottom-buttons').classList.add('hidden');
-    document.getElementById('main-content').classList.add('hidden');
     holidayCurrentYear = new Date().getFullYear();
     holidayEditing = null;
     holidayDeleteConfirming = null;
+    if (holidayDeleteTimer) { clearTimeout(holidayDeleteTimer); holidayDeleteTimer = null; }
+    switchView('holiday');
+}
+
+// 渲染整个节假日视图（渲染进 #view-container，与倒计时视图同机制）
+function renderHolidayView(container) {
+    container.innerHTML =
+        '<div class="holiday-view-container">' +
+            '<div class="h-full flex flex-col">' +
+                '<div class="flex items-center justify-between p-4 pb-2 flex-shrink-0">' +
+                    '<h1 class="text-2xl font-bold text-theme-primary">设置节假日与调休</h1>' +
+                    '<div class="flex items-center gap-3">' +
+                        '<label for="holiday-import-file" id="holiday-import-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition cursor-pointer" title="导入 JSON"><i class="fas fa-download"></i></label>' +
+                        '<button onclick="exportHolidayJSON()" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition" title="导出 JSON"><i class="fas fa-upload"></i></button>' +
+                        '<button onclick="closeHolidayView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
+                        '<input type="file" id="holiday-import-file" accept=".json" class="hidden" onchange="handleHolidayImport(this.files[0])">' +
+                    '</div>' +
+                '</div>' +
+                '<div class="px-4 pb-6 flex flex-col min-h-0 flex-1">' +
+                    '<div class="holiday-toolbar flex items-center justify-between mb-4 p-4 rounded-lg flex-shrink-0">' +
+                        '<div class="flex items-center gap-3">' +
+                            '<button onclick="navigateHolidayYear(-1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="上一年"><i class="fas fa-chevron-left"></i></button>' +
+                            '<span id="holiday-year-label" onclick="toggleHolidayYearPicker()" class="text-lg font-semibold text-theme-primary min-w-[80px] text-center cursor-pointer hover:text-blue-500 transition relative"></span>' +
+                            '<button onclick="navigateHolidayYear(1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="下一年"><i class="fas fa-chevron-right"></i></button>' +
+                        '</div>' +
+                        '<div id="holiday-stats" class="text-sm text-theme-secondary">假期：0 天 | 调休：0 天</div>' +
+                    '</div>' +
+                    '<div class="holiday-list-wrap flex-1 min-h-0 overflow-y-auto">' +
+                        '<div id="holiday-groups"></div>' +
+                    '</div>' +
+                    '<datalist id="holiday-festival-names">' +
+                        '<option value="元旦"></option><option value="春节"></option><option value="清明节"></option>' +
+                        '<option value="劳动节"></option><option value="端午节"></option><option value="中秋节"></option><option value="国庆节"></option>' +
+                    '</datalist>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
     renderHolidayPage();
 }
 
-// 关闭管理页面
-function closeHolidayPage() {
-    document.getElementById('holiday-page').classList.add('hidden');
-    document.getElementById('sidebar-bottom-buttons').classList.remove('hidden');
-    document.getElementById('main-content').classList.remove('hidden');
+// 关闭/返回节假日视图（根据来源回到对应入口）
+function closeHolidayView() {
     closeHolidayYearPicker();
     closeHolidayCalendarPopup();
     if (typeof updateHolidayCountdown === 'function') updateHolidayCountdown();
-    if (typeof renderView === 'function') renderView();
+    if (holidayReturnSource === 'settings') {
+        if (typeof switchView === 'function') switchView(holidayPrevView || 'task');
+        if (typeof openSettingsModal === 'function') openSettingsModal();
+    } else {
+        if (typeof switchView === 'function') switchView(holidayPrevView || 'countdown');
+    }
 }
 
 // 渲染整个页面
@@ -411,7 +453,7 @@ function renderGroup(group) {
 // 渲染查看模式行
 function renderSectionView(group, section) {
     const div = document.createElement('div');
-    div.className = `holiday-section flex items-center gap-2 px-3 py-2 bg-theme-primary rounded-r-lg border border-theme border-l-4 ${section.type === 'holiday' ? 'border-l-green-400' : 'border-l-orange-400'}`;
+    div.className = `holiday-section flex items-center gap-2 px-3 py-2 rounded-r-lg border border-theme border-l-4 ${section.type === 'holiday' ? 'border-l-green-400' : 'border-l-orange-400'}`;
 
     const typeLabel = section.type === 'holiday' ? '假期' : '调休';
     const typeBadgeClass = section.type === 'holiday'

@@ -24,21 +24,21 @@ function openCommandPalette() {
 
     const palette = document.createElement('div');
     palette.id = 'command-palette';
-    palette.className = 'w-full max-w-xl bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden';
+    palette.className = 'w-full max-w-xl bg-theme-secondary rounded-2xl shadow-2xl border border-theme overflow-hidden';
     palette.style.animation = 'fadeIn 0.15s ease-out';
     palette.innerHTML = `
-        <div class="flex items-center gap-3 px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+        <div class="flex items-center gap-3 px-5 py-4 border-b border-theme">
             <i class="fas fa-terminal text-theme-secondary"></i>
             <input id="command-palette-input" type="text"
-                   class="flex-1 bg-transparent outline-none text-gray-800 dark:text-gray-100 text-base placeholder-gray-400"
+                   class="flex-1 bg-transparent outline-none text-theme-primary text-base"
                    placeholder="快速新建任务 或 /s 搜索历史任务…"
                    autocomplete="off" spellcheck="false">
-            <kbd class="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded border border-gray-200 dark:border-gray-600">ESC</kbd>
+            <kbd class="px-2 py-0.5 text-xs bg-theme-tertiary text-theme-muted rounded border border-theme">ESC</kbd>
         </div>
         <div id="command-palette-results" class="max-h-72 overflow-y-auto"></div>
-        <div id="command-palette-hint" class="px-5 py-3 text-xs text-theme-secondary border-t border-gray-100 dark:border-gray-700 flex items-center gap-4">
-            <span><kbd class="px-1 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-[10px]">Enter</kbd> 执行</span>
-            <span><kbd class="px-1 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-[10px]">Esc</kbd> 关闭</span>
+        <div id="command-palette-hint" class="px-5 py-3 text-xs text-theme-secondary border-t border-theme flex items-center gap-4">
+            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Enter</kbd> 执行</span>
+            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Esc</kbd> 关闭</span>
             <span class="ml-auto">支持自动识别日期时间 / ~清单 / #标签 / !优先级 / |详情</span>
         </div>
     `;
@@ -201,7 +201,7 @@ function renderSearchResults(results, query) {
         const listColor = list ? list.color : '#9ca3af';
         const listName = list ? list.name : '';
         const focusMinutes = getTaskFocusMinutes(task.id);
-        const timeDisplay = formatTaskListTime(task);
+        const timeDisplay = formatTaskListTime(task, { fullDate: true });
         const progress = task.progress || 0;
         const quadColors = getQuadrantColorClass(task);
         const isOverdue = isTaskOverdue(task);
@@ -213,7 +213,7 @@ function renderSearchResults(results, query) {
                  data-list-id="${task.listId || 'default'}"
                  onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
                 <div class="task-list-color-bar" style="background-color: ${listColor};"></div>
-                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
+                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 hover:border-blue-600'}">
                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                 </button>
                 <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
@@ -1055,8 +1055,8 @@ function renderNLPPreview(parsed) {
         ${tagsHtml}
         <div class="flex items-center gap-2">
             <i class="fas fa-plus-circle text-green-500"></i>
-            <span class="text-sm text-gray-700 dark:text-gray-300">创建任务：</span>
-            <span class="text-sm font-medium text-gray-900 dark:text-gray-100">${escapeHtml(parsed.title)}</span>
+            <span class="text-sm text-theme-secondary">创建任务：</span>
+            <span class="text-sm font-medium text-theme-primary">${escapeHtml(parsed.title)}</span>
         </div>
         ${notesHtml}
     </div>`;

@@ -102,6 +102,9 @@
         /* "今天"按钮固定使用蓝色，不跟随主题色变化 */
         #today-btn { color: #3b82f6 !important; border-color: #3b82f6 !important; }
         #today-btn:hover { color: #ffffff !important; background-color: #3b82f6 !important; }
+        /* 节假日导入按钮固定使用蓝色，不跟随主题色变化（与"今天"按钮一致） */
+        #holiday-import-btn { color: #3b82f6 !important; border-color: #3b82f6 !important; }
+        #holiday-import-btn:hover { color: #ffffff !important; background-color: #3b82f6 !important; }
         /* 边框 */
         .border-blue-500 { border-color: var(--accent-color) !important; }
         .border-blue-600 { border-color: var(--accent-hover) !important; }
@@ -567,11 +570,12 @@
             border-left: 1.5px dashed var(--border-color);
             margin: 0 6px;
         }
-        .cd-dual .holiday-countdown-number {
-            font-size: 1.25rem;
-        }
+        /* 双栏与单栏统一字号：去掉缩小覆盖，复用基础 1.75rem / 0.65rem；
+           仅对标签加单行省略，避免长名称换行撑破两列布局 */
         .cd-dual .holiday-countdown-label {
-            font-size: 0.6rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .countdown-container {
             background: var(--bg-secondary, #ffffff);
@@ -659,23 +663,10 @@
         .cd-card.dragging {
             opacity: 0.5;
         }
-        /* 系统默认卡片的“系统”字样：放置在编辑按钮同一区域（右侧），仅悬浮显示 */
-        .cd-sys-tag {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
+        /* 系统默认卡片的“设置”图标按钮：放置在编辑按钮同一区域（右侧），仅悬浮显示 */
+        .cd-settings-btn {
             right: 0.3rem;
-            font-size: 0.7rem;
-            color: var(--text-muted, #9ca3af);
-            background: transparent;
-            padding: 1px 6px;
-            border-radius: 9999px;
-            opacity: 0;
-            transition: opacity 0.15s;
-            pointer-events: none;
-        }
-        .cd-card:hover .cd-sys-tag {
-            opacity: 1;
+            color: var(--text-secondary);
         }
         .cd-card.cd-pinned {
             border-color: #3b82f6;
@@ -957,6 +948,12 @@
 
         .border-theme {
             border-color: var(--border-color);
+        }
+
+        /* 命令面板输入框占位符：跟随 data-theme，避免依赖 Tailwind 的 dark: 变体（其基于系统配色，可能与应用主题不一致） */
+        #command-palette-input::placeholder {
+            color: var(--text-muted);
+            opacity: 1;
         }
 
         .shadow-theme {
@@ -1499,8 +1496,21 @@
         .pomodoro-focus-btn:hover .pf-icon-outline { display: none; }
         .pomodoro-focus-btn:hover .pf-icon-solid { display: inline-block; }
 
-        /* 节假日管理页面 */
-        #holiday-page { background: var(--bg-primary, #f9fafb); }
+        /* 节假日管理视图（真正的视图方案：透明/毛玻璃，与倒计时界面一致） */
+        .holiday-view-container {
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-secondary, #ffffff);
+        }
+        body.has-bg-image .holiday-view-container {
+            background-color: transparent !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        /* 年份导航工具条：透明 + 边框，配合毛玻璃通透 */
+        .holiday-toolbar { background: transparent; border: 1px solid var(--border-color, #e5e7eb); }
+        /* 每条节假日行：去掉黑色底，透明 + 边框，透出毛玻璃背景 */
+        .holiday-section { background: transparent; }
         .holiday-group { transition: border-color 0.2s; }
         .holiday-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; align-items: start; }
         .holiday-col > * + * { margin-top: 0.5rem; }
@@ -2032,7 +2042,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
             </div>
         </aside>
 
-        <main id="main-content" class="flex-1 main-content p-6 flex flex-col h-screen overflow-hidden">
+        <main id="main-content" class="relative flex-1 main-content p-6 flex flex-col h-screen overflow-hidden">
             <header class="flex items-center justify-between mb-6 flex-shrink-0" id="main-header">
                 <div class="flex items-center gap-4" id="header-left">
                     <button onclick="toggleMobileSidebar()" id="mobile-menu-btn" class="mobile-menu-btn w-10 h-10 items-center justify-center text-theme-primary flex-shrink-0 rounded-lg hover:bg-theme-tertiary" title="菜单">
@@ -2083,6 +2093,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                 </div>
                 <div id="view-nav-bar" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20"></div>
             </div>
+
         </main>
 
         <aside id="plan-panel" class="hidden w-96 bg-theme-secondary border-l border-theme flex flex-col h-screen" style="transition: transform 0.3s ease;">
@@ -3295,7 +3306,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                         <h3 class="text-lg font-semibold text-theme-primary mb-4">节假日与调休</h3>
                         <div class="space-y-3">
                             <p class="text-sm text-theme-secondary">管理各年份的法定节假日和调休日数据，确保日程计算准确。</p>
-                            <button onclick="switchToHolidayPage()" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
+                            <button onclick="switchToHolidayPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
                                 <i class="fas fa-calendar-alt"></i>设置节假日与调休
                             </button>
                         </div>
@@ -3456,60 +3467,6 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                 <button onclick="closeSettingsModal()" class="flex-1 px-4 py-2 border border-theme text-theme-secondary rounded-lg hover:bg-theme-tertiary transition">关闭</button>
                 <button onclick="saveSettings()" class="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition" style="background-color: var(--accent-color)">保存设置</button>
             </div>
-        </div>
-    </div>
-
-    <!-- 节假日与调休管理页面 -->
-    <div id="holiday-page" class="fixed inset-0 z-40 hidden overflow-y-auto">
-        <!-- 返回按钮（页面最左侧，字号与标题对齐） -->
-        <button onclick="closeHolidayPage()" class="fixed top-6 left-6 z-50 text-xl text-theme-primary hover:text-theme-secondary transition flex items-center">
-            <i class="fas fa-arrow-left mr-2"></i>返回
-        </button>
-
-        <div class="max-w-4xl mx-auto p-6">
-            <!-- 头部：标题 + 圆形图标按钮 -->
-            <div class="flex items-center justify-between mb-6">
-                <h2 class="text-xl font-semibold text-theme-primary">设置节假日与调休</h2>
-                <div class="flex gap-3">
-                    <label for="holiday-import-file" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition cursor-pointer" title="导入 JSON">
-                        <i class="fas fa-download"></i>
-                    </label>
-                    <button onclick="exportHolidayJSON()" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition" title="导出 JSON">
-                        <i class="fas fa-upload"></i>
-                    </button>
-                    <input type="file" id="holiday-import-file" accept=".json" class="hidden" onchange="handleHolidayImport(this.files[0])">
-                </div>
-            </div>
-
-            <!-- 年份导航 + 统计 -->
-            <div class="flex items-center justify-between mb-4 p-4 bg-theme-tertiary rounded-lg">
-                <div class="flex items-center gap-3">
-                    <button onclick="navigateHolidayYear(-1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="上一年">
-                        <i class="fas fa-chevron-left"></i>
-                    </button>
-                    <span id="holiday-year-label" onclick="toggleHolidayYearPicker()" class="text-lg font-semibold text-theme-primary min-w-[80px] text-center cursor-pointer hover:text-blue-500 transition relative"></span>
-                    <button onclick="navigateHolidayYear(1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="下一年">
-                        <i class="fas fa-chevron-right"></i>
-                    </button>
-                </div>
-                <div id="holiday-stats" class="text-sm text-theme-secondary">假期：0 天 | 调休：0 天</div>
-            </div>
-
-            <!-- 数据列表（单栏分组列表） -->
-            <div class="holiday-list-wrap">
-                <div id="holiday-groups"></div>
-            </div>
-
-            <!-- 节日名称建议列表 -->
-            <datalist id="holiday-festival-names">
-                <option value="元旦">
-                <option value="春节">
-                <option value="清明节">
-                <option value="劳动节">
-                <option value="端午节">
-                <option value="中秋节">
-                <option value="国庆节">
-            </datalist>
         </div>
     </div>
 

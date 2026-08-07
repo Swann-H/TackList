@@ -581,6 +581,8 @@ function updateSidebarHighlight() {
         if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
     } else if (currentView === 'countdown') {
         if (cdBox) cdBox.classList.add('cd-active');
+    } else if (currentView === 'holiday') {
+        // 独立管理视图：不与侧边栏任何导航项（含“所有任务”）联动高亮
     } else if (currentView === 'task' && currentListId) {
         if (currentListId === '__archived__') {
             const btn = document.getElementById('sidebar-archived-btn');

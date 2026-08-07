@@ -17,7 +17,7 @@ function switchView(view) {
     currentView = view;
     const mainHeader = document.querySelector('#main-content > header');
     if (mainHeader) {
-        if (view === 'summary' || view === 'filterEdit' || view === 'countdown') {
+        if (view === 'summary' || view === 'filterEdit' || view === 'countdown' || view === 'holiday') {
             mainHeader.classList.add('hidden');
         } else {
             mainHeader.classList.remove('hidden');
@@ -117,6 +117,13 @@ function renderView() {
         case 'countdown':
             if (typeof renderCountdownView === 'function') {
                 renderCountdownView(container);
+            } else {
+                renderTaskListView(container);
+            }
+            break;
+        case 'holiday':
+            if (typeof renderHolidayView === 'function') {
+                renderHolidayView(container);
             } else {
                 renderTaskListView(container);
             }

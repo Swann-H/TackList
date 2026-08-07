@@ -57,25 +57,38 @@ function getTaskListGroup(task) {
     return 'nodate';
 }
 
-function formatTaskListTime(task) {
+// 任务视图列表 & 命令面板 /s 搜索结果 共用的任务时间格式化。
+// - 全天任务：近端（今天/昨天/明天/后天）用相对词并去掉"全天"字样，更远才显示实际日期；
+//   任务视图与搜索用同一函数，故两边一致。
+// - 带时间任务：今天/昨天/明天/后天 用相对词；更远或过期任务，任务视图仅在"最近7天/以后"
+//   分组带日期，而搜索结果（跨任意日期）用 fullDate:true 始终带出日期，避免丢失所属日期。
+//   日期与时间之间统一用空格分隔（不再使用逗号）。
+// opts.fullDate=true 时，非近端带时间任务也强制带日期（供搜索结果使用）。
+// 全天任务标签：近端（今天/昨天/明天/后天）用相对词并去掉"全天"，更远才显示实际日期。
+// 任务视图列表、命令面板搜索、以及"最近7天"筛选视图统一使用本函数，保证显示一致。
+function getAllDayLabel(task) {
     if (!task.startTime) return '';
     const b = getDateBounds();
-
     const taskDate = new Date(task.startTime);
     const month = taskDate.getMonth() + 1;
     const day = taskDate.getDate();
+    if (taskDate >= b.todayStart && taskDate < b.tomorrowStart) return '今天';
+    if (taskDate >= b.yesterdayStart && taskDate < b.todayStart) return '昨天';
+    if (taskDate >= b.tomorrowStart && taskDate < b.dayAfterTomorrowStart) return '明天';
+    if (taskDate >= b.dayAfterTomorrowStart && taskDate < b.threeDaysLaterStart) return '后天';
+    return `${month}月${day}日`;
+}
 
-    if (task.isAllDay) {
-        if (taskDate >= b.todayStart && taskDate < b.tomorrowStart) return '全天';
-        if (taskDate >= b.yesterdayStart && taskDate < b.todayStart) return '昨天 全天';
-        if (taskDate >= b.tomorrowStart && taskDate < b.dayAfterTomorrowStart) return '明天 全天';
-        if (taskDate >= b.dayAfterTomorrowStart && taskDate < b.threeDaysLaterStart) return '后天 全天';
-        const group = getTaskListGroup(task);
-        if (group === 'recent7' || group === 'later') {
-            return `${month}月${day}日 全天`;
-        }
-        return '全天';
-    }
+function formatTaskListTime(task, opts = {}) {
+    if (!task.startTime) return '';
+    const b = getDateBounds();
+    const taskDate = new Date(task.startTime);
+    const month = taskDate.getMonth() + 1;
+    const day = taskDate.getDate();
+    const dateLabel = `${month}月${day}日`;
+
+    // 全天任务：近端用相对词并去掉"全天"，更远用实际日期
+    if (task.isAllDay) return getAllDayLabel(task);
 
     const hours = taskDate.getHours().toString().padStart(2, '0');
     const mins = taskDate.getMinutes().toString().padStart(2, '0');
@@ -86,11 +99,10 @@ function formatTaskListTime(task) {
     if (taskDate >= b.tomorrowStart && taskDate < b.dayAfterTomorrowStart) return `明天 ${timeStr}`;
     if (taskDate >= b.dayAfterTomorrowStart && taskDate < b.threeDaysLaterStart) return `后天 ${timeStr}`;
 
+    // 远端/过期任务：搜索结果需带日期；任务视图仅在"最近7天/以后"分组带日期（统一空格分隔）
+    if (opts.fullDate) return `${dateLabel} ${timeStr}`;
     const group = getTaskListGroup(task);
-    if (group === 'recent7' || group === 'later') {
-        return `${month}月${day}日, ${timeStr}`;
-    }
-
+    if (group === 'recent7' || group === 'later') return `${dateLabel} ${timeStr}`;
     return timeStr;
 }
 
@@ -246,10 +258,10 @@ function _buildTaskListGroupsUncached() {
         }));
 }
 
-// 按天视图使用的精简时间显示（仅 HH:MM / 全天），避免重复日期前缀
+// 按天视图使用的精简时间显示（仅 HH:MM / 相对词），全天任务沿用 getAllDayLabel 的相对词规则
 function formatTaskListTimeShort(task) {
     if (!task.startTime) return '';
-    if (task.isAllDay) return '全天';
+    if (task.isAllDay) return getAllDayLabel(task);
     const taskDate = new Date(task.startTime);
     const hours = taskDate.getHours().toString().padStart(2, '0');
     const mins = taskDate.getMinutes().toString().padStart(2, '0');
@@ -652,7 +664,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
                                         const colors = getQuadrantColorClass(task);
                                         const list = lists.find(l => l.id === task.listId);
 
-                                        const timeDisplay = !startTime ? '未排期' : (task.isAllDay ? '全天' : `${startHour}:${startMin}`);
+                                        const timeDisplay = !startTime ? '未排期' : (task.isAllDay ? getAllDayLabel(task) : `${startHour}:${startMin}`);
                                         const focusMinutes = getTaskFocusMinutes(task.id);
                                         const isOverdue = isTaskOverdue(task);
                                         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';

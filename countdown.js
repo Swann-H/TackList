@@ -130,7 +130,9 @@ function resolveCountdownItem(key) {
 function cdDaysHtml(days) {
     if (days === null || days === undefined) return '';
     if (days < 0) {
-        return '<span class="holiday-countdown-number" style="font-size:0.95rem">已过期</span>';
+        return '<span class="holiday-countdown-unit">已过</span>' +
+            '<span class="holiday-countdown-number">' + (-days) + '</span>' +
+            '<span class="holiday-countdown-unit">天</span>';
     }
     if (days === 0) {
         return '<span class="holiday-countdown-number" data-days="0">今</span><span class="holiday-countdown-unit">天</span>';
@@ -237,13 +239,44 @@ function renderCountdownView(container) {
                     '</div>' +
                 '</section>' +
 
-                // 全部倒计时卡片池（系统默认 + 自定义，不再分节）
-                '<section>' +
-                    '<h2 class="text-sm font-semibold text-theme-secondary mb-2">全部倒计时</h2>' +
-                    '<div id="cd-pool" class="cd-grid" ondragover="cdAllowDrop(event)" ondragleave="cdDragLeave(event)" ondrop="cdDropOnPool(event)">' +
-                        renderPoolInner() +
-                    '</div>' +
-                '</section>' +
+                // 全部倒计时：拆分为「未来」与「过去」两个分组
+                (function () {
+                    const allItems = buildPoolItems();
+                    const future = [];
+                    const past = [];
+                    allItems.forEach(it => {
+                        // 系统默认 / 每年重复 → 未来；仅一次且日期过去 → 过去
+                        const isPast = !it.isHoliday && it.repeat === 'once' && it.days < 0;
+                        (isPast ? past : future).push(it);
+                    });
+                    const isAdding = !!(countdownEditing && countdownEditing.isAdd);
+                    const total = allItems.length;
+
+                    const futureHint = (future.length === 0 && !isAdding)
+                        ? '<div class="text-center text-theme-muted py-4 text-sm col-span-full">' +
+                          (total === 0 ? '暂无倒计时，点击下方“+”添加' : '暂无未来的倒计时') + '</div>'
+                        : '';
+
+                    const futureSection =
+                        '<section>' +
+                            '<h2 class="text-sm font-semibold text-theme-secondary mb-2">未来</h2>' +
+                            '<div id="cd-pool-future" class="cd-grid" ondragover="cdAllowDrop(event)" ondragleave="cdDragLeave(event)" ondrop="cdDropOnPool(event)">' +
+                                renderPoolInner(future, true) + futureHint +
+                            '</div>' +
+                        '</section>';
+
+                    // “过去”分组仅在存在卡片时显示（无卡片则不显示标题栏）
+                    const pastSection = (past.length > 0)
+                        ? '<section>' +
+                            '<h2 class="text-sm font-semibold text-theme-secondary mb-2">过去</h2>' +
+                            '<div id="cd-pool-past" class="cd-grid" ondragover="cdAllowDrop(event)" ondragleave="cdDragLeave(event)" ondrop="cdDropOnPool(event)">' +
+                                renderPoolInner(past, false) +
+                            '</div>' +
+                          '</section>'
+                        : '';
+
+                    return futureSection + pastSection;
+                })() +
 
             '</div>' +
         '</div>';
@@ -292,7 +325,7 @@ function buildPoolItems() {
         const days = getCountdownDays(c.date, c.repeat);
         const dt = parseYmd(c.date);
         items.push({
-            key: c.id, isHoliday: false, name: c.name, days: days,
+            key: c.id, isHoliday: false, name: c.name, days: days, repeat: c.repeat,
             dateLabel: dt ? (dt.getMonth() + 1) + '月' + dt.getDate() + '日' : c.date,
             editable: true, deletable: true
         });
@@ -300,14 +333,10 @@ function buildPoolItems() {
     return items;
 }
 
-// 卡片池内部 HTML（编辑中卡片原位变为配置区；末尾为添加卡片/添加表单）
-function renderPoolInner() {
+// 卡片池内部 HTML（编辑中卡片原位变为配置区；includeAdd 时末尾追加添加卡片/添加表单）
+function renderPoolInner(items, includeAdd) {
     let html = '';
-    const items = buildPoolItems();
     const editingId = (countdownEditing && !countdownEditing.isAdd) ? countdownEditing.id : null;
-    if (items.length === 0 && !(countdownEditing && countdownEditing.isAdd)) {
-        html += '<div class="text-center text-theme-muted py-6 text-sm col-span-full">暂无倒计时，点击下方“+”添加</div>';
-    }
     items.forEach(it => {
         if (it.key === editingId) {
             const real = (settings.countdowns || []).find(c => c.id === editingId);
@@ -316,10 +345,12 @@ function renderPoolInner() {
             html += cdCardHtml(it);
         }
     });
-    if (countdownEditing && countdownEditing.isAdd) {
-        html += cdEditFormHtml(null);
-    } else {
-        html += cdAddCardHtml();
+    if (includeAdd) {
+        if (countdownEditing && countdownEditing.isAdd) {
+            html += cdEditFormHtml(null);
+        } else {
+            html += cdAddCardHtml();
+        }
     }
     return html;
 }
@@ -336,7 +367,8 @@ function cdCardHtml(it) {
         rightHtml = '<button type="button" onclick="editCountdown(\'' + it.key + '\')" ' +
             'class="cd-icon-btn cd-edit-btn" title="编辑"><i class="fas fa-edit"></i></button>';
     } else if (it.isHoliday) {
-        rightHtml = '<span class="cd-sys-tag" title="系统默认">系统</span>';
+        rightHtml = '<button type="button" onclick="switchToHolidayPage(\'countdown\')" ' +
+            'class="cd-icon-btn cd-settings-btn" title="设置节假日与调休"><i class="fas fa-cog"></i></button>';
     }
     return '<div class="holiday-countdown-box cd-card' + pinnedCls + '" ' +
         'data-key="' + it.key + '" draggable="true" ondragstart="cdDragStart(event,\'' + it.key + '\',\'pool\')" ondragend="cdDragEnd(event)" ' +
