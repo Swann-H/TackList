@@ -66,6 +66,7 @@ function openSettingsModal() {
     document.getElementById('settings-long-break-interval').value = settings.longBreakInterval || 4;
     document.getElementById('settings-auto-break').checked = settings.autoBreak || false;
     document.getElementById('settings-auto-focus').checked = settings.autoFocus || false;
+    document.getElementById('settings-pomodoro-state-bg').checked = settings.pomodoroStateBg !== false;
     document.getElementById('settings-bg-flow-effect').checked = settings.bgFlowEffect === true;
     document.getElementById('settings-advanced-particle').checked = settings.advancedParticleAnimation !== false;
     document.getElementById('settings-auto-create').checked = settings.autoCreateTask !== false;
@@ -440,6 +441,7 @@ function saveSettings(silent) {
     settings.longBreakInterval = parseInt(document.getElementById('settings-long-break-interval').value);
     settings.autoBreak = document.getElementById('settings-auto-break').checked;
     settings.autoFocus = document.getElementById('settings-auto-focus').checked;
+    settings.pomodoroStateBg = document.getElementById('settings-pomodoro-state-bg').checked;
     settings.bgFlowEffect = document.getElementById('settings-bg-flow-effect').checked;
     settings.advancedParticleAnimation = document.getElementById('settings-advanced-particle').checked;
     settings.autoCreateTask = document.getElementById('settings-auto-create').checked;
@@ -490,6 +492,11 @@ function saveSettings(silent) {
     
     saveData();
     startDataRefreshTimer();
+
+    // 刷新番茄状态背景色（开关变更后立即生效）
+    if (typeof updateMainContentBackground === 'function') {
+        updateMainContentBackground();
+    }
 
     // 检查网络配置是否变更
     const newBindAddress = settings.bindAddress;
@@ -1851,7 +1858,7 @@ function startPalettePreview(name) {
         const palette = resolvePaletteObject(name);
         if (!palette) return;
         _palettePreviewLongPress = true;
-        applyPaletteToCssVars(palette);
+        applyPaletteToCssVars(palette, name);
         _highlightActivePalette(name);
         const modal = document.getElementById('settings-modal');
         if (modal) modal.classList.add('hidden');

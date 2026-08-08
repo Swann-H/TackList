@@ -617,7 +617,14 @@ function updateMainViewBackground() {
     const mainContent = document.getElementById('main-content');
     if (!mainContent) return;
     if (mainContent.classList.contains('hidden')) return;
-    
+
+    // 开关关闭时不应用状态背景色
+    const stateBgEnabled = settings.pomodoroStateBg !== false;
+    if (!stateBgEnabled) {
+        mainContent.classList.remove('view-focus', 'view-break');
+        return;
+    }
+
     const isRunning = pomodoroState.state === 'focusing' || pomodoroState.state === 'resting';
     if (isRunning && pomodoroState.phase === 'focus') {
         mainContent.classList.remove('view-break');
@@ -640,13 +647,20 @@ function clearMainViewBackground() {
 function updateMainContentBackground() {
     const mainContent = document.getElementById('main-content');
     if (!mainContent) return;
-    
+
+    // 开关关闭时不应用状态背景色
+    const stateBgEnabled = settings.pomodoroStateBg !== false;
+    if (!stateBgEnabled) {
+        mainContent.classList.remove('view-focus', 'view-break');
+        return;
+    }
+
     const isRunning = pomodoroState.state === 'focusing' || pomodoroState.state === 'resting';
     if (!isRunning) {
         mainContent.classList.remove('view-focus', 'view-break');
         return;
     }
-    
+
     if (pomodoroState.phase === 'focus') {
         mainContent.classList.remove('view-break');
         mainContent.classList.add('view-focus');

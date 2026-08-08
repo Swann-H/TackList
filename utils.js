@@ -1578,7 +1578,7 @@ function applyThemePalette(paletteName) {
     }
     const palette = resolvePaletteObject(paletteName);
     if (palette) {
-        applyPaletteToCssVars(palette);
+        applyPaletteToCssVars(palette, paletteName);
     } else {
         clearThemePaletteVars();
     }
@@ -1589,7 +1589,7 @@ function applyThemePalette(paletteName) {
 // 仅暴露 6 个核心可编辑字段：accent / bgPrimary / bgSecondary / textPrimary / textMuted / border
 // 其余字段（accentHover, accentSecondary, accentBg, accentBgStrong, accentTextDark,
 // accentLight, bgTertiary, textSecondary）若调色板未提供，则自动从核心字段派生
-function applyPaletteToCssVars(palette) {
+function applyPaletteToCssVars(palette, paletteName) {
     if (!palette) return;
     // 内置/自定义调色板含 light/dark 双变体，根据当前主题选择
     if (palette.light && palette.dark) {
@@ -1647,6 +1647,53 @@ function applyPaletteToCssVars(palette) {
     root.style.setProperty('--text-secondary', palette.textSecondary);
     root.style.setProperty('--text-muted', palette.textMuted);
     root.style.setProperty('--border-color', palette.border);
+
+    // 中间视图区域背景跟随调色板，避免固定深蓝色与暖色主题不搭
+    root.style.setProperty('--view-bg-default', palette.bgPrimary);
+    // 番茄专注/休息状态色：保持很浅的色调，不喧宾夺主
+    // - 星夜(builtin:blue)：保留原始蓝/绿方案（focus 偏蓝、break 偏绿）
+    // - 其他配色：focus 向 accent 色相加强（饱和度略提），break 向 accent 色相减弱（饱和度降低）
+    if (paletteName === 'builtin:blue') {
+        // 星夜主题：不覆盖 focus/break，保留 CSS 默认的蓝/绿值
+        root.style.removeProperty('--view-bg-focus');
+        root.style.removeProperty('--view-bg-break');
+    } else {
+        root.style.setProperty('--view-bg-focus', _deriveViewBgFocus(palette.bgPrimary, palette.accent, isDark));
+        root.style.setProperty('--view-bg-break', _deriveViewBgBreak(palette.bgPrimary, palette.accent, isDark));
+    }
+}
+
+// 派生番茄专注状态背景：向 accent 色相加强（饱和度小幅提升，亮度微降，保持浅淡）
+function _deriveViewBgFocus(bgHex, accentHex, isDark) {
+    try {
+        const [bgR, bgG, bgB] = _hexToRgb(bgHex);
+        const [, bgS, bgL] = _rgbToHsl(bgR, bgG, bgB);
+        const [aR, aG, aB] = _hexToRgb(accentHex);
+        const [aH] = _rgbToHsl(aR, aG, aB);
+        // 饱和度小幅提升——浅色态可稍高，深色态更克制避免显脏
+        const targetS = isDark ? Math.min(0.15, bgS + 0.03) : Math.min(0.20, bgS + 0.06);
+        // 亮度微降，保持整体浅淡不抢眼
+        const targetL = Math.max(0, bgL - (isDark ? 0.015 : 0.008));
+        return _rgbToHex(..._hslToRgb(aH, targetS, targetL));
+    } catch (e) {
+        return bgHex;
+    }
+}
+
+// 派生番茄休息状态背景：向 accent 色相减弱（饱和度降低，趋于中性灰，亮度微升）
+function _deriveViewBgBreak(bgHex, accentHex, isDark) {
+    try {
+        const [bgR, bgG, bgB] = _hexToRgb(bgHex);
+        const [bgH, bgS, bgL] = _rgbToHsl(bgR, bgG, bgB);
+        // 休息态：饱和度降低，趋于中性，视觉上"退后"
+        const targetS = Math.max(0, bgS - (isDark ? 0.02 : 0.03));
+        // 亮度微升，营造放松感
+        const targetL = Math.min(1, bgL + (isDark ? 0.015 : 0.008));
+        // 色相保持与 bgPrimary 一致（不引入新色相），仅通过饱和度/亮度区分
+        return _rgbToHex(..._hslToRgb(bgH || 0, targetS, targetL));
+    } catch (e) {
+        return bgHex;
+    }
 }
 
 // 辅助：hex 转 rgba 字符串
@@ -1686,7 +1733,8 @@ function clearThemePaletteVars() {
         '--accent-bg', '--accent-bg-strong', '--accent-text-dark', '--accent-light',
         '--bg-primary', '--bg-primary-rgb',
         '--bg-secondary', '--bg-secondary-rgb', '--bg-tertiary', '--bg-tertiary-rgb',
-        '--text-primary', '--text-secondary', '--text-muted', '--border-color'];
+        '--text-primary', '--text-secondary', '--text-muted', '--border-color',
+        '--view-bg-default', '--view-bg-focus', '--view-bg-break'];
     keys.forEach(k => root.style.removeProperty(k));
 }
 

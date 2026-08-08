@@ -1010,19 +1010,73 @@ function handleBgImageUpload(event) {
     }
 }
 
-// 清除背景图片
+// 清除背景图片（二次确认 + 根据取色模式自动切换深浅色并恢复内置配色）
+let _bgImageDeleteConfirming = false;
+let _bgImageDeleteTimer = null;
 function clearBgImage() {
-    settings.bgImage = '';
-    applyBackgroundImage();
-    saveData();
-    
-    // 隐藏预览
-    const previewContainer = document.getElementById('bg-image-preview');
-    previewContainer.classList.add('hidden');
-    
-    // 重置文件输入
-    const fileInput = document.getElementById('bg-image-upload');
-    fileInput.value = '';
-    
-    showToast('背景图片已清除', 'info');
+    const btn = document.getElementById('bg-image-delete-btn');
+
+    if (_bgImageDeleteConfirming) {
+        // 第二次点击：确认删除
+        _bgImageDeleteConfirming = false;
+        if (_bgImageDeleteTimer) { clearTimeout(_bgImageDeleteTimer); _bgImageDeleteTimer = null; }
+        _resetBgImageDeleteBtn(btn);
+
+        // 根据当前取色模式决定切换的深浅色
+        const palette = settings.themePalette;
+        if (palette === 'vibrant' || palette === 'muted') {
+            setTheme('light');
+        } else if (palette === 'dark') {
+            setTheme('dark');
+        }
+
+        // 恢复为内置配色"星夜"
+        if (palette && palette !== 'none' && !palette.startsWith('builtin:')) {
+            selectThemePalette('builtin:blue');
+        }
+
+        // 清除背景图取色数据（已切换到内置配色，不再需要）
+        settings.themePaletteColors = null;
+
+        settings.bgImage = '';
+        applyBackgroundImage();
+        saveData();
+
+        // 隐藏预览
+        const previewContainer = document.getElementById('bg-image-preview');
+        if (previewContainer) previewContainer.classList.add('hidden');
+
+        // 重置文件输入
+        const fileInput = document.getElementById('bg-image-upload');
+        if (fileInput) fileInput.value = '';
+
+        // 隐藏取色预览区域
+        const paletteContainer = document.getElementById('palette-preview-container');
+        const paletteHint = document.getElementById('palette-hint-text');
+        if (paletteContainer) paletteContainer.classList.add('hidden');
+        if (paletteHint) paletteHint.classList.add('hidden');
+
+        showToast('背景图片已清除', 'info');
+        return;
+    }
+
+    // 第一次点击：进入确认状态
+    _bgImageDeleteConfirming = true;
+    if (btn) {
+        btn.classList.add('bg-red-500', 'border-red-500', 'text-white');
+        btn.classList.remove('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
+        btn.title = '再次点击确认删除';
+    }
+    if (_bgImageDeleteTimer) clearTimeout(_bgImageDeleteTimer);
+    _bgImageDeleteTimer = setTimeout(() => {
+        _bgImageDeleteConfirming = false;
+        _resetBgImageDeleteBtn(btn);
+    }, 3000);
+}
+
+function _resetBgImageDeleteBtn(btn) {
+    if (!btn) return;
+    btn.classList.remove('bg-red-500', 'border-red-500', 'text-white');
+    btn.classList.add('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
+    btn.title = '删除背景图片';
 }
