@@ -504,11 +504,8 @@ function cdEditFormHtml(c) {
             '<div class="space-y-2">' +
                 '<input type="text" id="cd-edit-name" maxlength="20" value="' + nameVal + '" placeholder="名称（最多 20 字）" ' +
                     'class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-primary text-theme-primary">' +
-                '<div class="relative">' +
-                    '<input type="date" id="cd-edit-date" value="' + dateVal + '" ' +
-                        'class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openDatePicker(this, \'cd-edit-date-picker\')">' +
-                    '<div id="cd-edit-date-picker" class="date-picker-dropdown hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>' +
-                '</div>' +
+                '<input type="date" id="cd-edit-date" value="' + dateVal + '" ' +
+                    'class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer">' +
                 '<div class="flex items-center gap-2">' +
                     '<button type="button" onclick="setCdEditRepeat(\'once\')" data-repeat="once" class="cd-repeat-btn detail-tag-pill ' + (repeatVal === 'once' ? 'detail-tag-pill-selected' : '') + '" style="--tag-color:#3b82f6">仅一次</button>' +
                     '<button type="button" onclick="setCdEditRepeat(\'yearly\')" data-repeat="yearly" class="cd-repeat-btn detail-tag-pill ' + (repeatVal === 'yearly' ? 'detail-tag-pill-selected' : '') + '" style="--tag-color:#22c55e">每年重复</button>' +

@@ -88,8 +88,20 @@ function isDarkThemeActive() {
 function renderSubtaskListDisplay(task, colorMode = 'theme') {
     // 文本模式下不显示子任务，回退到 notes 显示
     if (task.mode === 'text') return '';
-    const validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
+    let validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
     if (validSubtasks.length === 0) return '';
+
+    // 与任务详情栏保持一致：未完成的子任务排在已完成子任务之前，
+    // 每组内部再按 originalOrder（创建/拖拽顺序）排序。
+    // 缺失 originalOrder 时回退到在数组中的相对位置，保证排序稳定。
+    validSubtasks.forEach((st, i) => {
+        if (st.originalOrder === undefined) st.originalOrder = i;
+    });
+    validSubtasks = [...validSubtasks].sort((a, b) => {
+        if (!a.completed && b.completed) return -1;
+        if (a.completed && !b.completed) return 1;
+        return (a.originalOrder || 0) - (b.originalOrder || 0);
+    });
 
     const total = validSubtasks.length;
     const completedCount = validSubtasks.filter(st => st.completed).length;
@@ -111,35 +123,6 @@ function renderSubtaskListDisplay(task, colorMode = 'theme') {
         html += `<div class="${colors.muted}">…… [ ${completedCount}/${total} ]</div>`;
     }
 
-    html += '</div>';
-    return html;
-}
-
-// 方案C：子任务内联展示（最多3条，超出省略，末尾显示进度"(已完成/总数)"）
-function renderSubtaskInlineDisplay(task) {
-    // 文本模式下不显示子任务，回退到 notes 显示
-    if (task.mode === 'text') return '';
-    const validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
-    if (validSubtasks.length === 0) return '';
-
-    const total = validSubtasks.length;
-    const completedCount = validSubtasks.filter(st => st.completed).length;
-    const maxShow = 3;
-    const showItems = validSubtasks.slice(0, maxShow);
-
-    let html = '<div class="text-xs text-slate-400 mt-1 leading-relaxed flex flex-wrap gap-x-3 gap-y-0.5">';
-    showItems.forEach((st, i) => {
-        const icon = st.completed ? 'fa-check-circle' : 'fa-circle';
-        const cls = st.completed ? 'text-slate-500' : 'text-slate-300';
-        html += `<span class="${cls} inline-flex items-center gap-1"><i class="far ${icon}"></i>${escapeHtml(st.text)}</span>`;
-        if (i < showItems.length - 1) html += '&nbsp;&nbsp;';
-    });
-
-    if (total > maxShow) {
-        html += ` <span class="text-slate-500">……</span>`;
-    }
-
-    html += ` <span class="text-slate-400">[ ${completedCount}/${total} ]</span>`;
     html += '</div>';
     return html;
 }
