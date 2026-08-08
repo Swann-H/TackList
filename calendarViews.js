@@ -62,7 +62,7 @@ function renderWeekView(container) {
             <div class="flex-1 min-w-0 border-l border-theme ${isWeekend ? 'week-weekend-bg bg-gray-50 dark:bg-gray-700/15' : ''}">
                 <div class="text-center py-1 border-b border-theme">
                     <div class="text-xs text-theme-secondary">${formatWeekdayShort(date)}</div>
-                    <div class="h-6 flex items-center justify-center"><span class="text-sm font-bold ${isToday ? 'w-6 h-6 inline-flex items-center justify-center rounded-full bg-blue-500 text-white' : 'text-theme-primary'}">${date.getDate()}</span></div>
+                    <div class="h-6 flex items-center justify-center"><span class="text-sm font-bold ${isToday ? 'w-6 h-6 inline-flex items-center justify-center rounded-full bg-accent text-white' : 'text-theme-primary'}">${date.getDate()}</span></div>
                     ${(() => { const lt = getLunarDisplayText(date); return lt ? `<div class="text-[10px] text-theme-muted leading-none mt-0.5 truncate">${lt}</div>` : ''; })()}
                 </div>
                 <div class="p-1 min-h-[28px]"
@@ -80,8 +80,8 @@ function renderWeekView(container) {
                                      ondragstart="handleTaskDragStart(event, '${task.id}')"
                                      ondragend="handleTaskDragEnd(event)">${task.title || '新任务'}</div>`;
                     }).join('')}
-                    ${dayAllDay.length > 2 && collapsed ? `<div class="text-xs text-blue-500 cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">+${dayAllDay.length - 2}更多</div>` : ''}
-                    ${dayAllDay.length > 2 && !collapsed ? `<div class="text-xs text-blue-500 cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">收起</div>` : ''}
+                    ${dayAllDay.length > 2 && collapsed ? `<div class="text-xs text-accent cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">+${dayAllDay.length - 2}更多</div>` : ''}
+                    ${dayAllDay.length > 2 && !collapsed ? `<div class="text-xs text-accent cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">收起</div>` : ''}
                 </div>
             </div>
         `;
@@ -128,16 +128,16 @@ function renderWeekView(container) {
         const columnTasks = layoutDayTasks(dayTimed, hourHeight);
         
         timeGridHtml += `
-            <div class="flex-1 min-w-0 relative ${isWeekend ? 'week-weekend-bg bg-gray-50/50' : ''} ${isToday ? 'bg-blue-50/30 dark:bg-blue-900/15' : ''} border-l border-theme"
+            <div class="flex-1 min-w-0 relative ${isWeekend ? 'week-weekend-bg bg-gray-50/50' : ''} ${isToday ? 'bg-accent-soft dark:bg-accent-strong' : ''} border-l border-theme"
                  style="height: ${totalHours * hourHeight}px;"
                  onclick="handleWeekGridClick(event, '${dateStr}')"
                  onmousemove="handleWeekGridMouseMove(event, '${dateStr}')"
                  onmouseleave="handleWeekGridMouseLeave(event)"
                  ondragover="handleWeekDragOver(event)"
                  ondrop="handleWeekTimeDrop(event, '${dateStr}')">
-                <div class="week-hover-indicator absolute left-0 right-0 h-6 rounded flex items-center justify-between px-2 bg-blue-50/80 dark:bg-blue-900/30 pointer-events-none" style="display: none; top: 0px; z-index: 6;">
-                    <span class="week-hover-time text-xs text-blue-500 dark:text-blue-300 font-medium"></span>
-                    <span class="text-blue-500 dark:text-blue-300 font-bold text-sm">+</span>
+                <div class="week-hover-indicator absolute left-0 right-0 h-6 rounded flex items-center justify-between px-2 bg-accent-soft dark:bg-accent-strong pointer-events-none" style="display: none; top: 0px; z-index: 6;">
+                    <span class="week-hover-time text-xs text-accent dark:text-accent-secondary font-medium"></span>
+                    <span class="text-accent dark:text-accent-secondary font-bold text-sm">+</span>
                 </div>
                 ${columnTasks.map(taskLayout => {
                     const list = lists.find(l => l.id === taskLayout.task.listId);
@@ -548,7 +548,7 @@ function renderMonthView(container) {
                              ondrop="handleMonthDrop(event, '${dateStr}')">
                             <div class="grid items-center mb-2" style="grid-template-columns: 1fr auto 1fr">
                                 <div class="flex justify-start">${holidayBadge || weekBadge || ''}</div>
-                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-blue-500 text-white font-bold' : 'font-medium text-theme-primary'} ${dayTasks.length > displayCount ? (isToday ? 'cursor-pointer hover:bg-blue-600' : 'cursor-pointer hover:text-blue-500') : ''}" ${dayTasks.length > displayCount ? `onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"` : ''}>${date.getDate()}</span>
+                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-accent text-white font-bold' : 'font-medium text-theme-primary'} ${dayTasks.length > displayCount ? (isToday ? 'cursor-pointer hover:bg-accent-hover' : 'cursor-pointer hover:text-accent') : ''}" ${dayTasks.length > displayCount ? `onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"` : ''}>${date.getDate()}</span>
                                 <div class="flex justify-end">${lunarHtml || ''}</div>
                             </div>
                             <div class="space-y-1">
@@ -570,9 +570,9 @@ function renderMonthView(container) {
                                         </div>
                                     `;
                                 }).join('')}
-                                ${dayTasks.length > displayCount ? `<div class="relative text-xs"><span class="text-blue-500 cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')">+${dayTasks.length - displayCount}更多</span><span class="text-blue-500 cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
+                                ${dayTasks.length > displayCount ? `<div class="relative text-xs"><span class="text-accent cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')">+${dayTasks.length - displayCount}更多</span><span class="text-accent cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
                             </div>
-                            ${dayTasks.length <= displayCount ? `<button class="absolute bottom-1 right-1 text-blue-500 text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</button>` : ''}
+                            ${dayTasks.length <= displayCount ? `<button class="absolute bottom-1 right-1 text-accent text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</button>` : ''}
                         </div>
                     `;
                 }).join('')}
@@ -692,18 +692,18 @@ function openMonthDayPopover(dateStr) {
         return `
             <div class="schedule-task-item group flex items-start gap-4 mb-3 task-item ${taskIndex > 0 ? 'pt-3' : ''} ${task.completed ? 'opacity-60' : ''}" onclick="event.stopPropagation(); _openTaskDetailFromMonthPopover('${task.id}')">
                 <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                    <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
+                    <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
                         ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                     </button>
                     ${renderFocusButton(task.id)}
                 </div>
-                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="${list && list.color ? `border-left: 4px solid ${list.color};` : 'border-left: 4px solid #9ca3af;'} border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${getTaskBarColor(task, list && list.color ? list.color : '#9ca3af')}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary flex-wrap">
                         ${timeDisplay ? `<span class="${timeTextClass}">${timeDisplay}</span>` : ''}
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>${list.name}</span>` : ''}
                         ${renderTagCapsules(task, 2, 'right')}
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
-                        ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
+                        ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
                     </div>
                     <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                         ${escapeHtml(task.title || '新任务')}
@@ -722,7 +722,7 @@ function openMonthDayPopover(dateStr) {
             <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
                 <div class="flex items-center gap-3">
                     <div class="text-center">
-                        <div class="${isToday ? 'text-blue-600 font-bold' : 'text-theme-primary'} text-2xl">${date.getDate()}</div>
+                        <div class="${isToday ? 'text-accent-dark font-bold' : 'text-theme-primary'} text-2xl">${date.getDate()}</div>
                         <div class="text-xs text-theme-muted">周${weekDayNames[date.getDay()]}</div>
                     </div>
                     <div class="flex flex-col gap-1">

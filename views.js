@@ -47,7 +47,7 @@ function updateViewButtons() {
         const btn = document.getElementById(`view-btn-${view}`);
         if (btn) {
             if (view === currentView) {
-                btn.className = 'px-4 py-2 rounded-lg bg-blue-500 text-white shadow-md view-btn-active';
+                btn.className = 'px-4 py-2 rounded-lg bg-accent text-white shadow-md view-btn-active';
             } else {
                 btn.className = 'px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary';
             }

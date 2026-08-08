@@ -760,7 +760,7 @@ function renderPomodoroPage() {
                 return `
                 <div class="pomodoro-glass-item flex items-start gap-2 py-2.5 px-3 rounded-r-lg cursor-pointer group relative"
                      data-record-idx="${recordIdx}"
-                     style="border-left: 4px solid ${listColor}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                     style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                     <i class="fas fa-clock text-sm text-theme-muted flex-shrink-0" style="width: 0.875rem; margin-top: 0.125rem;"></i>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center justify-between">
@@ -861,8 +861,8 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
             return `
             <div onclick="${onClickFn(task.id)}"
                  class="flex items-start gap-3 py-2.5 px-3 rounded-r-lg transition cursor-pointer ${isCurrent ? 'pomodoro-task-selected' : 'hover:brightness-95'} ${task.completed ? 'opacity-55' : ''}"
-                 style="border-left: 4px solid ${listColor}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
-                <button onclick="event.stopPropagation();" class="mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-theme'}">
+                 style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                <button onclick="event.stopPropagation();" class="mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                 </button>
                 <div class="flex-1 min-w-0">
@@ -3436,8 +3436,8 @@ function renderStatsRecords() {
                 '<div class="flex items-center justify-between">' +
                 '<span class="text-sm text-theme-secondary"><i class="fas fa-clock mr-1"></i>' + startStr + ' - ' + endStr + '</span>' +
                 '<div class="flex items-center gap-1 flex-shrink-0">' +
-                '<button onclick="event.stopPropagation(); deletePomodoroRecord(' + recordIdx + ')" class="' + (pomodoroRecordDeleteConfirmingIdx === recordIdx ? 'flex text-red-500' : 'hidden group-hover:flex text-theme-muted hover:text-blue-500') + ' items-center justify-center w-5 h-5 rounded hover:bg-theme-primary transition" title="' + (pomodoroRecordDeleteConfirmingIdx === recordIdx ? '再次单击确认删除' : '删除') + '"><i class="fas fa-trash text-xs"></i></button>' +
-                '<button onclick="event.stopPropagation(); openRelinkTaskPanel(' + recordIdx + ')" class="hidden group-hover:flex items-center justify-center w-5 h-5 rounded hover:bg-theme-primary text-theme-muted hover:text-blue-500 transition" title="关联任务"><i class="fas fa-link text-xs"></i></button>' +
+                '<button onclick="event.stopPropagation(); deletePomodoroRecord(' + recordIdx + ')" class="' + (pomodoroRecordDeleteConfirmingIdx === recordIdx ? 'flex text-red-500' : 'hidden group-hover:flex text-theme-muted hover:text-accent') + ' items-center justify-center w-5 h-5 rounded hover:bg-theme-primary transition" title="' + (pomodoroRecordDeleteConfirmingIdx === recordIdx ? '再次单击确认删除' : '删除') + '"><i class="fas fa-trash text-xs"></i></button>' +
+                '<button onclick="event.stopPropagation(); openRelinkTaskPanel(' + recordIdx + ')" class="hidden group-hover:flex items-center justify-center w-5 h-5 rounded hover:bg-theme-primary text-theme-muted hover:text-accent transition" title="关联任务"><i class="fas fa-link text-xs"></i></button>' +
                 '<span class="text-xs text-theme-muted">' + duration + 'm</span>' +
                 '</div></div>' +
                 '<div class="flex items-center gap-2 mt-0.5">' +

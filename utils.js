@@ -596,12 +596,23 @@ function lightenColor(hex, amount) {
     return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
+// 获取优先级显示模式（含旧数据兼容）
+// 'bg'=任务底色 / 'checkbox'=复选框边框(默认) / 'bar'=左侧色条 / 'none'=不显示
+function getPriorityDisplayMode() {
+    if (settings && settings.priorityDisplayMode) return settings.priorityDisplayMode;
+    // 向后兼容旧布尔值 priorityTaskBg
+    if (settings && settings.priorityTaskBg === false) return 'none';
+    if (settings && settings.priorityTaskBg === true) return 'bg';
+    return 'checkbox';
+}
+
 // 获取任务的四象限颜色类
-function getQuadrantColorClass(task) {
+// opts.forceBg=true 时强制使用优先级底色（供计划面板等不响应模式的视图使用）
+function getQuadrantColorClass(task, opts) {
     const isDark = isDarkMode();
     const hasBg = !!settings.bgImage;
-    // 优先级底色开关：开启时按优先级使用不同底色；关闭时所有任务使用与「不紧急不重要」一致的底色（border/dot 仍区分优先级）
-    const usePriority = settings && settings.priorityTaskBg !== false;
+    // 底色仅在 'bg' 模式启用；forceBg 可强制开启（计划面板等保持现状的视图）
+    const usePriority = (opts && opts.forceBg) || getPriorityDisplayMode() === 'bg';
     const neutralBg = hasBg ? 'bg-slate-300/25' : (isDark ? 'bg-gray-700/30' : 'bg-gray-50');
     if (task.important && task.urgent) {
         if (hasBg) return { bg: usePriority ? 'bg-red-500/25' : neutralBg, border: 'border-l-red-400', dot: 'bg-red-400', light: '#fee2e2' };
@@ -624,6 +635,32 @@ function getQuadrantColorClass(task) {
             ? { bg: 'bg-gray-700/30', border: 'border-l-gray-400', dot: 'bg-gray-400', light: '#374151' }
             : { bg: 'bg-gray-50', border: 'border-l-gray-400', dot: 'bg-gray-400', light: '#f3f4f6' };
     }
+}
+
+// 统一获取任务复选框边框类（未完成态）
+// 'checkbox' 模式按优先级着色；其他模式回退主题色
+function getTaskCheckboxClass(task) {
+    if (getPriorityDisplayMode() !== 'checkbox') {
+        return 'border-accent hover:border-accent-hover';
+    }
+    if (task.important && task.urgent)
+        return 'border-red-500 dark:border-red-400 hover:border-red-600 dark:hover:border-red-500';
+    if (task.important && !task.urgent)
+        return 'border-blue-500 dark:border-blue-400 hover:border-blue-600 dark:hover:border-blue-500';
+    if (!task.important && task.urgent)
+        return 'border-yellow-500 dark:border-yellow-400 hover:border-yellow-600 dark:hover:border-yellow-500';
+    return 'border-gray-400 dark:border-gray-500 hover:border-gray-500 dark:hover:border-gray-400';
+}
+
+// 统一获取左侧色条颜色（hex）
+// 'bar' 模式按优先级着色；其他模式回退 fallbackColor（清单色）
+function getTaskBarColor(task, fallbackColor) {
+    if (getPriorityDisplayMode() !== 'bar') return fallbackColor;
+    if (!task) return fallbackColor;
+    if (task.important && task.urgent) return '#ef4444';
+    if (task.important && !task.urgent) return '#3b82f6';
+    if (!task.important && task.urgent) return '#eab308';
+    return '#9ca3af';
 }
 
 // 工具函数

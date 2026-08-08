@@ -501,7 +501,7 @@ function cdEditFormHtml(c) {
     const repeatVal = c ? c.repeat : 'once';
     const showDelete = !!c;
     return '' +
-        '<div class="cd-edit-card p-3 bg-theme-tertiary rounded-lg border border-theme border-l-4 border-l-blue-400">' +
+        '<div class="cd-edit-card p-3 bg-theme-tertiary rounded-lg border border-theme border-l-4 border-l-accent">' +
             '<div class="space-y-2">' +
                 '<input type="text" id="cd-edit-name" maxlength="20" value="' + nameVal + '" placeholder="名称（最多 20 字）" ' +
                     'class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-primary text-theme-primary">' +

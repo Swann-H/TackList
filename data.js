@@ -554,14 +554,14 @@ function showBackupReminder() {
     reminder.className = 'fixed bottom-4 right-4 bg-theme-secondary rounded-xl shadow-lg p-4 max-w-sm z-50 border border-theme';
     reminder.innerHTML = `
         <div class="flex items-start gap-3">
-            <div class="p-2 bg-blue-100 rounded-full">
-                <i class="fas fa-cloud-arrow-down text-blue-600"></i>
+            <div class="p-2 bg-accent-strong rounded-full">
+                <i class="fas fa-cloud-arrow-down text-accent-dark"></i>
             </div>
             <div class="flex-1">
                 <h4 class="font-medium text-theme-primary">备份提醒</h4>
                 <p class="text-sm text-theme-secondary mt-1">已到备份时间，是否下载配置文件？</p>
                 <div class="flex gap-2 mt-3">
-                    <button onclick="confirmBackup()" class="flex-1 px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">下载</button>
+                    <button onclick="confirmBackup()" class="flex-1 px-3 py-2 bg-accent text-white rounded-lg hover:bg-accent-hover transition">下载</button>
                     <button onclick="skipBackup()" class="flex-1 px-3 py-2 border border-theme text-theme-secondary rounded-lg hover:bg-theme-tertiary transition">这次不要</button>
                 </div>
             </div>
@@ -693,6 +693,7 @@ const DEFAULT_SETTINGS = {
     easterEggEnabled: true,
     showHolidayCountdown: true,
     priorityTaskBg: true,
+    priorityDisplayMode: 'checkbox',
     showSidebarExtras: true,
     showFocusButton: true,
     bgFlowEffect: false,
@@ -901,19 +902,19 @@ function updateThemeButtons() {
     const darkBtn = document.getElementById('theme-dark-btn');
     
     if (settings.theme === 'dark') {
-        lightBtn.classList.remove('border-blue-500', 'bg-blue-50');
+        lightBtn.classList.remove('border-accent', 'bg-accent-soft');
         lightBtn.classList.add('text-theme-primary');
-        lightBtn.classList.remove('text-blue-700');
-        darkBtn.classList.add('border-blue-500', 'bg-blue-50');
+        lightBtn.classList.remove('text-accent-dark');
+        darkBtn.classList.add('border-accent', 'bg-accent-soft');
         darkBtn.classList.remove('text-theme-primary');
-        darkBtn.classList.add('text-blue-700');
+        darkBtn.classList.add('text-accent-dark');
     } else {
-        lightBtn.classList.add('border-blue-500', 'bg-blue-50');
+        lightBtn.classList.add('border-accent', 'bg-accent-soft');
         lightBtn.classList.remove('text-theme-primary');
-        lightBtn.classList.add('text-blue-700');
-        darkBtn.classList.remove('border-blue-500', 'bg-blue-50');
+        lightBtn.classList.add('text-accent-dark');
+        darkBtn.classList.remove('border-accent', 'bg-accent-soft');
         darkBtn.classList.add('text-theme-primary');
-        darkBtn.classList.remove('text-blue-700');
+        darkBtn.classList.remove('text-accent-dark');
     }
 }
 

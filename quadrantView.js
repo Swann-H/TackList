@@ -60,7 +60,7 @@ function renderQuadrantView(container) {
         <div class="h-full flex flex-col">
             <div class="flex items-center justify-between mb-6 flex-shrink-0">
                 <h2 class="text-2xl font-bold text-theme-primary">四象限视图</h2>
-                <button onclick="resetQuadrantOrder()" class="text-sm text-blue-500 hover:text-blue-600">
+                <button onclick="resetQuadrantOrder()" class="text-sm text-accent hover:text-accent-hover">
                     <i class="fas fa-redo mr-1"></i>恢复默认
                 </button>
             </div>
@@ -128,7 +128,7 @@ function renderQuadrantView(container) {
                                              ondragover="handleTaskDragOver(event)"
                                              ondrop="handleTaskDrop(event, '${task.id}', '${key}')">
                                             <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                                                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
+                                                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-accent dark:border-white hover:border-accent-hover dark:hover:border-accent-secondary'}">
                                                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                                                 </button>
                                                 ${renderFocusButton(task.id)}
@@ -139,7 +139,7 @@ function renderQuadrantView(container) {
                                                     ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${list.name}</span>` : ''}
                                                     ${renderTagCapsules(task, 2, 'right')}
                                                     ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
-                                                    ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
+                                                    ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
                                                     ${isStagnant && key === 'important-not-urgent' ? `<span class="flex items-center gap-1 text-amber-500"><i class="fas fa-hourglass-half"></i>已停留${stagnationDays}天</span>` : ''}
                                                 </div>
                                                 <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">

@@ -212,15 +212,15 @@ function renderSearchResults(results, query) {
             <div class="task-list-item relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
                  data-list-id="${task.listId || 'default'}"
                  onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
-                <div class="task-list-color-bar" style="background-color: ${listColor};"></div>
-                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 hover:border-blue-600'}">
+                <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, listColor)};"></div>
+                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                 </button>
                 <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
                 ${renderFocusButton(task.id)}
                 <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                     ${tagCapsules}
-                    ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-400"></i>${progress}%</span>` : ''}
+                    ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
                     ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                     ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span><span class="hidden sm:inline">${listName}</span></span>` : ''}
                 </div>
@@ -985,7 +985,7 @@ function renderNLPPreview(parsed) {
             const ed = parsed.endTime;
             timeStr += `-${ed.getHours().toString().padStart(2, '0')}:${ed.getMinutes().toString().padStart(2, '0')}`;
         }
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded text-xs"><i class="fas fa-calendar-alt"></i>${dateStr} ${timeStr}</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded text-xs"><i class="fas fa-calendar-alt"></i>${dateStr} ${timeStr}</span>`);
     }
 
     // 重复预览
@@ -1043,7 +1043,7 @@ function renderNLPPreview(parsed) {
     if (parsed.important && parsed.urgent) {
         parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded text-xs"><i class="fas fa-exclamation-triangle"></i>重要且紧急</span>`);
     } else if (parsed.important) {
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded text-xs"><i class="fas fa-star"></i>重要不紧急</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded text-xs"><i class="fas fa-star"></i>重要不紧急</span>`);
     } else if (parsed.urgent) {
         parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 rounded text-xs"><i class="fas fa-clock"></i>紧急不重要</span>`);
     }
@@ -1275,7 +1275,7 @@ function renderShortcutsSettings() {
                 <span class="text-sm text-theme-secondary">${combo.label || DEFAULT_SHORTCUTS[key].label}</span>
                 <div class="flex items-center gap-2">
                     ${!isDefault ? `<button class="p-1 text-theme-muted hover:text-theme-primary transition" onclick="resetShortcut('${key}')" title="重置为默认"><i class="fas fa-undo text-xs"></i></button>` : ''}
-                    <button class="shortcut-record-btn px-3 py-1.5 text-sm border border-theme rounded-lg ${isRecording ? 'bg-blue-500 text-white border-blue-500' : 'bg-theme-tertiary text-theme-primary hover:bg-theme-secondary'} transition min-w-[140px] text-center"
+                    <button class="shortcut-record-btn px-3 py-1.5 text-sm border border-theme rounded-lg ${isRecording ? 'bg-accent text-white border-accent' : 'bg-theme-tertiary text-theme-primary hover:bg-theme-secondary'} transition min-w-[140px] text-center"
                             onclick="startShortcutRecording('${key}')">
                         ${displayText}
                     </button>

@@ -300,14 +300,14 @@ function handleScheduleDragOver(event) {
     event.dataTransfer.dropEffect = 'move';
     const dayEl = event.target.closest('.schedule-day-drop');
     if (dayEl) {
-        dayEl.classList.add('ring-2', 'ring-blue-400');
+        dayEl.classList.add('ring-2', 'ring-accent-secondary');
     }
 }
 
 function handleScheduleDragLeave(event) {
     const dayEl = event.target.closest('.schedule-day-drop');
     if (dayEl) {
-        dayEl.classList.remove('ring-2', 'ring-blue-400');
+        dayEl.classList.remove('ring-2', 'ring-accent-secondary');
     }
 }
 
@@ -316,7 +316,7 @@ function handleScheduleDrop(event) {
     const dayEl = event.target.closest('.schedule-day-drop');
     if (!dayEl || !draggedTaskId) return;
     
-    dayEl.classList.remove('ring-2', 'ring-blue-400');
+    dayEl.classList.remove('ring-2', 'ring-accent-secondary');
     
     const newDateStr = dayEl.dataset.dropDate;
     const task = tasks.find(t => t.id === draggedTaskId);
@@ -1285,10 +1285,10 @@ function renderSubtasks() {
         }
         
         const checkbox = document.createElement('button');
-        checkbox.className = 'w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300';
+        checkbox.className = 'w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition border-accent dark:border-white hover:border-accent-hover dark:hover:border-accent-secondary';
         if (subtask.completed) {
             checkbox.classList.add('bg-gray-400', 'border-gray-400');
-            checkbox.classList.remove('border-blue-500', 'dark:border-white');
+            checkbox.classList.remove('border-accent', 'dark:border-white');
             checkbox.innerHTML = '<i class="fas fa-check text-[8px] text-white"></i>';
         }
         checkbox.onclick = () => toggleSubtaskComplete(subtask.id, !subtask.completed);
@@ -1332,7 +1332,7 @@ function renderSubtasks() {
         wrapper.ondragend = () => {
             wrapper.draggable = false;
             container.querySelectorAll('.subtask-item').forEach(el => {
-                el.classList.remove('opacity-50', 'border-t-2', 'border-b-2', 'border-blue-400');
+                el.classList.remove('opacity-50', 'border-t-2', 'border-b-2', 'border-accent-secondary');
             });
             container.querySelectorAll('.subtask-drop-zone').forEach(el => {
                 el.classList.remove('active');
@@ -1349,16 +1349,16 @@ function renderSubtasks() {
                 const rect = wrapper.getBoundingClientRect();
                 const midY = rect.top + rect.height / 2;
                 if (e.clientY < midY) {
-                    wrapper.classList.add('border-t-2', 'border-blue-400');
-                    wrapper.classList.remove('border-b-2', 'border-blue-400');
+                    wrapper.classList.add('border-t-2', 'border-accent-secondary');
+                    wrapper.classList.remove('border-b-2', 'border-accent-secondary');
                 } else {
-                    wrapper.classList.add('border-b-2', 'border-blue-400');
-                    wrapper.classList.remove('border-t-2', 'border-blue-400');
+                    wrapper.classList.add('border-b-2', 'border-accent-secondary');
+                    wrapper.classList.remove('border-t-2', 'border-accent-secondary');
                 }
             }
         };
         wrapper.ondragleave = () => {
-            wrapper.classList.remove('border-t-2', 'border-b-2', 'border-blue-400');
+            wrapper.classList.remove('border-t-2', 'border-b-2', 'border-accent-secondary');
         };
         wrapper.ondrop = (e) => {
             e.preventDefault();
@@ -1724,13 +1724,13 @@ function updateDetailCompleteButton(completed) {
     
     if (completed) {
         btn.classList.add('bg-gray-400', 'border-gray-400');
-        btn.classList.remove('border-blue-500', 'dark:border-white');
+        btn.classList.remove('border-accent', 'dark:border-white');
         icon.classList.remove('hidden');
         icon.classList.add('text-white');
         icon.classList.remove('text-gray-500');
     } else {
         btn.classList.remove('bg-gray-400', 'border-gray-400');
-        btn.classList.add('border-blue-500', 'dark:border-white');
+        btn.classList.add('border-accent', 'dark:border-white');
         icon.classList.add('hidden');
         icon.classList.remove('text-white');
     }
@@ -2137,7 +2137,7 @@ function renderPlanPanel() {
             const list = lists.find(l => l.id === task.listId);
             const listColor = list ? list.color : '#9ca3af';
             const listName = list ? list.name : '';
-            const quadColors = getQuadrantColorClass(task);
+            const quadColors = getQuadrantColorClass(task, { forceBg: true });
             const timeDisplay = task.startTime ? formatTaskListTime(task) : '';
 
             html += `
@@ -2147,7 +2147,7 @@ function renderPlanPanel() {
                      ondragend="handlePlanDragEnd(event)"
                      onclick="event.stopPropagation(); detailOpenedFromPlan=true; openTaskDetailPanel('${task.id}')"
                      style="border-left: 3px solid ${listColor}; overflow: hidden;">
-                    <span class="flex-1 text-sm text-theme-primary truncate min-w-0 group-hover:text-blue-500 transition-colors duration-150">${task.title || '新任务'}</span>
+                    <span class="flex-1 text-sm text-theme-primary truncate min-w-0 group-hover:text-accent transition-colors duration-150">${task.title || '新任务'}</span>
                     <div class="flex items-center gap-1.5 flex-shrink-0 text-xs text-theme-secondary whitespace-nowrap">
                         ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span></span>` : ''}
                         ${timeDisplay ? `<span><i class="fas fa-clock mr-0.5"></i>${timeDisplay}</span>` : ''}

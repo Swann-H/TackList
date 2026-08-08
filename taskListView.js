@@ -299,15 +299,15 @@ function buildTaskListItemHtml(task, useShortTime) {
              data-list-id="${task.listId || 'default'}"
              onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
              >
-            <div class="task-list-color-bar" style="background-color: ${listColor};"></div>
-            <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
+            <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, listColor)};"></div>
+            <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
                 ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
             </button>
             <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
             ${renderFocusButton(task.id)}
             <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                 ${tagCapsules}
-                ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-400"></i>${progress}%</span>` : ''}
+                ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
                 ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                 ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span><span class="hidden sm:inline">${listName}</span></span>` : ''}
             </div>
@@ -380,7 +380,7 @@ function renderTaskListView(container) {
         if (hasMore) {
             html += `
                 <div class="py-2 px-3">
-                    <button onclick="event.stopPropagation(); showCompletedTasksPage()" class="text-sm text-blue-500 hover:text-blue-600 transition">
+                    <button onclick="event.stopPropagation(); showCompletedTasksPage()" class="text-sm text-accent hover:text-accent-hover transition">
                         查看更多
                     </button>
                 </div>
@@ -646,12 +646,12 @@ function buildScheduleDayCardHtml(date, dayTasks) {
     const tasks = dayTasks || [];
 
     return `
-                    <div class="bg-theme-secondary rounded-xl shadow-theme p-4 ${isToday ? 'ring-2 ring-blue-500' : ''} schedule-day-drop" data-drop-date="${dateStr}" ondragover="handleScheduleDragOver(event)" ondragleave="handleScheduleDragLeave(event)" ondrop="handleScheduleDrop(event)">
+                    <div class="bg-theme-secondary rounded-xl shadow-theme p-4 ${isToday ? 'ring-2 ring-accent' : ''} schedule-day-drop" data-drop-date="${dateStr}" ondragover="handleScheduleDragOver(event)" ondragleave="handleScheduleDragLeave(event)" ondrop="handleScheduleDrop(event)">
                         <div class="flex items-center gap-4 mb-4">
                             <div class="text-center min-w-[60px]">
-                                <div class="${isToday ? 'text-blue-600 font-bold' : 'text-theme-secondary'} text-2xl">${day}</div>
+                                <div class="${isToday ? 'text-accent-dark font-bold' : 'text-theme-secondary'} text-2xl">${day}</div>
                                 <div class="text-sm text-theme-muted">周${dayOfWeek}</div>
-                                ${isToday ? '<div class="text-xs text-blue-500 font-medium mt-1">今天</div>' : ''}
+                                ${isToday ? '<div class="text-xs text-accent font-medium mt-1">今天</div>' : ''}
                                 ${(() => { const lt = getLunarDisplayText(date); return lt ? `<div class="text-[10px] text-theme-muted leading-none mt-1">${lt}</div>` : ''; })()}
                             </div>
                             <div class="flex-1">
@@ -672,18 +672,18 @@ function buildScheduleDayCardHtml(date, dayTasks) {
                                         return `
                                             <div class="schedule-task-item group flex items-start gap-4 mb-3 task-item ${taskIndex > 0 ? 'pt-3' : ''} ${task.completed ? 'opacity-60' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" ondragstart="handleScheduleDragStart(event, '${task.id}')">
                                                 <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                                                    <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white hover:border-blue-600 dark:hover:border-blue-300'}">
+                                                    <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
                                                         ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                                                     </button>
                                                     ${renderFocusButton(task.id)}
                                                 </div>
-                                                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="${list && list.color ? `border-left: 4px solid ${list.color};` : 'border-left: 4px solid #9ca3af;'} border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                                                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${getTaskBarColor(task, list && list.color ? list.color : '#9ca3af')}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                                                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
                                                         <span class="${timeTextClass}">${timeDisplay}</span>
                                                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>${list.name}</span>` : ''}
                                                         ${renderTagCapsules(task, 2, 'right')}
                                                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
-                                                        ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${task.progress}%</span>` : ''}
+                                                        ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
                                                     </div>
                                                     <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                                                         ${task.title || '新任务'}

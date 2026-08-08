@@ -57,7 +57,7 @@ function openSettingsModal() {
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
     document.getElementById('settings-cmd-remove-time').checked = settings.cmdRemoveTimeText !== false;
-    document.getElementById('settings-priority-task-bg').checked = settings.priorityTaskBg !== false;
+    document.getElementById('settings-priority-display-mode').value = getPriorityDisplayMode();
     document.getElementById('settings-show-focus-button').checked = settings.showFocusButton !== false;
     document.getElementById('settings-cmd-default-date').value = settings.cmdDefaultDate || 'none';
     document.getElementById('settings-focus-duration').value = settings.focusDuration || 25;
@@ -432,7 +432,7 @@ function saveSettings(silent) {
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
     settings.cmdRemoveTimeText = document.getElementById('settings-cmd-remove-time').checked;
-    settings.priorityTaskBg = document.getElementById('settings-priority-task-bg').checked;
+    settings.priorityDisplayMode = document.getElementById('settings-priority-display-mode').value;
     settings.showFocusButton = document.getElementById('settings-show-focus-button').checked;
     settings.cmdDefaultDate = document.getElementById('settings-cmd-default-date').value;
     settings.focusDuration = parseInt(document.getElementById('settings-focus-duration').value);
@@ -1500,7 +1500,7 @@ function _openColorPicker(paletteKey, field, currentColor, anchorEl) {
 
     const picker = document.createElement('div');
     picker.id = 'palette-inline-picker';
-    picker.className = 'fixed z-[10000] bg-theme-primary border-2 border-blue-500 rounded-lg p-3 shadow-2xl';
+    picker.className = 'fixed z-[10000] bg-theme-primary border-2 border-accent rounded-lg p-3 shadow-2xl';
     picker.style.cssText = 'min-width:200px;';
 
     // 基于当前颜色生成5个相近预设色
@@ -1510,14 +1510,14 @@ function _openColorPicker(paletteKey, field, currentColor, anchorEl) {
         '<div class="text-xs font-semibold text-theme-primary mb-2">编辑' + paletteName + ' · ' + fieldLabel + '</div>' +
         '<div class="flex gap-2 items-center mb-2">' +
             '<input type="color" id="inline-color-input" value="' + originalColor + '" class="w-12 h-9 rounded cursor-pointer border-2 border-theme" style="padding:0;background:transparent;">' +
-            '<input type="text" id="inline-hex-input" value="' + originalColor + '" class="flex-1 px-2 py-1.5 text-sm border-2 border-theme rounded bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" maxlength="7" spellcheck="false">' +
+            '<input type="text" id="inline-hex-input" value="' + originalColor + '" class="flex-1 px-2 py-1.5 text-sm border-2 border-theme rounded bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" maxlength="7" spellcheck="false">' +
         '</div>' +
         '<div class="flex gap-1 mb-3">' +
             presets.map(function(c) { return '<div class="preset-color flex-1 h-6 rounded cursor-pointer border border-theme hover:scale-110 transition" style="background-color:' + c + ';" data-color="' + c + '" title="' + c + '"></div>'; }).join('') +
         '</div>' +
         '<div class="flex justify-end gap-2">' +
             '<button id="inline-cancel-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border border-theme text-theme-secondary hover:bg-theme-secondary transition" title="取消"><i class="fas fa-times text-sm"></i></button>' +
-            '<button id="inline-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition" title="保存"><i class="fas fa-check text-sm"></i></button>' +
+            '<button id="inline-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white hover:bg-accent-hover transition" title="保存"><i class="fas fa-check text-sm"></i></button>' +
         '</div>';
 
     document.body.appendChild(picker);

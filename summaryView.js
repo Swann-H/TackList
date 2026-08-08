@@ -74,10 +74,10 @@ function renderSummaryView(container) {
 
                 <div class="flex items-center gap-4">
                     <div class="flex bg-theme-tertiary rounded-lg p-1">
-                        <button id="summary-view-time" class="px-4 py-1.5 rounded-md transition ${summaryViewMode === 'time' ? 'bg-blue-500 text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}">
+                        <button id="summary-view-time" class="px-4 py-1.5 rounded-md transition ${summaryViewMode === 'time' ? 'bg-accent text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}">
                             按时间排布
                         </button>
-                        <button id="summary-view-list" class="px-4 py-1.5 rounded-md transition ${summaryViewMode === 'list' ? 'bg-blue-500 text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}">
+                        <button id="summary-view-list" class="px-4 py-1.5 rounded-md transition ${summaryViewMode === 'list' ? 'bg-accent text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}">
                             按清单排布
                         </button>
                     </div>
@@ -104,7 +104,7 @@ function renderSummaryView(container) {
                             <h1 class="text-2xl font-bold text-theme-primary mb-1">${title}</h1>
                             <h2 class="text-theme-muted">${dateRangeStr}</h2>
                         </div>
-                        <button id="summary-copy-btn" class="w-9 h-9 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition" title="复制文本">
+                        <button id="summary-copy-btn" class="w-9 h-9 rounded-full border-2 border-accent text-accent flex items-center justify-center hover:bg-accent hover:text-white transition" title="复制文本">
                             <i class="fas fa-copy"></i>
                         </button>
                     </div>

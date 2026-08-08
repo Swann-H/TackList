@@ -8,32 +8,38 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <script>window._WEB_VERSION = 'offline';</script>
     <script src="offline_assets/tailwindcss.js"></script>
+        <script>
+            // accent palette bound to --accent-* vars, replaces former blue class overrides
+            tailwind.config = {
+                theme: {
+                    extend: {
+                        colors: {
+                            accent: {
+                                DEFAULT: 'var(--accent-color)',
+                                hover: 'var(--accent-hover)',
+                                secondary: 'var(--accent-secondary)',
+                                light: 'var(--accent-light)',
+                                dark: 'var(--accent-text-dark)',
+                                soft: 'var(--accent-bg)',
+                                strong: 'var(--accent-bg-strong)',
+                            }
+                        }
+                    }
+                }
+            }
+        </script>
     <link rel="stylesheet" href="offline_assets/css/all.min.css">
     <style>
-        /* 番茄倒计时专用字体 */
-        @font-face {
-            font-family: 'Oswald';
-            font-style: normal;
-            font-weight: 700;
-            src: url('/offline_assets/fonts/Oswald-700-latin.woff2') format('woff2');
-        }
-        @font-face {
-            font-family: 'Barlow Condensed';
-            font-style: normal;
-            font-weight: 700;
-            src: url('/offline_assets/fonts/BarlowCondensed-700-latin.woff2') format('woff2');
-        }
-        
-        .pomodoro-timer-font {
-            font-family: 'DIN Alternate', 'Barlow Condensed', 'Oswald', sans-serif;
-            font-variant-numeric: tabular-nums;
-        }
-        
-        * {
-            font-family: var(--app-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol");
-        }
 
+        /* Theme Variables - Light Mode (default) */
         :root {
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --accent-secondary: #60a5fa;
+            --accent-bg: #eff6ff;
+            --accent-bg-strong: #dbeafe;
+            --accent-text-dark: #2563eb;
+            --accent-light: #60a5fa;
             --bg-primary: #f9fafb;
             --bg-primary-rgb: 249,250,251;
             --bg-secondary: #ffffff;
@@ -44,21 +50,20 @@
             --text-secondary: #6b7280;
             --text-muted: #78716c;
             --border-color: #e5e7eb;
-            --accent-color: #3b82f6;
-            --accent-hover: #2563eb;
-            --accent-secondary: #60a5fa;
-            --accent-bg: #eff6ff;
-            --accent-bg-strong: #dbeafe;
-            --accent-text-dark: #2563eb;
-            --accent-light: #60a5fa;
-            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
             --view-bg-default: #f9fafb;
-            --view-bg-focus: #f4f7fc;
-            --view-bg-break: #f2fbf5;
+            --view-bg-focus: #eef2ff;
+            --view-bg-break: #ecfdf5;
         }
 
+        /* Theme Variables - Dark Mode */
         [data-theme="dark"] {
+            --accent-color: #60a5fa;
+            --accent-hover: #3b82f6;
+            --accent-secondary: #93c5fd;
+            --accent-bg: rgba(59,130,246,0.15);
+            --accent-bg-strong: rgba(59,130,246,0.25);
+            --accent-text-dark: #93c5fd;
+            --accent-light: #93c5fd;
             --bg-primary: #111827;
             --bg-primary-rgb: 17,24,39;
             --bg-secondary: #1f2937;
@@ -69,83 +74,10 @@
             --text-secondary: #d1d5db;
             --text-muted: #a8a29e;
             --border-color: #374151;
-            --accent-color: #60a5fa;
-            --accent-hover: #3b82f6;
-            --accent-secondary: #93c5fd;
-            --accent-bg: rgba(59,130,246,0.15);
-            --accent-bg-strong: rgba(59,130,246,0.25);
-            --accent-text-dark: #93c5fd;
-            --accent-light: #93c5fd;
-            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4);
             --view-bg-default: #111827;
-            --view-bg-focus: #0f172a;
-            --view-bg-break: #0b1f14;
+            --view-bg-focus: #1e293b;
+            --view-bg-break: #1a2e22;
         }
-
-        /* 主题色全局覆盖：让常用 Tailwind blue 类跟随 --accent-* 变量 */
-        /* 用 !important 确保优先级高于 Tailwind CDN 运行时注入的样式 */
-        /* 背景 */
-        .bg-blue-500 { background-color: var(--accent-color) !important; }
-        .bg-blue-600 { background-color: var(--accent-hover) !important; }
-        .hover\:bg-blue-600:hover { background-color: var(--accent-hover) !important; }
-        .hover\:bg-blue-50:hover { background-color: var(--accent-bg) !important; }
-        .bg-blue-50 { background-color: var(--accent-bg) !important; }
-        .bg-blue-100 { background-color: var(--accent-bg-strong) !important; }
-        /* 文字 */
-        .text-blue-500 { color: var(--accent-color) !important; }
-        .text-blue-600 { color: var(--accent-text-dark) !important; }
-        .text-blue-700 { color: var(--accent-text-dark) !important; }
-        .text-blue-400 { color: var(--accent-light) !important; }
-        .hover\:text-blue-500:hover { color: var(--accent-color) !important; }
-        .hover\:text-blue-600:hover { color: var(--accent-hover) !important; }
-        /* "今天"按钮固定使用蓝色，不跟随主题色变化 */
-        #today-btn { color: #3b82f6 !important; border-color: #3b82f6 !important; }
-        #today-btn:hover { color: #ffffff !important; background-color: #3b82f6 !important; }
-        /* 节假日导入按钮固定使用蓝色，不跟随主题色变化（与"今天"按钮一致） */
-        #holiday-import-btn { color: #3b82f6 !important; border-color: #3b82f6 !important; }
-        #holiday-import-btn:hover { color: #ffffff !important; background-color: #3b82f6 !important; }
-        /* 边框 */
-        .border-blue-500 { border-color: var(--accent-color) !important; }
-        .border-blue-600 { border-color: var(--accent-hover) !important; }
-        .border-blue-300 { border-color: var(--accent-light) !important; }
-        .border-blue-400 { border-color: var(--accent-secondary) !important; }
-        .hover\:border-blue-600:hover { border-color: var(--accent-hover) !important; }
-        .hover\:border-blue-300:hover { border-color: var(--accent-secondary) !important; }
-        /* ring（环形边框，用于今天日期高亮等） */
-        .ring-blue-500 { --tw-ring-color: var(--accent-color) !important; }
-        .ring-blue-400 { --tw-ring-color: var(--accent-secondary) !important; }
-        /* 焦点态 */
-        .focus\:border-blue-500:focus { border-color: var(--accent-color) !important; }
-        .focus\:ring-blue-500:focus { --tw-ring-color: var(--accent-color) !important; }
-        /* 开关（peer-checked 机制） */
-        .peer:checked ~ .peer-checked\:bg-blue-500 { background-color: var(--accent-color) !important; }
-        .peer:checked ~ .peer-checked\:bg-blue-600 { background-color: var(--accent-hover) !important; }
-        /* 深色模式下的 blue 覆盖 */
-        [data-theme="dark"] .dark\:text-blue-300 { color: var(--accent-secondary) !important; }
-        [data-theme="dark"] .dark\:text-blue-400 { color: var(--accent-light) !important; }
-        [data-theme="dark"] .dark\:border-blue-300 { border-color: var(--accent-secondary) !important; }
-        [data-theme="dark"] .dark\:border-blue-400 { border-color: var(--accent-secondary) !important; }
-        [data-theme="dark"] .dark\:bg-blue-900\/20 { background-color: var(--accent-bg) !important; }
-        [data-theme="dark"] .dark\:bg-blue-900\/30 { background-color: var(--accent-bg-strong) !important; }
-        [data-theme="dark"] .dark\:bg-blue-900\/40 { background-color: var(--accent-bg-strong) !important; }
-        [data-theme="dark"] .dark\:hover\:bg-blue-900\/20:hover { background-color: var(--accent-bg) !important; }
-        [data-theme="dark"] .dark\:hover\:bg-blue-900\/30:hover { background-color: var(--accent-bg-strong) !important; }
-        [data-theme="dark"] .dark\:hover\:text-blue-400:hover { color: var(--accent-light) !important; }
-        [data-theme="dark"] .dark\:hover\:border-blue-300:hover { border-color: var(--accent-secondary) !important; }
-        .dark\:hover\:border-blue-300:hover { border-color: var(--accent-secondary) !important; }
-        /* 渐变（任务详情进度条等） */
-        .from-blue-500 { --tw-gradient-from: var(--accent-color) !important; --tw-gradient-to: rgb(255 255 255 / 0); --tw-gradient-stops: var(--accent-color), var(--accent-secondary) !important; }
-
-        /* 例外：四象限视图的分类颜色固定为默认主题色，不跟随动态主题配色 */
-        #quadrants-container .bg-blue-50 { background-color: #eff6ff !important; }
-        #quadrants-container .border-blue-300 { border-color: #93c5fd !important; }
-        #quadrants-container .text-blue-600 { color: #2563eb !important; }
-        [data-theme="dark"] #quadrants-container .bg-blue-50 { background-color: rgba(30,58,138,0.3) !important; }
-        [data-theme="dark"] #quadrants-container .border-blue-300 { border-color: #1d4ed8 !important; }
-        [data-theme="dark"] #quadrants-container .text-blue-600 { color: #60a5fa !important; }
-        [data-theme="dark"] #quadrants-container .dark\:bg-blue-900\/30 { background-color: rgba(30,58,138,0.3) !important; }
-        [data-theme="dark"] #quadrants-container .dark\:border-blue-600 { border-color: #1d4ed8 !important; }
 
         body {
             background-color: var(--bg-primary);
@@ -1935,7 +1867,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
         <aside id="sidebar" class="sidebar bg-theme-secondary border-r border-theme flex flex-col" style="width: 260px; min-height: 100vh;">
             <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
                 <div class="flex items-center gap-2">
-                    <i class="fas fa-calendar-check text-blue-500"></i>
+                    <i class="fas fa-calendar-check text-accent"></i>
                     <h1 class="text-xl font-bold text-theme-primary">日程管理</h1>
                 </div>
                 <button onclick="closeMobileSidebar()" id="sidebar-close-btn" class="p-2 hover:bg-theme-tertiary rounded-lg transition items-center justify-center" title="关闭">
@@ -2281,7 +2213,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
             </div>
 
             <div class="p-4 border-b border-theme flex items-start gap-3 flex-shrink-0">
-                <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-blue-500 dark:border-white flex items-center justify-center transition hover:border-blue-600 dark:hover:border-blue-300 flex-shrink-0 mt-1" id="detail-task-complete-btn">
+                <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-accent dark:border-white flex items-center justify-center transition hover:border-accent-hover dark:hover:border-accent-secondary flex-shrink-0 mt-1" id="detail-task-complete-btn">
                     <i class="fas fa-check text-xs hidden"></i>
                 </button>
                 <textarea id="detail-task-title" placeholder="任务标题" rows="1" class="flex-1 text-xl font-medium bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" style="min-height: 32px; max-height: 120px;"></textarea>
@@ -2302,7 +2234,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
             
             <!-- 任务进度设置 -->
             <div class="relative border-t border-theme p-2 cursor-pointer flex-shrink-0 select-none" id="progress-container" onmousedown="startProgressDrag(event)">
-                <div class="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500" id="progress-bar" style="width: 0%;"></div>
+                <div class="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-accent to-purple-500" id="progress-bar" style="width: 0%;"></div>
                 <div class="flex items-center justify-between text-xs">
                     <div id="detail-focus-duration" class="flex items-center gap-1 text-theme-secondary">
                         <i class="fas fa-stopwatch text-red-500"></i>
@@ -2354,7 +2286,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                     <button onclick="startPomodoroForTaskFromDetail()" id="detail-focus-btn" class="flex-1 px-4 py-2 border border-green-500 text-green-500 rounded-lg hover:bg-green-50 transition text-sm">
                         <i class="fas fa-stopwatch mr-1"></i>开始专注
                     </button>
-                    <button onclick="saveTaskDetail()" class="flex-1 px-4 py-2 border border-blue-500 text-blue-500 rounded-lg hover:bg-blue-50 transition text-sm">保存</button>
+                    <button onclick="saveTaskDetail()" class="flex-1 px-4 py-2 border border-accent text-accent rounded-lg hover:bg-accent-soft transition text-sm">保存</button>
                 </div>
             </div>
         </aside>
@@ -2596,7 +2528,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                         <!-- End_Settlement: 结算按钮组 -->
                         <div id="pomodoro-settlement-btns" class="hidden flex flex-col items-center gap-2 w-full max-w-xs">
                             <p id="settlement-info-text" class="text-white/70 text-sm mb-1"></p>
-                            <button onclick="handleSaveTime()" id="btn-save-time" class="w-full px-4 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition text-sm font-medium hidden">
+                            <button onclick="handleSaveTime()" id="btn-save-time" class="w-full px-4 py-2.5 bg-accent text-white rounded-lg hover:bg-accent-hover transition text-sm font-medium hidden">
                                 <i class="fas fa-check mr-2"></i>计入任务并结束
                             </button>
                             <button onclick="handleDropAll()" id="btn-drop-all" class="w-full px-4 py-2.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm font-medium">
@@ -2706,7 +2638,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                 </div>
                 <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
                     <div class="text-sm text-theme-muted mb-1">今日专注</div>
-                    <div class="text-3xl font-bold text-blue-500" id="stats-today-time">0h0m</div>
+                    <div class="text-3xl font-bold text-accent" id="stats-today-time">0h0m</div>
                     <div class="text-xs mt-2" id="stats-today-time-diff"></div>
                 </div>
                 <div class="bg-theme-secondary rounded-xl p-5 shadow-theme">
@@ -2966,25 +2898,25 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 <!-- 内置配色（适配深色/浅色模式） -->
                                 <p class="text-xs text-theme-muted mb-1">内置配色</p>
                                 <div class="grid grid-cols-3 gap-2 mb-3">
-                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-blue"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">星夜</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-green"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">春野</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('builtin:amber')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:amber" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('builtin:amber')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:amber" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-amber"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">夕照</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:amber')" data-palette-key="builtin:amber" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:amber')" data-palette-key="builtin:amber" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
                                 </div>
@@ -2993,7 +2925,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 <p class="text-xs text-theme-muted mb-1">自定义主题色</p>
                                 <div class="flex gap-2 items-center mb-3">
                                     <input type="color" id="custom-accent-input" value="#3b82f6" onchange="syncCustomAccentInputs('color')" class="w-10 h-9 rounded cursor-pointer border-2 border-theme bg-theme-tertiary" title="选择颜色">
-                                    <input type="text" id="custom-accent-text" placeholder="#3b82f6" oninput="syncCustomAccentInputs('text')" class="flex-1 px-3 py-1.5 text-sm border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" title="输入十六进制颜色">
+                                    <input type="text" id="custom-accent-text" placeholder="#3b82f6" oninput="syncCustomAccentInputs('text')" class="flex-1 px-3 py-1.5 text-sm border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" title="输入十六进制颜色">
                                     <button onclick="applyCustomAccent()" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap">
                                         <i class="fas fa-check mr-1"></i>应用
                                     </button>
@@ -3010,37 +2942,37 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                     </button>
                                 </div>
                                 <div id="palette-preview-container" class="grid grid-cols-3 gap-2 hidden">
-                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="vibrant" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="vibrant" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="vibrant"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">鲜艳</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('vibrant')" data-palette-key="vibrant" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('vibrant')" data-palette-key="vibrant" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="muted" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="muted" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="muted"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">柔和</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="dark" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-blue-500 transition text-left select-none cursor-pointer">
+                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="dark" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
                                         <div class="palette-color-bar mb-1" data-palette="dark"></div>
                                         <div class="flex items-center justify-between">
                                             <div class="text-xs text-theme-secondary">深色</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('dark')" data-palette-key="dark" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-blue-500 transition" style="display:none" title="撤销编辑"></i>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('dark')" data-palette-key="dark" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
                                 </div>
                                 <p class="text-xs text-theme-muted mt-2 hidden" id="palette-hint-text">短按应用，长按预览（松开恢复）</p>
-                                <button onclick="selectThemePalette('none')" id="palette-none-btn" class="mt-2 text-xs text-theme-muted hover:text-blue-500 transition">恢复默认主题色</button>
+                                <button onclick="selectThemePalette('none')" id="palette-none-btn" class="mt-2 text-xs text-theme-muted hover:text-accent transition">恢复默认主题色</button>
                             </div>
 
                             <div>
                                 <label class="block text-sm font-medium text-theme-secondary mb-2">字体</label>
                                 <div class="flex gap-2 items-start">
                                     <div class="flex-1 relative" id="font-combobox-wrapper">
-                                        <input type="text" id="settings-font-family-input" placeholder="点击选择或输入字体名" autocomplete="off" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500">
+                                        <input type="text" id="settings-font-family-input" placeholder="点击选择或输入字体名" autocomplete="off" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent">
                                         <button type="button" id="font-combobox-toggle" onclick="toggleFontDropdown(event)" class="absolute right-2 top-1/2 -translate-y-1/2 text-theme-muted hover:text-theme-primary px-1 py-0.5" title="展开字体列表">
                                             <i class="fas fa-chevron-down text-xs"></i>
                                         </button>
@@ -3094,7 +3026,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-show-completed" class="sr-only peer">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between">
@@ -3104,7 +3036,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-show-lunar" class="sr-only peer">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between">
@@ -3114,7 +3046,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-show-holiday-countdown" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between">
@@ -3124,7 +3056,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-show-sidebar-extras" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between">
@@ -3134,18 +3066,18 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-easter-egg" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <label class="text-sm font-medium text-theme-primary">使用优先级设置任务底色</label>
-                                    <p class="text-xs text-theme-secondary">任务按优先级使用不同底色区分任务重要紧急程度</p>
-                                </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" id="settings-priority-task-bg" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
-                                </label>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">优先级显示方式</label>
+                                <p class="text-xs text-theme-secondary mb-1">选择任务优先级在视图中的呈现方式</p>
+                                <select id="settings-priority-display-mode" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="checkbox">复选框边框</option>
+                                    <option value="bg">任务底色</option>
+                                    <option value="bar">左侧色条</option>
+                                    <option value="none">不显示</option>
+                                </select>
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
@@ -3154,7 +3086,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-show-focus-button" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
                         </div>
@@ -3203,7 +3135,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" id="settings-cmd-remove-time" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
                             </div>
                             <div>
@@ -3251,35 +3183,35 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                     <label class="block text-sm font-medium text-theme-primary">状态背景色</label>
                                     <p class="text-xs text-theme-secondary">番茄专注与休息时，视图背景色随之变化以区分当前状态</p>
                                 </div>
-                                <input type="checkbox" id="settings-pomodoro-state-bg" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                                <input type="checkbox" id="settings-pomodoro-state-bg" class="w-5 h-5 rounded border-theme text-accent-dark focus:ring-accent">
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="block text-sm font-medium text-theme-primary">自动休息</label>
                                     <p class="text-xs text-theme-secondary">专注倒计时结束后，自动进入休息倒计时</p>
                                 </div>
-                                <input type="checkbox" id="settings-auto-break" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                                <input type="checkbox" id="settings-auto-break" class="w-5 h-5 rounded border-theme text-accent-dark focus:ring-accent">
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="block text-sm font-medium text-theme-primary">自动专注</label>
                                     <p class="text-xs text-theme-secondary">休息倒计时结束后，自动开始专注倒计时</p>
                                 </div>
-                                <input type="checkbox" id="settings-auto-focus" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                                <input type="checkbox" id="settings-auto-focus" class="w-5 h-5 rounded border-theme text-accent-dark focus:ring-accent">
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="block text-sm font-medium text-theme-primary">背景流动效果</label>
                                     <p class="text-xs text-theme-secondary">开启后使用更强的背景渐变流动动画（性能消耗较大）</p>
                                 </div>
-                                <input type="checkbox" id="settings-bg-flow-effect" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                                <input type="checkbox" id="settings-bg-flow-effect" class="w-5 h-5 rounded border-theme text-accent-dark focus:ring-accent">
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="block text-sm font-medium text-theme-primary">高级粒子动画</label>
                                     <p class="text-xs text-theme-secondary">显示粒子、星云、光束、气泡、萤火虫等附加动画效果</p>
                                 </div>
-                                <input type="checkbox" id="settings-advanced-particle" class="w-5 h-5 rounded border-theme text-blue-600 focus:ring-blue-500">
+                                <input type="checkbox" id="settings-advanced-particle" class="w-5 h-5 rounded border-theme text-accent-dark focus:ring-accent">
                             </div>
                         </div>
                     </div>
@@ -3301,7 +3233,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                     <label class="text-sm font-medium text-theme-primary">系统桌面通知</label>
                                     <p class="text-xs text-theme-muted">通过系统通知服务发送桌面提醒，无需浏览器权限</p>
                                 </div>
-                                <button id="settings-notification-perm-btn" class="px-4 py-2 text-sm border border-theme rounded-lg text-theme-secondary hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer" onclick="testNotification()">
+                                <button id="settings-notification-perm-btn" class="px-4 py-2 text-sm border border-theme rounded-lg text-theme-secondary hover:bg-accent-soft dark:hover:bg-accent-soft cursor-pointer" onclick="testNotification()">
                                     通知测试
                                 </button>
                             </div>
@@ -3325,7 +3257,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                             <span class="text-sm text-theme-secondary">接受后自动创建任务</span>
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" id="settings-auto-create" class="sr-only peer" checked>
-                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                             </label>
                         </div>
                     </div>
@@ -3348,7 +3280,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                             <div>
                                 <label class="block text-sm font-medium text-theme-primary mb-2">网页模式</label>
                                 <div class="flex gap-2">
-                                    <select id="settings-web-mode" onchange="onWebModeChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500">
+                                    <select id="settings-web-mode" onchange="onWebModeChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent">
                                         <option value="offline">离线版（本地资源，推荐内网使用）</option>
                                         <option value="online">在线版（CDN 资源，需互联网）</option>
                                     </select>
@@ -3358,7 +3290,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                             <div>
                                 <label class="block text-sm font-medium text-theme-primary mb-2">访问地址</label>
                                 <div class="flex gap-2">
-                                    <select id="settings-bind-address" onchange="onBindAddressChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500">
+                                    <select id="settings-bind-address" onchange="onBindAddressChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent">
                                         <option value="127.0.0.1">仅本机 (127.0.0.1)</option>
                                         <option value="0.0.0.0">局域网共享 (0.0.0.0)</option>
                                     </select>
@@ -3368,7 +3300,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                             <div>
                                 <label class="block text-sm font-medium text-theme-primary mb-2">服务端口</label>
                                 <div class="flex gap-2">
-                                    <input type="number" id="settings-port" min="1024" max="65535" value="14438" onchange="onPortChange()" oninput="onPortChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500 font-mono" placeholder="14438">
+                                    <input type="number" id="settings-port" min="1024" max="65535" value="14438" onchange="onPortChange()" oninput="onPortChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent font-mono" placeholder="14438">
                                 </div>
                                 <p class="text-xs text-theme-muted mt-1">推荐范围：1024-65535，建议使用 10000-65535 中不常见的端口号。</p>
                                 <p id="port-warning" class="text-xs text-red-500 mt-1 hidden"></p>
@@ -3376,7 +3308,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                             <div id="network-info-container" class="hidden">
                                 <label class="block text-sm font-medium text-theme-primary mb-2">局域网访问地址</label>
                                 <div class="flex items-center gap-2">
-                                    <code id="lan-access-url" class="flex-1 px-3 py-2 bg-theme-tertiary border border-theme rounded-lg text-sm text-blue-500 font-mono select-all"></code>
+                                    <code id="lan-access-url" class="flex-1 px-3 py-2 bg-theme-tertiary border border-theme rounded-lg text-sm text-accent font-mono select-all"></code>
                                     <button onclick="copyLanUrl()" class="px-3 py-2 border border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm" title="复制">
                                         <i class="fas fa-copy"></i>
                                     </button>
@@ -3386,7 +3318,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                             <div id="localhost-info-container">
                                 <label class="block text-sm font-medium text-theme-primary mb-2">本机访问地址</label>
                                 <div class="flex items-center gap-2">
-                                    <code id="localhost-access-url" class="flex-1 px-3 py-2 bg-theme-tertiary border border-theme rounded-lg text-sm text-blue-500 font-mono select-all"></code>
+                                    <code id="localhost-access-url" class="flex-1 px-3 py-2 bg-theme-tertiary border border-theme rounded-lg text-sm text-accent font-mono select-all"></code>
                                     <button onclick="copyLocalhostUrl()" class="px-3 py-2 border border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm" title="复制">
                                         <i class="fas fa-copy"></i>
                                     </button>
@@ -3399,7 +3331,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                     </div>
 
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.5.0</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.5.1</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3421,12 +3353,12 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                 <div class="space-y-3">
                                     <div>
                                         <label class="block text-sm text-theme-secondary mb-1">备份周期（天）</label>
-                                        <input type="number" id="backup-interval" min="1" max="365" value="7" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" onchange="updateBackupSettings()">
+                                        <input type="number" id="backup-interval" min="1" max="365" value="7" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" onchange="updateBackupSettings()">
                                     </div>
                                     <div>
                                         <label class="block text-sm text-theme-secondary mb-1">数据保留周期（天）</label>
                                         <div class="flex gap-3">
-                                            <input type="number" id="retention-period" min="0" max="365" value="30" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-blue-500" onchange="updateBackupSettings()">
+                                            <input type="number" id="retention-period" min="0" max="365" value="30" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" onchange="updateBackupSettings()">
                                             <button onclick="setRetentionToForever()" class="px-4 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm">永久保存</button>
                                         </div>
                                     </div>
@@ -3445,7 +3377,7 @@ box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
                                     </label>
                                     <label class="relative inline-flex items-center cursor-pointer">
                                         <input type="checkbox" id="settings-autostart" onchange="toggleAutoStart()" class="sr-only peer">
-                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:bg-gray-600 peer-checked:bg-blue-600"></div>
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:bg-gray-600 peer-checked:bg-accent-hover"></div>
                                     </label>
                                 </div>
                                 <p class="text-xs text-theme-muted mt-1">开启后，系统将在登录时自动启动服务并打开浏览器</p>

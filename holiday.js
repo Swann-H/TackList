@@ -45,7 +45,7 @@ function renderHolidayView(container) {
                     '<div class="holiday-toolbar flex items-center justify-between mb-4 p-4 rounded-lg flex-shrink-0">' +
                         '<div class="flex items-center gap-3">' +
                             '<button onclick="navigateHolidayYear(-1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="上一年"><i class="fas fa-chevron-left"></i></button>' +
-                            '<span id="holiday-year-label" onclick="toggleHolidayYearPicker()" class="text-lg font-semibold text-theme-primary min-w-[80px] text-center cursor-pointer hover:text-blue-500 transition relative"></span>' +
+                            '<span id="holiday-year-label" onclick="toggleHolidayYearPicker()" class="text-lg font-semibold text-theme-primary min-w-[80px] text-center cursor-pointer hover:text-accent transition relative"></span>' +
                             '<button onclick="navigateHolidayYear(1)" class="p-2 hover:bg-theme-primary rounded-lg transition text-theme-secondary" title="下一年"><i class="fas fa-chevron-right"></i></button>' +
                         '</div>' +
                         '<div id="holiday-stats" class="text-sm text-theme-secondary">假期：0 天 | 调休：0 天</div>' +
@@ -128,7 +128,7 @@ function renderHolidayYearPicker() {
 
     // "今年"按钮
     const thisYearBtn = document.createElement('button');
-    thisYearBtn.className = 'w-full mb-2 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition text-sm font-medium';
+    thisYearBtn.className = 'w-full mb-2 px-3 py-1.5 bg-accent text-white rounded-lg hover:bg-accent-hover transition text-sm font-medium';
     thisYearBtn.textContent = '今年（' + thisYear + '）';
     thisYearBtn.onclick = () => {
         holidayCurrentYear = thisYear;
@@ -172,7 +172,7 @@ function renderHolidayYearPicker() {
         const yearBtn = document.createElement('button');
         const isCurrent = y === holidayCurrentYear;
         const isDisabled = y < 2020 || y > 2099;
-        yearBtn.className = `px-1 py-1.5 rounded text-xs transition ${isCurrent ? 'bg-blue-500 text-white font-medium' : isDisabled ? 'text-theme-muted cursor-not-allowed' : 'hover:bg-theme-tertiary text-theme-primary'}`;
+        yearBtn.className = `px-1 py-1.5 rounded text-xs transition ${isCurrent ? 'bg-accent text-white font-medium' : isDisabled ? 'text-theme-muted cursor-not-allowed' : 'hover:bg-theme-tertiary text-theme-primary'}`;
         yearBtn.textContent = y;
         if (!isDisabled) {
             yearBtn.onclick = () => {
@@ -473,7 +473,7 @@ function renderSectionView(group, section) {
         : 'border border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30';
     const deleteBtnTitle = isDeleteConfirming ? '确认删除' : '删除';
     const deleteBtnIcon = isDeleteConfirming ? 'fa-check' : 'fa-trash';
-    const editBtnClass = 'border border-blue-500 text-blue-500 hover:bg-blue-50 dark:border-blue-400 dark:text-blue-400 dark:hover:bg-blue-900/30';
+    const editBtnClass = 'border border-accent text-accent hover:bg-accent-soft dark:border-accent-secondary dark:text-accent-light dark:hover:bg-accent-strong';
 
     // "其他"分组显示名称
     const nameSpan = group.isOther
@@ -499,7 +499,7 @@ function renderSectionView(group, section) {
 // 渲染编辑/新增表单
 function renderEditForm(group, section, isAdd) {
     const div = document.createElement('div');
-    div.className = 'holiday-edit-form px-3 py-2.5 bg-theme-tertiary rounded-lg border border-theme border-l-4 border-l-blue-400';
+    div.className = 'holiday-edit-form px-3 py-2.5 bg-theme-tertiary rounded-lg border border-theme border-l-4 border-l-accent';
 
     const yearStr = String(holidayCurrentYear);
 
@@ -906,7 +906,7 @@ function renderHolidayCalendarGrid() {
         const isToday = isCurrentMonth && today.getDate() === d;
         cell.className = `py-1 rounded text-xs transition ${
             isToday
-                ? 'bg-blue-500 text-white font-semibold hover:bg-blue-600'
+                ? 'bg-accent text-white font-semibold hover:bg-accent-hover'
                 : 'text-theme-primary hover:bg-theme-tertiary'
         }`;
         cell.addEventListener('click', (e) => {

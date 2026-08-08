@@ -47,9 +47,9 @@ function renderLists() {
         const listItem = document.createElement('button');
         listItem.dataset.listId = list.id;
         const uncompletedCount = tasks.filter(t => t.listId === list.id && !t.completed).length;
-        listItem.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 ${currentListId === list.id ? 'bg-blue-50 text-blue-600' : ''}`;
+        listItem.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 ${currentListId === list.id ? 'bg-accent-soft text-accent-dark' : ''}`;
         listItem.innerHTML = `
-            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-blue-400 transition" style="background-color: ${list.color}" onclick="event.stopPropagation(); editList('${list.id}')"></span>
+            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${list.color}" onclick="event.stopPropagation(); editList('${list.id}')"></span>
             <span class="sidebar-text flex-1">${list.name}</span>
             ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
         `;
@@ -125,7 +125,7 @@ function createListEditForm(existingList) {
                 </button>
             ` : ''}
             <div class="flex-1"></div>
-            <button onclick="saveListInput()" id="list-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition" title="${existingList ? '保存' : '添加'}">
+            <button onclick="saveListInput()" id="list-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white hover:bg-accent-hover transition" title="${existingList ? '保存' : '添加'}">
                 <i class="fas fa-check text-sm"></i>
             </button>
             <button onclick="hideAddListInput()" class="flex items-center justify-center w-8 h-8 rounded-lg border border-theme text-theme-secondary hover:bg-theme-secondary transition" title="取消">
@@ -353,17 +353,17 @@ function renderArchivedTaskCard(task) {
         <div class="archived-task-item group flex items-start gap-4 mb-3 task-item ${task.completed ? 'opacity-60' : ''}"
              onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', true)">
             <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                <div class="w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-blue-500 dark:border-white'}">
+                <div class="w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                 </div>
             </div>
-            <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition" style="border-left: 4px solid ${listColor}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+            <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition" style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                 <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
                     ${timeDisplay ? `<span><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
                     ${listName ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${listName}</span>` : ''}
                     ${renderTagCapsules(task, 2, 'right')}
                     ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
-                    ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-blue-500"></i>${progress}%</span>` : ''}
+                    ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${progress}%</span>` : ''}
                 </div>
                 <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
                     ${task.title || '新任务'}
@@ -555,7 +555,7 @@ function updateSidebarHighlight() {
 
     // 清除清单按钮高亮
     document.querySelectorAll('#lists-container button').forEach(btn => {
-        btn.classList.remove('bg-blue-50', 'text-blue-600', 'bg-theme-tertiary', 'font-semibold');
+        btn.classList.remove('bg-accent-soft', 'text-accent-dark', 'bg-theme-tertiary', 'font-semibold');
     });
 
     // 清除侧边栏倒计时框高亮
@@ -590,7 +590,7 @@ function updateSidebarHighlight() {
         } else {
             // 清单选中时，高亮对应的清单按钮
             const listBtn = document.querySelector(`#lists-container button[data-list-id="${currentListId}"]`);
-            if (listBtn) listBtn.classList.add('bg-blue-50', 'text-blue-600');
+            if (listBtn) listBtn.classList.add('bg-accent-soft', 'text-accent-dark');
         }
     } else if (!currentListId) {
         // "所有任务"：不依赖 currentView，跨视图保持高亮（与"最近7天"逻辑一致）
@@ -762,7 +762,7 @@ function renderFilters() {
         btn.id = `sidebar-filter-${filter.id}`;
         btn.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
         btn.innerHTML = `
-            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-blue-400 transition" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')"></span>
+            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')"></span>
             <span class="sidebar-text flex-1">${filter.name}</span>
             ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
         `;
@@ -898,7 +898,7 @@ function createFilterEditForm(existingFilter) {
             <label class="text-xs text-theme-muted block mb-1">清单</label>
             <div class="flex flex-wrap gap-1">
                 ${activeLists.map(list => `
-                    <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-theme-secondary transition ${c.listIds && c.listIds.includes(list.id) ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600' : 'text-theme-secondary'}">
+                    <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-theme-secondary transition ${c.listIds && c.listIds.includes(list.id) ? 'bg-accent-strong dark:bg-accent-strong text-accent-dark' : 'text-theme-secondary'}">
                         <input type="checkbox" class="filter-list-check hidden" value="${list.id}" ${c.listIds && c.listIds.includes(list.id) ? 'checked' : ''}>
                         <span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>
                         ${list.name}
@@ -943,7 +943,7 @@ function createFilterEditForm(existingFilter) {
             </div>
         </div>
         <div class="flex gap-2">
-            <button onclick="saveFilterInput()" class="flex-1 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm">${existingFilter ? '保存' : '添加'}</button>
+            <button onclick="saveFilterInput()" class="flex-1 px-3 py-1.5 bg-accent text-white rounded-lg hover:bg-accent-hover text-sm">${existingFilter ? '保存' : '添加'}</button>
             <button onclick="hideFilterInput()" class="px-3 py-1.5 border border-theme rounded-lg hover:bg-theme-tertiary text-sm">取消</button>
         </div>
         ${existingFilter ? `<button onclick="deleteFilterInput()" id="filter-delete-inline-btn" class="w-full mt-2 px-3 py-1.5 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition text-sm">删除过滤器</button>` : ''}
@@ -955,10 +955,10 @@ function createFilterEditForm(existingFilter) {
             cb.addEventListener('change', () => {
                 const label = cb.closest('label');
                 if (cb.checked) {
-                    label.classList.add('bg-blue-100', 'dark:bg-blue-900/40', 'text-blue-600');
+                    label.classList.add('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark');
                     label.classList.remove('text-theme-secondary');
                 } else {
-                    label.classList.remove('bg-blue-100', 'dark:bg-blue-900/40', 'text-blue-600');
+                    label.classList.remove('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark');
                     label.classList.add('text-theme-secondary');
                 }
             });
@@ -1245,7 +1245,7 @@ function renderFilterEditView(container) {
                         <label class="text-sm font-medium text-theme-primary block mb-2">清单</label>
                         <div class="flex flex-wrap gap-2">
                             ${activeLists.map(list => `
-                                <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer hover:bg-theme-tertiary transition border border-theme ${c.listIds && c.listIds.includes(list.id) ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 border-blue-300' : 'text-theme-secondary'}">
+                                <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer hover:bg-theme-tertiary transition border border-theme ${c.listIds && c.listIds.includes(list.id) ? 'bg-accent-strong dark:bg-accent-strong text-accent-dark border-accent-light' : 'text-theme-secondary'}">
                                     <input type="checkbox" class="filter-list-check hidden" value="${list.id}" ${c.listIds && c.listIds.includes(list.id) ? 'checked' : ''}>
                                     <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${list.color}"></span>
                                     ${list.name}
@@ -1296,7 +1296,7 @@ function renderFilterEditView(container) {
 
                     <!-- 操作按钮 -->
                     <div class="flex gap-3 pt-4 border-t border-theme">
-                        <button onclick="saveFilterInput()" class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition font-medium">${isEditing ? '保存' : '添加'}</button>
+                        <button onclick="saveFilterInput()" class="px-6 py-2 bg-accent text-white rounded-lg hover:bg-accent-hover transition font-medium">${isEditing ? '保存' : '添加'}</button>
                         ${isEditing ? `<button onclick="deleteFilterInput()" id="filter-delete-inline-btn" class="px-6 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition font-medium">删除</button>` : ''}
                         <button onclick="hideFilterInput()" class="px-6 py-2 border border-theme rounded-lg hover:bg-theme-tertiary transition font-medium text-theme-secondary">取消</button>
                     </div>
@@ -1317,10 +1317,10 @@ function renderFilterEditView(container) {
             cb.addEventListener('change', () => {
                 const label = cb.closest('label');
                 if (cb.checked) {
-                    label.classList.add('bg-blue-100', 'dark:bg-blue-900/40', 'text-blue-600', 'border-blue-300');
+                    label.classList.add('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark', 'border-accent-light');
                     label.classList.remove('text-theme-secondary');
                 } else {
-                    label.classList.remove('bg-blue-100', 'dark:bg-blue-900/40', 'text-blue-600', 'border-blue-300');
+                    label.classList.remove('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark', 'border-accent-light');
                     label.classList.add('text-theme-secondary');
                 }
             });
