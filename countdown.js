@@ -67,7 +67,7 @@ function getNextHoliday() {
                 const prevDate = new Date(parseInt(yearStr), parseInt(sortedDates[j - 1].split('-')[0]) - 1, parseInt(sortedDates[j - 1].split('-')[1]));
                 const currDate = new Date(parseInt(yearStr), parseInt(sortedDates[j].split('-')[0]) - 1, parseInt(sortedDates[j].split('-')[1]));
                 const diff = (currDate - prevDate) / 86400000;
-                if (diff === 1) {
+                if (Math.round(diff) === 1) {
                     groupDates.push(sortedDates[j]);
                     j++;
                 } else {
@@ -75,9 +75,10 @@ function getNextHoliday() {
                 }
             }
             if (groupDates.length > 2) {
-                if (!holidayGroups[name] || new Date(yearStr + '-' + groupDates[0]) < holidayGroups[name].startDate) {
+                const groupStart = new Date(parseInt(yearStr), parseInt(groupDates[0].split('-')[0]) - 1, parseInt(groupDates[0].split('-')[1]));
+                if (!holidayGroups[name] || groupStart < holidayGroups[name].startDate) {
                     holidayGroups[name] = {
-                        startDate: new Date(yearStr + '-' + groupDates[0]),
+                        startDate: groupStart,
                         firstDateStr: groupDates[0],
                         count: groupDates.length
                     };
@@ -546,12 +547,14 @@ function setCdEditRepeat(repeat) {
 function openAddCountdown() {
     countdownEditing = { isAdd: true, id: null };
     countdownDeleteConfirming = null;
+    if (countdownDeleteTimer) { clearTimeout(countdownDeleteTimer); countdownDeleteTimer = null; }
     renderCountdownView(document.getElementById('view-container'));
 }
 
 function editCountdown(id) {
     countdownEditing = { isAdd: false, id: id };
     countdownDeleteConfirming = null;
+    if (countdownDeleteTimer) { clearTimeout(countdownDeleteTimer); countdownDeleteTimer = null; }
     renderCountdownView(document.getElementById('view-container'));
 }
 

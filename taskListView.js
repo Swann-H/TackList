@@ -565,7 +565,7 @@ function toggleTaskListGroup(groupKey) {
             lazyEl.className = 'task-list-group-lazy';
             lazyEl.dataset.groupKey = groupKey;
             lazyEl.dataset.populated = 'false';
-            contentEl.appendChild(lazyEl);
+            contentEl.insertBefore(lazyEl, contentEl.firstChild);
         }
         if (lazyEl.dataset.populated !== 'true') {
             const groups = _taskListVirtualState ? _taskListVirtualState.groups : buildTaskListGroups();

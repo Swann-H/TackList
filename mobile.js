@@ -620,7 +620,7 @@ if (typeof toggleTaskDetailComplete === 'function') {
     const _origToggleTaskDetailComplete = toggleTaskDetailComplete;
     toggleTaskDetailComplete = function () {
         if (isMobileView()) {
-            _mobileDebounced('toggle_detail', _origToggleTaskDetailComplete, []);
+            _mobileDebounced('toggle_detail_' + currentDetailTaskId, _origToggleTaskDetailComplete, []);
         } else {
             _origToggleTaskDetailComplete.apply(this, arguments);
         }
@@ -659,6 +659,9 @@ function _onMobileBreakpointChange() {
         document.querySelectorAll('.mobile-q-collapsed').forEach(el => el.classList.remove('mobile-q-collapsed'));
         closeMobileMoreMenu();
         _mobileRemoveActionSheet();
+        // 清理移动端层栈，避免桌面端浏览器返回键误触发移动端关闭逻辑
+        _mobileLayerStack.length = 0;
+        _mobileSuppressPopstate = false;
     }
     updateMobileFabVisibility();
 }
