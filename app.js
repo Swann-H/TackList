@@ -43,23 +43,260 @@ async function init() {
     });
 }
 
+// ==================== 视图自定义（设置面板） ====================
+// 延迟保存：所有操作在临时状态上修改并即时刷新 UI 反馈，点「保存设置」后才应用到 settings 并持久化，
+// 点「关闭」则丢弃临时状态（settings 从未被修改，无需回退）。
+// 拖拽使用 pointer events 自行实现（pointermove 每帧触发，比 HTML5 drag API 的 dragover 更跟手）。
+let _vcClickTimer = null;
+let _vcTempOrder = null;  // 临时视图顺序（设置面板打开时创建）
+let _vcTempHome = null;   // 临时首页视图
+let _vcStyleInjected = false;
+let _vcDropHintEl = null;   // 当前显示指示器的元素
+let _vcDropHintSide = null; // 当前指示器方向：'before' | 'after'
+let _vcPointerDown = null;  // pointerdown 状态：{ id, startX, startY, el }
+let _vcDragging = false;    // 是否已进入拖拽模式（移动距离超过阈值后置 true）
+let _vcSuppressClick = false; // 拖拽松手后阻止同次操作的 click 事件
+let _vcDocListenersBound = false;
+
+// 注入拖拽指示器样式（仅注入一次），颜色跟随主题 --accent-color
+function _vcEnsureStyle() {
+    if (_vcStyleInjected) return;
+    _vcStyleInjected = true;
+    const style = document.createElement('style');
+    style.textContent =
+        '.vc-drop-before{box-shadow:-3px 0 0 0 var(--accent-color,#3b82f6);}' +
+        '.vc-drop-after{box-shadow:3px 0 0 0 var(--accent-color,#3b82f6);}';
+    document.head.appendChild(style);
+}
+
+// 绑定 document 级 pointer 监听器（仅绑定一次），用于拖拽时全局跟踪鼠标
+function _vcEnsureDocListeners() {
+    if (_vcDocListenersBound) return;
+    _vcDocListenersBound = true;
+    document.addEventListener('pointermove', _vcDocPointerMove);
+    document.addEventListener('pointerup', _vcDocPointerUp);
+    document.addEventListener('pointercancel', _vcDocPointerUp);
+}
+
+// 清除拖拽指示器
+function _vcClearDropHint() {
+    if (_vcDropHintEl) {
+        _vcDropHintEl.classList.remove('vc-drop-before', 'vc-drop-after');
+        _vcDropHintEl = null;
+        _vcDropHintSide = null;
+    }
+}
+
+// 更新指示器到指定 chip 的左/右侧（状态无变化时跳过，避免不必要 DOM 写）
+function _vcUpdateDropHint(chip, clientX) {
+    if (!chip) { _vcClearDropHint(); return; }
+    var rect = chip.getBoundingClientRect();
+    var isAfter = (clientX - rect.left) > rect.width / 2;
+    var side = isAfter ? 'after' : 'before';
+    if (_vcDropHintEl === chip && _vcDropHintSide === side) return;
+    _vcClearDropHint();
+    chip.classList.add(isAfter ? 'vc-drop-after' : 'vc-drop-before');
+    _vcDropHintEl = chip;
+    _vcDropHintSide = side;
+}
+
+function renderViewCustomize() {
+    const enabledBox = document.getElementById('view-customize-enabled');
+    const disabledBox = document.getElementById('view-customize-disabled');
+    if (!enabledBox || !disabledBox) return;
+    _vcEnsureStyle();
+    _vcEnsureDocListeners();
+    // 清空容器前重置指示器引用（旧 chip 即将脱离 DOM）
+    _vcDropHintEl = null;
+    _vcDropHintSide = null;
+    // 优先读取临时状态（设置面板内），否则读取实际 settings
+    const order = _vcTempOrder || getViewOrder();
+    const home = _vcTempHome || settings.defaultHomeView;
+    enabledBox.innerHTML = '';
+    disabledBox.innerHTML = '';
+    order.forEach(function (v) {
+        const def = VIEW_DEFS[v.id] || { label: v.id };
+        const chip = document.createElement('div');
+        chip.className = 'inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-theme cursor-pointer select-none transition ' +
+            (v.enabled ? 'bg-theme text-theme-primary hover:border-accent' : 'bg-theme-secondary text-theme-secondary opacity-70');
+        chip.setAttribute('data-vc-id', v.id);
+        chip.setAttribute('onclick', "onVCClick('" + v.id + "')");
+        if (v.enabled) {
+            // 仅已启用视图支持拖拽排序和设首页
+            chip.setAttribute('onpointerdown', "onVCPointerDown(event, '" + v.id + "')");
+            chip.setAttribute('ondblclick', "onVCDblClick('" + v.id + "')");
+        }
+        let html = '<span>' + def.label + '</span>';
+        // 首页标识：仅保留小房子图标，去掉「首页」文字；未启用视图不显示任何右侧图标/提示
+        if (v.enabled && v.id === home) {
+            html += '<i class="fas fa-home text-accent ml-1"></i>';
+        }
+        chip.innerHTML = html;
+        if (v.enabled) enabledBox.appendChild(chip);
+        else disabledBox.appendChild(chip);
+    });
+}
+
+// 初始化临时视图自定义状态（openSettingsModal 时调用）
+function initVCTemp() {
+    _vcTempOrder = JSON.parse(JSON.stringify(getViewOrder()));
+    _vcTempHome = getHomeView();
+}
+
+// 丢弃临时状态（closeSettingsModal 时调用）
+function discardVCTemp() {
+    _vcTempOrder = null;
+    _vcTempHome = null;
+}
+
+// 应用临时状态到 settings（saveSettings 时调用）
+function applyVCFromTemp() {
+    if (!_vcTempOrder) return;
+    settings.viewOrder = _vcTempOrder;
+    settings.defaultHomeView = _vcTempHome;
+    settings.defaultView = _vcTempHome;
+    _vcTempOrder = null;
+    _vcTempHome = null;
+}
+
+// 临时状态上的视图启用/禁用（含「至少保留一个」校验 + 首页自动迁移）
+function _vcSetViewEnabled(id, enabled) {
+    const item = _vcTempOrder.find(function (v) { return v.id === id; });
+    if (!item) return false;
+    item.enabled = enabled;
+    if (!_vcTempOrder.some(function (v) { return v.enabled; })) {
+        item.enabled = !enabled; // 撤销：至少保留一个启用视图
+        showToast('至少需保留一个视图', 'warning');
+        return false;
+    }
+    if (!enabled && _vcTempHome === id) {
+        const first = _vcTempOrder.find(function (v) { return v.enabled; });
+        if (first) _vcTempHome = first.id;
+    }
+    return true;
+}
+
+// pointerdown：记录起始位置，不立即进入拖拽模式（等待移动距离超过阈值）
+function onVCPointerDown(e, id) {
+    if (e.button !== 0) return; // 仅响应主键
+    _vcPointerDown = { id: id, startX: e.clientX, startY: e.clientY, el: e.currentTarget };
+    _vcDragging = false;
+}
+
+// document 级 pointermove：移动距离超过阈值后进入拖拽模式，用 elementFromPoint 定位目标 chip
+function _vcDocPointerMove(e) {
+    if (!_vcPointerDown) return;
+    var dx = e.clientX - _vcPointerDown.startX;
+    var dy = e.clientY - _vcPointerDown.startY;
+    if (!_vcDragging) {
+        // 移动距离超过 5px 才进入拖拽模式（避免点击误触）
+        if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+        _vcDragging = true;
+        _vcPointerDown.el.style.opacity = '0.4'; // 被拖拽的 chip 变半透明
+    }
+    // 临时禁用被拖拽 chip 的 pointer-events，让 elementFromPoint 能穿透到下方元素
+    _vcPointerDown.el.style.pointerEvents = 'none';
+    var target = document.elementFromPoint(e.clientX, e.clientY);
+    _vcPointerDown.el.style.pointerEvents = '';
+    var chip = target ? target.closest('[data-vc-id]') : null;
+    // 仅在「已启用视图」容器内才显示指示器（排除被拖拽的自身）
+    if (chip && chip !== _vcPointerDown.el && chip.parentElement && chip.parentElement.id === 'view-customize-enabled') {
+        _vcUpdateDropHint(chip, e.clientX);
+    } else {
+        _vcClearDropHint();
+    }
+}
+
+// document 级 pointerup：拖拽模式下执行排序，否则放行 click
+function _vcDocPointerUp(e) {
+    if (!_vcPointerDown) return;
+    if (_vcDragging) {
+        // 找到松手位置下方的目标 chip
+        _vcPointerDown.el.style.pointerEvents = 'none';
+        var target = document.elementFromPoint(e.clientX, e.clientY);
+        _vcPointerDown.el.style.pointerEvents = '';
+        var chip = target ? target.closest('[data-vc-id]') : null;
+        if (chip && chip !== _vcPointerDown.el && chip.parentElement && chip.parentElement.id === 'view-customize-enabled') {
+            _vcPerformReorder(_vcPointerDown.id, chip.getAttribute('data-vc-id'), e.clientX);
+        }
+        _vcPointerDown.el.style.opacity = '';
+        // 阻止本次操作产生的 click 事件（避免拖拽后误触发启用/禁用）
+        _vcSuppressClick = true;
+    }
+    _vcPointerDown = null;
+    _vcDragging = false;
+    _vcClearDropHint();
+}
+
+// 执行排序：将 fromId 移动到 toId 的前面或后面（取决于鼠标水平位置）
+function _vcPerformReorder(fromId, toId, clientX) {
+    var from = _vcTempOrder.findIndex(function (v) { return v.id === fromId; });
+    var to = _vcTempOrder.findIndex(function (v) { return v.id === toId; });
+    if (from < 0 || to < 0) return;
+    var chip = document.querySelector('#view-customize-enabled > [data-vc-id="' + toId + '"]');
+    var rect = chip.getBoundingClientRect();
+    var isAfter = (clientX - rect.left) > rect.width / 2;
+    var moved = _vcTempOrder.splice(from, 1)[0];
+    var insertAt;
+    if (from < to) {
+        insertAt = isAfter ? to : to - 1; // from 在前，删除后 to 已前移 1
+    } else {
+        insertAt = isAfter ? to + 1 : to;  // from 在后，删除后 to 不变
+    }
+    _vcTempOrder.splice(insertAt, 0, moved);
+    // 延迟保存：即时刷新 UI 反馈，但不写入 settings
+    renderViewCustomize();
+}
+
+function onVCClick(id) {
+    // 拖拽松手后的同次操作不触发 click
+    if (_vcSuppressClick) { _vcSuppressClick = false; return; }
+    // 防抖区分单击（启用/禁用）与双击（设首页）
+    if (_vcClickTimer) { clearTimeout(_vcClickTimer); _vcClickTimer = null; }
+    _vcClickTimer = setTimeout(function () {
+        _vcClickTimer = null;
+        const item = _vcTempOrder.find(function (v) { return v.id === id; });
+        if (!item) return;
+        if (item.enabled) {
+            _vcSetViewEnabled(id, false);
+        } else {
+            _vcSetViewEnabled(id, true);
+        }
+        // 延迟保存：即时刷新 UI 反馈，但不写入 settings（点「保存设置」才生效）
+        renderViewCustomize();
+    }, 220);
+}
+
+function onVCDblClick(id) {
+    if (_vcClickTimer) { clearTimeout(_vcClickTimer); _vcClickTimer = null; }
+    const item = _vcTempOrder.find(function (v) { return v.id === id; });
+    if (!item) return;
+    if (item.enabled) {
+        _vcTempHome = id; // 已启用：设为首页
+    } else {
+        _vcSetViewEnabled(id, true); // 可添加：双击亦可启用
+    }
+    // 延迟保存：即时刷新 UI 反馈，但不写入 settings
+    renderViewCustomize();
+}
+
 function openSettingsModal() {
     document.getElementById('settings-default-list').value = settings.defaultListId || 'default';
     document.getElementById('settings-default-important').checked = settings.defaultImportant || false;
     document.getElementById('settings-default-urgent').checked = settings.defaultUrgent || false;
     document.getElementById('settings-default-duration').value = settings.defaultDuration !== undefined ? settings.defaultDuration : 30;
-    document.getElementById('settings-default-view').value = settings.defaultView || 'task';
     document.getElementById('settings-week-start').value = settings.weekStart || 'monday';
-    document.getElementById('settings-no-date-position').value = settings.noDateTaskPosition || 'last';
-    document.getElementById('settings-show-completed').checked = settings.showCompleted !== false;
-    document.getElementById('settings-show-lunar').checked = settings.showLunar !== false;
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
     document.getElementById('settings-cmd-remove-time').checked = settings.cmdRemoveTimeText !== false;
     document.getElementById('settings-priority-display-mode').value = getPriorityDisplayMode();
+    // 全局默认（各视图配置未显式设置时回退到此）
+    document.getElementById('settings-show-completed').checked = settings.showCompleted !== false;
+    document.getElementById('settings-show-lunar').checked = settings.showLunar !== false;
     document.getElementById('settings-show-focus-button').checked = settings.showFocusButton !== false;
-    document.getElementById('settings-cmd-default-date').value = settings.cmdDefaultDate || 'none';
+    document.getElementById('settings-no-date-position').value = settings.noDateTaskPosition || 'last';
+    document.getElementById('settings-default-task-date').value = settings.defaultTaskDate || 'today';
     document.getElementById('settings-focus-duration').value = settings.focusDuration || 25;
     document.getElementById('settings-short-break-duration').value = settings.shortBreakDuration || 5;
     document.getElementById('settings-long-break-duration').value = settings.longBreakDuration || 15;
@@ -119,6 +356,8 @@ function openSettingsModal() {
     }
     
     updateSettingsListSelect();
+    initVCTemp();
+    renderViewCustomize();
     updateThemeButtons();
     
     // 初始化快捷键设置
@@ -142,6 +381,8 @@ function closeSettingsModal() {
     if (typeof _recordingShortcut !== 'undefined') {
         _recordingShortcut = null;
     }
+    // 丢弃视图自定义临时状态（未保存的修改不生效）
+    discardVCTemp();
     document.getElementById('settings-modal').classList.add('hidden');
     document.getElementById('settings-modal').classList.remove('flex');
 }
@@ -291,7 +532,7 @@ function doResetData() {
     tasks = [];
     lists = [{ id: 'default', name: '默认', color: '#6366f1' }];
     pomodoroHistory = [];
-    settings = Object.assign({}, DEFAULT_SETTINGS);
+    settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
     quadrantOrder = ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
     saveDataImmediate();
     // 清除 IndexedDB 缓存
@@ -423,18 +664,18 @@ function saveSettings(silent) {
     settings.defaultImportant = document.getElementById('settings-default-important').checked;
     settings.defaultUrgent = document.getElementById('settings-default-urgent').checked;
     settings.defaultDuration = parseInt(document.getElementById('settings-default-duration').value) || 30;
-    settings.defaultView = document.getElementById('settings-default-view').value;
     settings.weekStart = document.getElementById('settings-week-start').value;
-    settings.noDateTaskPosition = document.getElementById('settings-no-date-position').value;
-    settings.showCompleted = document.getElementById('settings-show-completed').checked;
-    settings.showLunar = document.getElementById('settings-show-lunar').checked;
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
     settings.cmdRemoveTimeText = document.getElementById('settings-cmd-remove-time').checked;
     settings.priorityDisplayMode = document.getElementById('settings-priority-display-mode').value;
+    // 全局默认（各视图配置未显式设置时回退到此）
+    settings.showCompleted = document.getElementById('settings-show-completed').checked;
+    settings.showLunar = document.getElementById('settings-show-lunar').checked;
     settings.showFocusButton = document.getElementById('settings-show-focus-button').checked;
-    settings.cmdDefaultDate = document.getElementById('settings-cmd-default-date').value;
+    settings.noDateTaskPosition = document.getElementById('settings-no-date-position').value;
+    settings.defaultTaskDate = document.getElementById('settings-default-task-date').value;
     settings.focusDuration = parseInt(document.getElementById('settings-focus-duration').value);
     settings.shortBreakDuration = parseInt(document.getElementById('settings-short-break-duration').value);
     settings.longBreakDuration = parseInt(document.getElementById('settings-long-break-duration').value);
@@ -490,6 +731,8 @@ function saveSettings(silent) {
         updatePomodoroDisplay();
     }
     
+    // 应用视图自定义临时状态（完全延迟保存：点保存时才生效）
+    applyVCFromTemp();
     saveData();
     startDataRefreshTimer();
 
@@ -521,6 +764,7 @@ function saveSettings(silent) {
     closeSettingsModal();
     applyDisplaySettings();
     renderView();
+    updateViewButtons();
     if (!silent) {
         setTimeout(() => {
             showToast('设置已保存！', 'success');
@@ -550,6 +794,10 @@ function applyDisplaySettings() {
     const pomodoroPage = document.getElementById('pomodoro-page');
     if (pomodoroPage && !pomodoroPage.classList.contains('hidden') && typeof updatePomodoroBackground === 'function') {
         updatePomodoroBackground();
+    }
+    // 侧栏番茄倒计时背景流动效果同样受开关影响，需立即刷新
+    if (typeof updateSidebarPomodoroTimer === 'function') {
+        updateSidebarPomodoroTimer();
     }
 }
 
@@ -1403,16 +1651,19 @@ function _renderBuiltinPalettePreviews() {
 }
 
 function _renderPalettePreviews(palettes) {
+    const isDark = isDarkThemeActive();
     const fields = ['accent', 'bgPrimary', 'bgSecondary', 'textPrimary', 'textMuted', 'border'];
-    ['vibrant', 'muted', 'dark'].forEach(name => {
+    ['vibrant', 'muted', 'steady'].forEach(name => {
         // 优先使用用户编辑后的调色板，其次背景图提取的
         const p = (settings.customPalettes && settings.customPalettes[name]) || palettes[name];
         if (!p) return;
+        // 双变体结构（{light, dark}）：根据当前主题选择对应变体
+        const variant = (p.light && p.dark) ? (isDark ? p.dark : p.light) : p;
         const bar = document.querySelector('.palette-color-bar[data-palette="' + name + '"]');
         if (bar) {
             bar.innerHTML = '';
             fields.forEach(field => {
-                const color = p[field];
+                const color = variant[field];
                 const span = document.createElement('span');
                 span.style.backgroundColor = color;
                 span.dataset.field = field;
@@ -1440,7 +1691,7 @@ const PALETTE_DISPLAY_NAMES = {
     'builtin:amber': '夕照',
     'vibrant': '鲜艳',
     'muted': '柔和',
-    'dark': '深色'
+    'steady': '沉稳'
 };
 
 // 基于当前颜色生成5个相近预设色（原色、稍亮、稍暗、色相+、色相-）
@@ -1619,13 +1870,21 @@ function _applyPaletteColor(paletteKey, field, hex, isPreview) {
     // 更新对应变体的字段
     if (newPalette.light && newPalette.dark) {
         // 双变体：仅更新当前主题对应的变体
-        if (isDark) {
-            newPalette.dark[field] = hex;
-        } else {
-            newPalette.light[field] = hex;
+        const variant = isDark ? newPalette.dark : newPalette.light;
+        variant[field] = hex;
+        // 同步 RGB 字段（写入对应变体）
+        if (field === 'bgPrimary') {
+            const [r, g, b] = _hexToRgb(hex);
+            variant.bgPrimaryRgb = r + ',' + g + ',' + b;
+        } else if (field === 'bgSecondary') {
+            const [r, g, b] = _hexToRgb(hex);
+            variant.bgSecondaryRgb = r + ',' + g + ',' + b;
+        } else if (field === 'bgTertiary') {
+            const [r, g, b] = _hexToRgb(hex);
+            variant.bgTertiaryRgb = r + ',' + g + ',' + b;
         }
     } else {
-        // 扁平结构（背景图提取的）
+        // 扁平结构（旧版背景图提取的，迁移后通常不会进入此分支）
         newPalette[field] = hex;
         // 同步 RGB 字段
         if (field === 'bgPrimary') {
@@ -1713,7 +1972,7 @@ function resetPaletteEdit(paletteKey) {
 
 // 渲染配色卡片上的撤销按钮（仅当该配色有编辑记录时显示）
 function _renderPaletteResetButtons() {
-    const paletteKeys = ['builtin:blue', 'builtin:green', 'builtin:amber', 'vibrant', 'muted', 'dark'];
+    const paletteKeys = ['builtin:blue', 'builtin:green', 'builtin:amber', 'vibrant', 'muted', 'steady'];
     paletteKeys.forEach(key => {
         const btn = document.querySelector('.palette-reset-btn[data-palette-key="' + key + '"]');
         if (btn) {
@@ -1769,7 +2028,7 @@ function syncCustomAccentInputs(source) {
     }
 }
 
-function generatePalettePreview() {
+function generatePalettePreview(autoSwitchTheme) {
     if (!settings.bgImage) {
         showToast('请先上传背景图片', 'warning', 3000);
         return;
@@ -1781,6 +2040,17 @@ function generatePalettePreview() {
             return;
         }
         settings.themePaletteColors = palettes;
+        // 上传背景图时根据图片明暗自动切换深色/浅色模式
+        // （仅在上传流程中触发；手动点击"提取调色板"按钮不自动切换）
+        // 优先使用 extractThemePalettes 同步计算出的 _brightness，避免与
+        // analyzeBgImageBrightness 的异步全局变量产生竞态
+        if (autoSwitchTheme) {
+            const brightness = (typeof palettes._brightness === 'number') ? palettes._brightness : bgImageBrightness;
+            const detectedTheme = brightness < 0.45 ? 'dark' : 'light';
+            if (settings.theme !== detectedTheme) {
+                setTheme(detectedTheme);
+            }
+        }
         const container = document.getElementById('palette-preview-container');
         const hint = document.getElementById('palette-hint-text');
         if (container) container.classList.remove('hidden');

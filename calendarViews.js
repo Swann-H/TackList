@@ -3,8 +3,83 @@
 let weekViewHourStart = 6;
 let weekViewHourEnd = 22;
 let weekAllDayCollapsed = {};
+
+// 移动端月视图：选中的日期（默认今天）
+let _mobileMonthSelectedDate = null;
 // 月视图滚动位置保持：跨重渲染保存/恢复 transform 偏移量
 let _monthSavedScrollTop = null;
+
+// 周/月视图配置：迁移自全局「视图偏好」，作用于周视图与月视图各自独立
+function getWeekConfig() {
+    if (!settings.weekConfig || typeof settings.weekConfig !== 'object') {
+        settings.weekConfig = {};
+    }
+    const c = settings.weekConfig;
+    // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
+    if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
+    if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    return c;
+}
+function getMonthConfig() {
+    if (!settings.monthConfig || typeof settings.monthConfig !== 'object') {
+        settings.monthConfig = {};
+    }
+    const c = settings.monthConfig;
+    // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
+    if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
+    if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    return c;
+}
+
+// 周视图配置面板（右侧滑出）
+_registerViewConfig('week', 'weekConfigPanel', 'week-config-btn');
+function toggleWeekConfig() {
+    if (_viewConfigPanels.week && _viewConfigPanels.week.open) closeViewConfigPanel('week');
+    else openWeekConfig();
+}
+function openWeekConfig() {
+    const cfg = getWeekConfig();
+    const scEl = document.getElementById('wc-showcompleted');
+    const slEl = document.getElementById('wc-showlunar');
+    if (scEl) scEl.checked = cfg.showCompleted !== false;
+    if (slEl) slEl.checked = cfg.showLunar !== false;
+    openViewConfigPanel('week', () => { saveData(); renderView(); });
+}
+function closeWeekConfig() { closeViewConfigPanel('week'); }
+function onWeekConfigChange() {
+    const cfg = getWeekConfig();
+    const scEl = document.getElementById('wc-showcompleted');
+    const slEl = document.getElementById('wc-showlunar');
+    if (scEl) cfg.showCompleted = scEl.checked;
+    if (slEl) cfg.showLunar = slEl.checked;
+    saveData();
+    renderView();
+}
+
+// 月视图配置面板（右侧滑出）
+_registerViewConfig('month', 'monthConfigPanel', 'month-config-btn');
+function toggleMonthConfig() {
+    if (_viewConfigPanels.month && _viewConfigPanels.month.open) closeViewConfigPanel('month');
+    else openMonthConfig();
+}
+function openMonthConfig() {
+    const cfg = getMonthConfig();
+    const scEl = document.getElementById('mc-showcompleted');
+    const slEl = document.getElementById('mc-showlunar');
+    if (scEl) scEl.checked = cfg.showCompleted !== false;
+    if (slEl) slEl.checked = cfg.showLunar !== false;
+    openViewConfigPanel('month', () => { saveData(); renderView(); });
+}
+function closeMonthConfig() { closeViewConfigPanel('month'); }
+function onMonthConfigChange() {
+    const cfg = getMonthConfig();
+    const scEl = document.getElementById('mc-showcompleted');
+    const slEl = document.getElementById('mc-showlunar');
+    if (scEl) cfg.showCompleted = scEl.checked;
+    if (slEl) cfg.showLunar = slEl.checked;
+    saveData();
+    renderView();
+}
 
 function renderWeekView(container) {
     const weekStart = new Date(currentDate);
@@ -30,7 +105,7 @@ function renderWeekView(container) {
     const timedTasks = {};
     weekDays.forEach(date => {
         const dateStr = formatDate(date);
-        const dayAllTasks = getTasksForDate(date);
+        const dayAllTasks = getTasksForDate(date, { includeCompleted: getWeekConfig().showCompleted !== false });
         allDayTasks[dateStr] = dayAllTasks.filter(t => t.isAllDay || isMultiDayTask(t));
         timedTasks[dateStr] = dayAllTasks.filter(t => !t.isAllDay && !isMultiDayTask(t) && t.startTime);
     });
@@ -63,7 +138,7 @@ function renderWeekView(container) {
                 <div class="text-center py-1 border-b border-theme">
                     <div class="text-xs text-theme-secondary">${formatWeekdayShort(date)}</div>
                     <div class="h-6 flex items-center justify-center"><span class="text-sm font-bold ${isToday ? 'w-6 h-6 inline-flex items-center justify-center rounded-full bg-accent text-white' : 'text-theme-primary'}">${date.getDate()}</span></div>
-                    ${(() => { const lt = getLunarDisplayText(date); return lt ? `<div class="text-[10px] text-theme-muted leading-none mt-0.5 truncate">${lt}</div>` : ''; })()}
+                    ${(() => { const lt = getLunarDisplayText(date, getWeekConfig().showLunar); return lt ? `<div class="text-[10px] text-theme-muted leading-none mt-0.5 truncate">${lt}</div>` : ''; })()}
                 </div>
                 <div class="p-1 min-h-[28px]"
                      ondragover="event.preventDefault()"
@@ -316,8 +391,9 @@ function formatWeekdayShort(date) {
 
 // 获取某天的农历显示文本（用于周/日程视图日期头）
 // 返回空字符串表示不显示；优先级：节假日 > 农历节日 > 节气 > 农历日名
-function getLunarDisplayText(date) {
-    if (!settings.showLunar || typeof LunarCalendar === 'undefined') return '';
+function getLunarDisplayText(date, showLunar) {
+    const enabled = (typeof showLunar === 'boolean') ? showLunar : (settings.showLunar !== false);
+    if (!enabled || typeof LunarCalendar === 'undefined') return '';
     const lunar = LunarCalendar.solarToLunar(date.getFullYear(), date.getMonth() + 1, date.getDate());
     if (!lunar) return '';
     const dateStr = formatDate(date);
@@ -453,6 +529,11 @@ function navigateWeek(direction) {
 // ==================== 月视图 ====================
 
 function renderMonthView(container) {
+    // 移动端：使用上下分栏布局（日历 + 任务列表）
+    if (typeof isMobileView === 'function' && isMobileView()) {
+        return renderMonthViewMobile(container);
+    }
+
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const firstDay = new Date(year, month, 1);
@@ -495,7 +576,7 @@ function renderMonthView(container) {
             <div class="grid grid-cols-7 gap-2" id="month-grid" style="grid-auto-rows: 150px;">
                 ${days.map(date => {
                     const dateStr = formatDate(date);
-                    const dayTasks = getTasksForDate(date);
+                    const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false });
                     const isToday = isSameDay(date, new Date());
                     const isCurrentMonth = date.getMonth() === month;
                     const displayCount = 3;
@@ -511,7 +592,7 @@ function renderMonthView(container) {
                         const weekNum = getWeekNumber(date, isWeekStartsOnMonday);
                         weekBadge = `<span class="text-[10px] text-theme-muted leading-none">${weekNum}周</span>`;
                     }
-                    if (settings.showLunar && typeof LunarCalendar !== 'undefined') {
+                    if (getMonthConfig().showLunar && typeof LunarCalendar !== 'undefined') {
                         const lunar = LunarCalendar.solarToLunar(date.getFullYear(), date.getMonth() + 1, date.getDate());
                         if (lunar) {
                             let displayText = lunar.lDayName;
@@ -570,7 +651,7 @@ function renderMonthView(container) {
                                         </div>
                                     `;
                                 }).join('')}
-                                ${dayTasks.length > displayCount ? `<div class="relative text-xs"><span class="text-accent cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')">+${dayTasks.length - displayCount}更多</span><span class="text-accent cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
+                                ${dayTasks.length > displayCount ? `<div class="relative text-xs"><span class="month-more-link text-accent cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"><span class="month-more-count">+${dayTasks.length - displayCount}</span><span class="month-more-word"> 更多</span></span><span class="text-accent cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
                             </div>
                             ${dayTasks.length <= displayCount ? `<button class="absolute bottom-1 right-1 text-accent text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</button>` : ''}
                         </div>
@@ -663,10 +744,10 @@ function openMonthDayPopover(dateStr) {
     closeMonthDayPopover();
 
     const date = new Date(dateStr + 'T00:00:00');
-    const dayTasks = getTasksForDate(date);
+    const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false });
     const isToday = isSameDay(date, new Date());
     const weekDayNames = ['日', '一', '二', '三', '四', '五', '六'];
-    const lunarText = getLunarDisplayText(date);
+    const lunarText = getLunarDisplayText(date, getMonthConfig().showLunar);
 
     // 节假日徽章
     const holidayInfo = getHolidayInfo(dateStr);
@@ -805,6 +886,200 @@ function closeMonthDayPopover() {
     if (currentDetailTaskId) {
         closeTaskDetailPanel();
     }
+}
+
+// ==================== 移动端月视图：上下分栏（日历网格 + 任务列表） ====================
+function renderMonthViewMobile(container) {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+
+    // 初始化选中日期为今天（如果在本月）或本月1号
+    if (!_mobileMonthSelectedDate || !isSameMonth(_mobileMonthSelectedDate, currentDate)) {
+        _mobileMonthSelectedDate = new Date();
+        if (_mobileMonthSelectedDate.getMonth() !== month) {
+            _mobileMonthSelectedDate = new Date(year, month, 1);
+        }
+    }
+
+    const dayOffset = settings.weekStart === 'monday' ? 1 : 0;
+    const weekdayNames = settings.weekStart === 'monday'
+        ? ['一', '二', '三', '四', '五', '六', '日']
+        : ['日', '一', '二', '三', '四', '五', '六'];
+    let startOffset = firstDay.getDay() - dayOffset;
+    if (startOffset < 0) startOffset += 7;
+
+    const days = [];
+    for (let i = startOffset - 1; i >= 0; i--) {
+        days.push(new Date(year, month, -i));
+    }
+    for (let i = 1; i <= lastDay.getDate(); i++) {
+        days.push(new Date(year, month, i));
+    }
+    const lastDayOfWeek = lastDay.getDay();
+    let tailFill;
+    if (dayOffset === 1) {
+        tailFill = (7 - lastDayOfWeek) % 7;
+    } else {
+        tailFill = (6 - lastDayOfWeek + 7) % 7;
+    }
+    for (let i = 1; i <= tailFill; i++) {
+        days.push(new Date(year, month + 1, i));
+    }
+
+    const today = new Date();
+    const sel = _mobileMonthSelectedDate;
+    const selStr = formatDate(sel);
+    const selTasks = getTasksForDate(sel, { includeCompleted: getMonthConfig().showCompleted !== false }).sort((a, b) => {
+        if (a.completed !== b.completed) return a.completed ? 1 : -1;
+        return (a.originalOrder || 0) - (b.originalOrder || 0);
+    });
+    const activeTasks = selTasks.filter(t => !t.completed);
+    const doneTasks = selTasks.filter(t => t.completed);
+
+    // 日历网格 HTML
+    const gridHtml = days.map(date => {
+        const dateStr = formatDate(date);
+        const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false });
+        const isToday = isSameDay(date, today);
+        const isSelected = isSameDay(date, sel);
+        const isCurrentMonth = date.getMonth() === month;
+
+        // 任务点（最多4个点）
+        const dotCount = Math.min(dayTasks.length, 4);
+        const dotsHtml = Array.from({ length: dotCount }, (_, i) => {
+            const t = dayTasks[i];
+            const list = lists.find(l => l.id === t.listId);
+            return `<span class="w-1.5 h-1.5 rounded-full inline-block" style="background:${list?.color || '#3b82f6'}"></span>`;
+        }).join('');
+
+        let lunarText = '';
+        if (getMonthConfig().showLunar && typeof LunarCalendar !== 'undefined') {
+            const lunar = LunarCalendar.solarToLunar(date.getFullYear(), date.getMonth() + 1, date.getDate());
+            if (lunar) {
+                const holidayInfo = getHolidayInfo(dateStr);
+                let displayText = lunar.lDayName;
+                if (holidayInfo && holidayInfo.type === 'holiday' && holidayInfo.isActualDay) {
+                    displayText = holidayInfo.name;
+                }
+                lunarText = `<div class="text-[9px] text-theme-muted leading-none scale-90">${displayText}</div>`;
+            }
+        }
+
+        return `
+            <button class="mobile-month-day relative flex flex-col items-center justify-center py-1.5 rounded-lg transition ${isToday ? 'bg-accent text-white' : ''} ${isSelected && !isToday ? 'ring-2 ring-accent' : ''} ${!isCurrentMonth ? 'opacity-35' : 'hover:bg-theme-tertiary'}"
+                    onclick="_mobileMonthSelectDate('${dateStr}')"
+                    data-date="${dateStr}">
+                <span class="text-sm font-medium leading-none ${isToday ? 'text-white' : (isSelected ? 'text-accent' : 'text-theme-primary')}">${date.getDate()}</span>
+                ${lunarText}
+                ${dotCount > 0 ? `<div class="flex gap-0.5 mt-0.5">${dotsHtml}</div>` : ''}
+            </button>
+        `;
+    }).join('');
+
+    // 任务列表项渲染
+    function renderMobileTaskItem(task) {
+        const list = lists.find(l => l.id === task.listId);
+        const startTime = task.startTime ? new Date(task.startTime) : null;
+        const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2,'0')}:${startTime.getMinutes().toString().padStart(2,'0')}` : '');
+        const isOverdue = isTaskOverdue(task);
+        const titleCls = task.completed ? 'text-theme-muted line-through' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
+        const checked = task.completed ? 'checked' : '';
+        return `
+            <div class="flex items-center gap-3 py-2.5 border-b border-theme/50 last:border-b-0" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
+                <label class="flex-shrink-0" onclick="event.stopPropagation()">
+                    <input type="checkbox" ${checked} onchange="toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded border-theme accent-color">
+                </label>
+                <span class="flex-1 min-w-0 truncate text-sm ${titleCls}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
+                ${timeStr ? `<span class="flex-shrink-0 text-xs text-theme-muted">${timeStr}</span>` : ''}
+            </div>
+        `;
+    }
+
+    container.innerHTML = `
+        <div id="month-view-container" class="h-full flex flex-col overflow-hidden relative bg-theme-primary">
+            <!-- 月份标题栏 -->
+            <div class="flex items-center justify-between px-4 py-3 flex-shrink-0 border-b border-theme/30">
+                <h2 class="text-xl font-bold text-theme-primary">${month + 1}月</h2>
+                <div class="flex items-center gap-2">
+                    <button onclick="switchView('week')" class="w-9 h-9 rounded-lg flex items-center justify-center text-theme-secondary hover:bg-theme-tertiary transition" title="周视图">
+                        <i class="fas fa-calendar-week"></i>
+                    </button>
+                    <button onclick="toggleMobileMoreMenu(event)" class="w-9 h-9 rounded-lg flex items-center justify-center text-theme-secondary hover:bg-theme-tertiary transition">
+                        <i class="fas fa-ellipsis-v"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 星期头 -->
+            <div class="grid grid-cols-7 px-2 py-1.5 flex-shrink-0 border-b border-theme/20">
+                ${weekdayNames.map(d => `<div class="text-center text-xs font-medium text-theme-secondary">${d}</div>`).join('')}
+            </div>
+
+            <!-- 紧凑日历网格 -->
+            <div id="mobile-month-grid" class="grid grid-cols-7 gap-0.5 px-2 py-2 flex-shrink-0">
+                ${gridHtml}
+            </div>
+
+            <!-- 选中日期的任务列表 -->
+            <div id="mobile-month-task-list" class="flex-1 min-h-0 overflow-y-auto px-3 pb-4 space-y-3">
+                <!-- 今天 / 选中日期 -->
+                <div class="bg-theme-secondary rounded-xl overflow-hidden shadow-theme">
+                    <div class="px-4 py-2.5 border-b border-theme/30 flex items-center justify-between">
+                        <h3 class="text-sm font-semibold text-theme-primary">${isSameDay(sel, today) ? '今天' : `${sel.getMonth() + 1}月${sel.getDate()}日`}</h3>
+                        <span class="text-xs text-theme-muted">${activeTasks.length} 项待办</span>
+                    </div>
+                    <div class="divide-y divide-theme/40">
+                        ${activeTasks.length > 0 ? activeTasks.map(renderMobileTaskItem).join('') : '<div class="px-4 py-6 text-center text-sm text-theme-muted">暂无任务</div>'}
+                    </div>
+                </div>
+
+                <!-- 已完成 -->
+                ${doneTasks.length > 0 ? `
+                <div class="bg-theme-secondary rounded-xl overflow-hidden shadow-theme">
+                    <div class="px-4 py-2.5 border-b border-theme/30">
+                        <h3 class="text-sm font-semibold text-theme-muted">已完成</h3>
+                    </div>
+                    <div class="divide-y divide-theme/40">
+                        ${doneTasks.map(renderMobileTaskItem).join('')}
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+
+    // 填充底部月份导航
+    const _navBar = document.getElementById('view-nav-bar');
+    if (_navBar) {
+        _navBar.innerHTML = `
+            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
+                <button onclick="navigateMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <h2 class="text-base font-bold text-theme-primary min-w-0 text-center">${year}年${month + 1}月</h2>
+                <button onclick="navigateMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
+        `;
+    }
+}
+
+// 移动端月视图：选中日期
+function _mobileMonthSelectDate(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    if (!isNaN(d.getTime())) {
+        _mobileMonthSelectedDate = d;
+        const vc = document.getElementById('view-container');
+        if (vc) renderMonthView(vc);
+    }
+}
+
+// 辅助：判断同月
+function isSameMonth(d1, d2) {
+    return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth();
 }
 
 function navigateMonth(direction) {

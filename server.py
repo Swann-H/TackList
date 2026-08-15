@@ -62,7 +62,16 @@ DEFAULT_DATA = {
         "backupInterval": 7,
         "retentionPeriod": 30,
         "bindAddress": "127.0.0.1",
-        "port": 14438
+        "port": 14438,
+        "viewOrder": [
+            {"id": "task", "enabled": True},
+            {"id": "schedule", "enabled": True},
+            {"id": "week", "enabled": True},
+            {"id": "month", "enabled": True},
+            {"id": "quadrant", "enabled": True},
+            {"id": "kanban", "enabled": True}
+        ],
+        "defaultHomeView": "task"
     },
     "quadrantOrder": ["urgent-important", "important-not-urgent", "urgent-not-important", "not-urgent-not-important"],
     "pomodoroHistory": [],

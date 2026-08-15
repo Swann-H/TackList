@@ -31,7 +31,32 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
-        
+
+        /* 番茄倒计时专用字体 */
+        @font-face {
+            font-family: 'Oswald';
+            font-style: normal;
+            font-weight: 700;
+            src: url('/offline_assets/fonts/Oswald-700-latin.woff2') format('woff2');
+        }
+        @font-face {
+            font-family: 'Barlow Condensed';
+            font-style: normal;
+            font-weight: 700;
+            src: url('/offline_assets/fonts/BarlowCondensed-700-latin.woff2') format('woff2');
+        }
+
+        .pomodoro-timer-font {
+            font-family: 'DIN Alternate', 'Barlow Condensed', 'Oswald', sans-serif;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* 全局字体：由 applyFontFamily() 设置 --app-font-family 变量驱动；
+           在线版回退到 'Noto Sans SC'（通过上方 @import 从 Google Fonts 加载） */
+        * {
+            font-family: var(--app-font-family, 'Noto Sans SC', sans-serif);
+        }
+
         /* Theme Variables - Light Mode (default) */
         :root {
             --accent-color: #3b82f6;
@@ -54,6 +79,8 @@
             --view-bg-default: #f9fafb;
             --view-bg-focus: #eef2ff;
             --view-bg-break: #ecfdf5;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
         }
 
         /* Theme Variables - Dark Mode */
@@ -78,6 +105,8 @@
             --view-bg-default: #111827;
             --view-bg-focus: #1e293b;
             --view-bg-break: #1a2e22;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4);
         }
 
         body {
@@ -282,18 +311,6 @@
             background-color: var(--bg-secondary);
             color: var(--text-primary);
         }
-        /* 摘要左栏：今日完成率——彗星脉冲（JS rAF 驱动，长度动态变化） */
-        .pulse-comet {
-            opacity: 0;
-        }
-        /* 100% 完成时整环呼吸发光 */
-        @keyframes ringCompleteBreath {
-            0%, 100% { opacity: 0.7; }
-            50% { opacity: 1; }
-        }
-        .ring-complete-glow .progress-ring-fill {
-            animation: ringCompleteBreath 3s ease-in-out infinite;
-        }
         /* 周视图周末背景：深色模式统一配色 */
         [data-theme="dark"] .week-weekend-bg {
             background-color: rgba(156, 163, 175, 0.08) !important;
@@ -450,6 +467,39 @@
         .detail-tag-pill-selected:hover { opacity: 0.85; }
         .detail-tag-pill-disabled { opacity: 0.4; cursor: not-allowed; }
 
+        /* 分组选择器：与清单胶囊同款样式，仅将全圆胶囊(9999px)改为微圆矩形(6px)以作区分；无标题文字 */
+        .detail-group-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.625rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            border: 1.5px solid var(--tag-color);
+            color: var(--tag-color);
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .detail-group-chip:hover {
+            background-color: var(--tag-color);
+            color: white;
+        }
+        .detail-group-chip-selected {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.625rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            border: 1.5px solid var(--tag-color);
+            background-color: var(--tag-color);
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .detail-group-chip-selected:hover { opacity: 0.85; }
+
         .holiday-countdown-box {
             border: 1.5px dashed var(--border-color);
             border-radius: 0.75rem;
@@ -504,6 +554,24 @@
         .holiday-countdown-date {
             font-size: 0.6rem;
             color: var(--text-secondary);
+        }
+
+        /* 今天：放大名称（与数字相同的衬线字体），占据原名称+数字两行 */
+        .holiday-countdown-name-today {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.2;
+            color: var(--text-primary);
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            /* 占据原名称行(0.65rem) + 数字行(1.75rem*1.1) 高度，使日期行与其他倒计时对齐 */
+            min-height: calc(0.65rem * 1.5 + 1.75rem * 1.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         /* 倒计时管理：双栏展示 + Pin 开关 */
@@ -1012,6 +1080,19 @@
             100% { transform: translate(15%, 8%); }
         }
 
+        /* 侧栏番茄倒计时背景流动 keyframes（background-position 方案，与 -strong 一致）
+           仅在"背景流动效果"开关开启时由 JS 应用到 sidebar-pomodoro */
+        @keyframes pomodoro-focus-flow {
+            0%   { background-position: 0% 50%; }
+            50%  { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        @keyframes pomodoro-break-flow {
+            0%   { background-position: 0% 50%; }
+            50%  { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
         /* ==================== 开关1：强背景流动效果（background-position 方案，视觉更明显但性能消耗大） ==================== */
         /* body.bg-flow-strong 时覆盖 ::before 为 background-position 动画，色标实际移动 300% 元素宽度 */
         body.bg-flow-strong .pomodoro-focus-bg::before,
@@ -1216,16 +1297,6 @@
         @keyframes fadeInContainer {
             from { opacity: 0; }
             to { opacity: 1; }
-        }
-
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        @keyframes fadeOutDown {
-            from { opacity: 1; transform: translateY(0); }
-            to { opacity: 0; transform: translateY(20px); }
         }
 
         /* ==================== 专注心流场动画 (Deep Flow Matrix) ==================== */
@@ -1447,16 +1518,15 @@
         }
         .subtask-drop-zone {
             height: 0;
-            transition: height 0.15s ease, background-color 0.15s ease;
+            transition: background-color 0.12s ease;
             border-radius: 4px;
         }
         .subtask-drop-zone.active {
-            height: 12px;
+            height: 10px;
         }
         .subtask-drop-zone.active.drag-over {
-            height: 50px;
-            background-color: rgba(59, 130, 246, 0.15);
-            border: 2px dashed rgba(59, 130, 246, 0.5);
+            background-color: rgba(59, 130, 246, 0.2);
+            box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.45);
         }
         /* 开始专注按钮：默认显示描边时钟图标，hover时切换为实心填充图标 */
         .pomodoro-focus-btn .pf-icon-outline { display: inline-block; }
@@ -1632,7 +1702,7 @@
                 align-items: center;
                 white-space: nowrap;
             }
-            #today-btn, #plan-btn, #postpone-btn, #add-task-btn { display: none !important; }
+            #today-btn, #plan-btn, #postpone-btn, #add-task-btn, #toggle-all-groups-btn { display: none !important; }
             #mobile-more-btn { display: flex !important; flex-shrink: 0; }
             #mobile-more-menu {
                 position: absolute;
@@ -1700,6 +1770,24 @@
             }
             .task-list-item > span.text-xs { font-size: 11px !important; }
             .task-list-item .mobile-priority-icon { margin-left: 6px; }
+            /* 任务项侧滑：背景操作层（右滑完成 / 左滑删除，§5.3） */
+            .task-list-item { position: relative; z-index: 1; }
+            .task-swipe-reveal {
+                position: absolute;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 13px;
+                font-weight: 600;
+                color: #fff;
+                border-radius: 8px;
+                overflow: hidden;
+                pointer-events: none;
+                z-index: 0;
+            }
+            .task-swipe-reveal .sr-icon { display: flex; align-items: center; justify-content: center; width: 56px; font-size: 16px; flex-shrink: 0; }
+            .task-swipe-reveal.sr-complete { background: var(--accent-color, #3b82f6); justify-content: flex-start; }
+            .task-swipe-reveal.sr-delete { background: #ef4444; justify-content: flex-end; }
             .pomodoro-focus-btn { opacity: 1 !important; width: 32px !important; height: 32px !important; }
             .pomodoro-focus-btn .pf-icon-outline { display: none !important; }
             .pomodoro-focus-btn .pf-icon-solid { display: inline-block !important; font-size: 15px; }
@@ -1764,10 +1852,18 @@
 
             /* ---- 5.4 日程视图 ---- */
             .schedule-day-drop { padding: 12px !important; }
-            .schedule-day-drop > div:first-child { gap: 12px !important; margin-bottom: 12px !important; }
+            .schedule-day-drop > div:first-child { gap: 10px !important; margin-bottom: 10px !important; flex-wrap: nowrap; }
+            /* 日期列紧凑化：横排日期+星期，缩小字号 */
+            .schedule-day-drop > div:first-child > div.text-center { min-width: 48px !important; padding: 0 !important; }
+            .schedule-day-drop > div:first-child > div.text-center > div:first-child { font-size: 1.25rem !important; line-height: 1.2; }
+            .schedule-day-drop > div:first-child > div.text-center > div:nth-child(2) { font-size: 0.7rem !important; }
+            .schedule-day-drop > div:first-child > div.text-center > div:nth-child(3),
+            .schedule-day-drop > div:first-child > div.text-center > div:nth-child(4) { display: none; } /* 隐藏"今天"标签和农历 */
             .schedule-task-item { gap: 8px !important; }
             .schedule-task-item > div.w-8 { width: 28px; }
             .schedule-task-card { padding: 10px !important; }
+            .schedule-task-card > div:first-child { flex-wrap: wrap; gap: 4px !important; }
+            .schedule-task-card > div:first-child > span, .schedule-task-card > div:first-child > div { font-size: 0.75rem !important; }
             .schedule-task-item button[class*="rounded-full"],
             .quadrant-drop-zone button[class*="rounded-full"] { position: relative; }
             .schedule-task-item button[class*="rounded-full"]::after,
@@ -1809,6 +1905,9 @@
             .calendar-day > button.absolute { display: none; }
             .calendar-day .relative.text-xs span.absolute { display: none; }
             .calendar-day .relative.text-xs { font-size: 10px; width: 100%; }
+            /* 月视图任务点超出3个：移动端仅显示紧凑 +N（§5.6） */
+            .month-more-link { width: 100%; flex-basis: 100%; font-size: 10px; line-height: 1.4; }
+            .month-more-word { display: none; }
             /* 月视图日期浮层：全屏页 */
             #month-day-popover {
                 inset: 0 !important;
@@ -1819,6 +1918,11 @@
                 max-height: 100dvh !important;
                 border-radius: 0 !important;
             }
+
+            /* ---- 移动端月视图：上下分栏布局 ---- */
+            .mobile-month-day { min-height: 48px; }
+            #month-view-container:has(#mobile-month-grid) { padding-bottom: 0; }
+            #mobile-month-task-list { -webkit-overflow-scrolling: touch; }
 
             /* ---- 5.7 四象限：纵向排列 + 卡片折叠 ---- */
             #quadrants-container {
@@ -1839,6 +1943,8 @@
 
             /* ---- 5.8 摘要视图：纵向堆叠 ---- */
             .summary-container > div:first-child { flex-wrap: wrap; gap: 8px !important; padding: 12px 12px 8px !important; }
+            /* 数值卡片：移动端改为 2 列网格，避免一行过挤（§5.8） */
+            .summary-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 10px 8px !important; }
             .summary-container select { font-size: 13px !important; padding: 6px 8px !important; max-width: 46vw; }
             .summary-container > div:nth-child(2) {
                 flex-direction: column;
@@ -1855,17 +1961,28 @@
             #pomodoro-left-panel { flex: 1 1 auto !important; padding: 16px !important; }
             #pomodoro-right-panel {
                 position: absolute;
+                top: 52px;
                 left: 0;
                 right: 0;
-                bottom: 0;
-                top: auto;
-                max-height: 48%;
+                bottom: auto;
+                max-height: 72vh;
                 z-index: 30;
-                overflow-y: auto;
-                border-radius: 20px 20px 0 0;
-                padding: 16px !important;
-                box-shadow: 0 -8px 30px rgba(0,0,0,0.3);
+                overflow: hidden;
+                border-radius: 0 0 18px 18px;
+                padding: 12px 16px !important;
+                box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+                transition: max-height 0.3s ease;
             }
+            /* 顶部紧凑条：收起态仅显示标题行（含收起/展开把手） */
+            #pomodoro-right-panel.mobile-overview-collapsed {
+                max-height: 46px !important;
+                padding-top: 4px !important;
+                padding-bottom: 0 !important;
+            }
+            #pomodoro-right-panel.mobile-overview-collapsed .grid.grid-cols-2,
+            #pomodoro-right-panel.mobile-overview-collapsed #pomodoro-history { display: none !important; }
+            /* 移动端用面板内把手收起/展开，隐藏原左栏收起按钮（其会整体隐藏右栏） */
+            #pomodoro-toggle-panel-btn { display: none !important; }
             #pomodoro-circle { width: min(62vw, 260px) !important; height: min(62vw, 260px) !important; margin-bottom: 16px !important; }
             #pomodoro-time { font-size: clamp(2.4rem, 13vw, 4rem) !important; }
             #pomodoro-phase { font-size: 18px !important; }
@@ -1877,12 +1994,26 @@
             #pomodoro-fullscreen-btn { top: 16px !important; right: 136px !important; bottom: auto !important; }
             #pomodoro-back-btn { padding: 8px; }
             #pomodoro-task-panel { width: 100% !important; }
+            /* 番茄右栏 hover-only 操作按钮在触屏常驻显示（§6.5） */
+            #pomodoro-right-panel .group-hover\:opacity-100 { opacity: 1 !important; }
 
             /* ---- 底部悬浮导航栏紧凑化 ---- */
             #view-nav-bar { bottom: 8px !important; }
             #view-nav-bar > div { gap: 12px !important; padding: 10px 16px !important; }
             #view-nav-bar h2 { min-width: 0 !important; font-size: 16px !important; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             #view-nav-bar button { min-width: 36px; min-height: 36px; }
+
+            /* ---- 底部视图切换导航栏 ---- */
+            #mobile-bottom-nav { display: flex !important; }
+            #view-tabs { display: none !important; }
+            .mobile-nav-item { transition: color 0.15s ease; }
+            .mobile-nav-item.active { color: var(--accent, #3b82f6) !important; }
+            /* 底部导航栏显示时，月份导航抬高到其上方 */
+            body:has(#mobile-bottom-nav) #view-nav-bar:not(:empty) { bottom: 60px !important; }
+            /* FAB 抬高到底部导航上方 */
+            body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-inset-bottom)) !important; }
+            /* Toast 提高到底部导航栏上方，避免遮挡（导航栏高 56px + 安全区） */
+            #toast-container { bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
 
             /* ---- 6.5 Hover 状态解除：触屏常驻显示 ---- */
             .detail-tag-chip .tag-remove-btn { visibility: visible; }
@@ -1941,8 +2072,11 @@
                 
                 <!-- 清单分组 -->
                 <div class="mt-4">
-                    <div class="group flex items-center justify-between mb-2">
-                        <span class="text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">清单</span>
+                    <div id="sidebar-lists-header" class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('lists')">
+                        <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">
+                            <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition"></i>
+                            <span>清单</span>
+                        </span>
                         <button onclick="event.stopPropagation(); showAddListInput()" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm w-5 text-center flex items-center justify-center" title="新建清单">
                             <i class="fas fa-plus"></i>
                         </button>
@@ -1956,8 +2090,11 @@
                 
                 <!-- 标签分组 -->
                 <div id="sidebar-tags-section" class="mt-4">
-                    <div class="group flex items-center justify-between mb-2">
-                        <span class="text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">标签</span>
+                    <div class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('tags')">
+                        <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">
+                            <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition"></i>
+                            <span>标签</span>
+                        </span>
                         <button onclick="event.stopPropagation(); showAddTagInput()" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm w-5 text-center flex items-center justify-center" title="新建标签">
                             <i class="fas fa-plus"></i>
                         </button>
@@ -1969,9 +2106,12 @@
                 
                 <!-- 过滤器分组 -->
                 <div id="sidebar-filters-section" class="mt-4">
-                    <div class="group flex items-center justify-between mb-2">
-                        <span class="text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">过滤器</span>
-                        <button onclick="showAddFilterInput()" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm w-5 text-center flex items-center justify-center" title="新建过滤器">
+                    <div class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('filters')">
+                        <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">
+                            <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition"></i>
+                            <span>过滤器</span>
+                        </span>
+                        <button onclick="event.stopPropagation(); showAddFilterInput()" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm w-5 text-center flex items-center justify-center" title="新建过滤器">
                             <i class="fas fa-plus"></i>
                         </button>
                     </div>
@@ -2036,6 +2176,7 @@
                         <button onclick="switchView('week')" id="view-btn-week" data-view="week" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">周</button>
                         <button onclick="switchView('month')" id="view-btn-month" data-view="month" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">月</button>
                         <button onclick="switchView('quadrant')" id="view-btn-quadrant" data-view="quadrant" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">四象限</button>
+                        <button onclick="switchView('kanban')" id="view-btn-kanban" data-view="kanban" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">看板</button>
                     </div>
                 </div>
 
@@ -2052,6 +2193,24 @@
                     <button onclick="toggleAllTaskListGroups()" id="toggle-all-groups-btn" class="hidden w-10 h-10 rounded-full border-2 border-teal-500 text-teal-500 flex items-center justify-center hover:bg-teal-500 hover:text-white transition group relative" title="全部展开">
                         <i class="fas fa-angles-down"></i>
                     </button>
+                    <button onclick="toggleKanbanConfig()" id="kanban-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置">
+                        <i class="fas fa-sliders-h"></i>
+                    </button>
+                    <button onclick="toggleTaskConfig()" id="task-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置">
+                        <i class="fas fa-sliders-h"></i>
+                    </button>
+                    <button onclick="toggleScheduleConfig()" id="schedule-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置">
+                        <i class="fas fa-sliders-h"></i>
+                    </button>
+                    <button onclick="toggleWeekConfig()" id="week-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置">
+                        <i class="fas fa-sliders-h"></i>
+                    </button>
+                    <button onclick="toggleMonthConfig()" id="month-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置">
+                        <i class="fas fa-sliders-h"></i>
+                    </button>
+                    <button onclick="toggleQuadrantConfig()" id="quadrant-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置">
+                        <i class="fas fa-sliders-h"></i>
+                    </button>
                     <button onclick="openAddTaskModal()" id="add-task-btn" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务">
                         <i class="fas fa-plus"></i>
                     </button>
@@ -2064,6 +2223,7 @@
                             <button id="mobile-more-plan" onclick="closeMobileMoreMenu(); togglePlanPanel()"><i class="fas fa-clipboard-list w-5"></i>计划</button>
                             <button id="mobile-more-postpone" onclick="closeMobileMoreMenu(); postponeOverdueTasks()"><i class="fas fa-forward w-5"></i>顺延</button>
                             <button id="mobile-more-toggle-groups" onclick="closeMobileMoreMenu(); toggleAllTaskListGroups()"><i class="fas fa-angles-down w-5"></i>全部展开</button>
+                            <button id="mobile-more-add" onclick="closeMobileMoreMenu(); openAddTaskModal()"><i class="fas fa-plus w-5"></i>添加任务</button>
                         </div>
                     </div>
                 </div>
@@ -2075,6 +2235,48 @@
                     <!-- 动态内容 -->
                 </div>
                 <div id="view-nav-bar" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20"></div>
+                <!-- 移动端底部视图切换导航栏（仅移动端显示） -->
+                <nav id="mobile-bottom-nav" class="hidden fixed bottom-0 left-0 right-0 z-30 bg-theme-secondary/90 backdrop-blur-lg border-t border-theme safe-area-bottom">
+                    <div class="flex items-center justify-around h-14 max-w-lg mx-auto" id="mobile-nav-main">
+                        <button onclick="switchView('task')" data-mnav="task" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary active:text-accent">
+                            <i class="fas fa-list-check text-lg"></i>
+                            <span class="text-[10px] mt-0.5">任务</span>
+                        </button>
+                        <button onclick="switchView('schedule')" data-mnav="schedule" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                            <i class="fas fa-calendar-day text-lg"></i>
+                            <span class="text-[10px] mt-0.5">日程</span>
+                        </button>
+                        <button onclick="switchView('week')" data-mnav="week" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                            <i class="fas fa-calendar-week text-lg"></i>
+                            <span class="text-[10px] mt-0.5">周</span>
+                        </button>
+                        <button onclick="switchView('month')" data-mnav="month" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                            <i class="fas fa-calendar text-lg"></i>
+                            <span class="text-[10px] mt-0.5">月</span>
+                        </button>
+                        <button onclick="switchView('quadrant')" data-mnav="quadrant" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                            <i class="fas fa-th-large text-lg"></i>
+                            <span class="text-[10px] mt-0.5">象限</span>
+                        </button>
+                        <!-- 更多：摘要 / 倒计时 / 设置 -->
+                        <button onclick="toggleMobileNavMore(event)" data-mnav="more" id="mobile-nav-more-btn" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary relative">
+                            <i class="fas fa-ellipsis-h text-lg"></i>
+                            <span class="text-[10px] mt-0.5">更多</span>
+                        </button>
+                    </div>
+                    <!-- 更多子菜单 -->
+                    <div id="mobile-nav-more-menu" class="hidden absolute bottom-14 right-2 bg-theme-secondary border border-theme rounded-xl shadow-xl py-2 min-w-[140px] z-50">
+                        <button onclick="closeMobileNavMore(); switchView('summary')" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3">
+                            <i class="fas fa-chart-pie w-5 text-center"></i>摘要
+                        </button>
+                        <button onclick="closeMobileNavMore(); switchView('countdown')" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3">
+                            <i class="fas fa-hourglass-half w-5 text-center"></i>倒计时
+                        </button>
+                        <button onclick="closeMobileNavMore(); openMobileSidebar()" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3">
+                            <i class="fas fa-cog w-5 text-center"></i>设置
+                        </button>
+                    </div>
+                </nav>
             </div>
 
         </main>
@@ -2322,6 +2524,7 @@
                 <!-- 清单选择内联展开 -->
                 <div id="detail-list-picker" class="hidden mb-3 p-2 bg-theme-tertiary rounded-lg border border-theme">
                     <div id="detail-list-pills" class="flex flex-wrap gap-1.5"></div>
+                    <div id="detail-group-row" class="hidden mt-2 pt-2 border-t border-theme flex flex-wrap gap-1.5 items-center"></div>
                 </div>
                 <!-- 标签选择内联展开 -->
                 <div id="detail-tag-picker" class="hidden mb-3 p-2 bg-theme-tertiary rounded-lg border border-theme">
@@ -2549,7 +2752,7 @@
                     </div>
                     
                     <div id="pomodoro-circle" class="relative w-80 h-80 mx-auto mb-8">
-                        <svg class="w-full h-full transform -rotate-90" style="overflow: visible;">
+                        <svg class="w-full h-full transform -rotate-90" viewBox="0 0 320 320" style="overflow: visible;">
                             <circle cx="160" cy="160" r="150" stroke="rgba(255,255,255,0.3)" stroke-width="8" fill="none"/>
                             <circle id="pomodoro-progress" cx="160" cy="160" r="150" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" stroke-dasharray="942" stroke-dashoffset="0" style="transition: stroke-dashoffset 0.3s ease;"/>
                         </svg>
@@ -2608,8 +2811,13 @@
             <!-- 右栏 - 概况和历史 (30%) -->
             <div id="pomodoro-right-panel" class="flex-[3] p-8 overflow-hidden flex flex-col pomodoro-focus-bg">
                 <div class="w-full mx-auto flex flex-col flex-1 min-h-0">
-                    <h2 class="text-lg font-semibold text-theme-primary mb-3">专注概况</h2>
-                    
+                    <div class="flex items-center justify-between mobile-overview-header mb-3" id="mobile-overview-header">
+                        <h2 class="text-lg font-semibold text-theme-primary">专注概况</h2>
+                        <button onclick="togglePomodoroOverviewMobile()" id="pomodoro-overview-toggle" class="text-theme-muted hover:text-white transition p-1 -mr-1" title="收起 / 展开">
+                            <i id="pomodoro-overview-toggle-icon" class="fas fa-chevron-up text-sm"></i>
+                        </button>
+                    </div>
+
                     <div class="grid grid-cols-2 gap-3 mb-6">
                         <div class="pomodoro-glass-card rounded-lg p-3 text-center">
                             <div id="today-pomodoros" class="text-xl font-bold text-white">0</div>
@@ -2652,7 +2860,7 @@
         <div id="pomodoro-task-panel-overlay" class="fixed inset-0 z-40 hidden" onclick="closePomodoroTaskPanel()"></div>
 
         <!-- 选择任务面板（专注任务选择 / 历史记录关联任务共用） -->
-        <div id="pomodoro-task-panel" class="fixed top-0 right-0 w-96 h-full bg-theme-secondary shadow-2xl z-50 transform translate-x-full transition-transform duration-300">
+        <div id="pomodoro-task-panel" class="fixed top-0 right-0 w-96 h-full bg-theme-secondary shadow-none z-50 transform translate-x-full transition-transform duration-300">
             <div class="p-4 border-b border-theme flex items-center justify-between">
                 <h3 id="pomodoro-task-panel-title" class="text-lg font-bold text-theme-primary">专注任务</h3>
                 <button onclick="closePomodoroTaskPanel()" class="text-theme-muted hover:text-theme-primary">
@@ -2880,7 +3088,7 @@
                             <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2">外观</div>
                             <ul class="space-y-1">
                                 <li><a data-target="settings-section-theme" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">主题设置</a></li>
-                                <li><a data-target="settings-section-view" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">视图偏好</a></li>
+                                <li><a data-target="settings-section-view" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">视图与外观</a></li>
                             </ul>
                         </div>
                         <div>
@@ -3030,11 +3238,11 @@
                                             <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
-                                    <button onmousedown="startPalettePreview('dark')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="dark" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
-                                        <div class="palette-color-bar mb-1" data-palette="dark"></div>
+                                    <button onmousedown="startPalettePreview('steady')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="steady" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer">
+                                        <div class="palette-color-bar mb-1" data-palette="steady"></div>
                                         <div class="flex items-center justify-between">
-                                            <div class="text-xs text-theme-secondary">深色</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('dark')" data-palette-key="dark" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
+                                            <div class="text-xs text-theme-secondary">沉稳</div>
+                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('steady')" data-palette-key="steady" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑"></i>
                                         </div>
                                     </button>
                                 </div>
@@ -3066,17 +3274,66 @@
                     </div>
                     
                     <div id="settings-section-view">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">视图偏好</h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">视图与外观</h3>
                         <div class="space-y-4">
                             <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">默认首页视图</label>
-                                <select id="settings-default-view" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                    <option value="task">任务</option>
-                                    <option value="schedule">日程</option>
-                                    <option value="week">周</option>
-                                    <option value="month">月</option>
-                                    <option value="quadrant">四象限</option>
-                                </select>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">视图自定义</label>
+                                <p class="text-xs text-theme-muted mb-2">单击启用/禁用视图，双击设置默认视图；可拖拽调整已启用视图顺序。</p>
+                                <div class="rounded-lg border border-theme p-3 bg-theme-tertiary space-y-3">
+                                    <div>
+                                        <div class="text-xs font-semibold text-theme-secondary mb-1">已启用视图</div>
+                                        <div id="view-customize-enabled" class="flex flex-wrap gap-2 min-h-[2.25rem]"></div>
+                                    </div>
+                                    <div>
+                                        <div class="text-xs font-semibold text-theme-secondary mb-1">可添加视图</div>
+                                        <div id="view-customize-disabled" class="flex flex-wrap gap-2 min-h-[2.25rem]"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">全局默认</label>
+                                <p class="text-xs text-theme-muted mb-2">以下设置作为各视图的默认值；各视图配置面板中可独立覆盖。</p>
+                                <div class="rounded-lg border border-theme p-3 bg-theme-tertiary space-y-3">
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <label class="text-sm font-medium text-theme-primary">显示已完成任务</label>
+                                            <p class="text-xs text-theme-secondary">默认在各视图中显示已完成的任务</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="settings-show-completed" class="sr-only peer" checked>
+                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <label class="text-sm font-medium text-theme-primary">显示农历</label>
+                                            <p class="text-xs text-theme-secondary">默认在日程/周/月视图中显示农历</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="settings-show-lunar" class="sr-only peer" checked>
+                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+                                        </label>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <label class="text-sm font-medium text-theme-primary">显示"开始专注"按钮</label>
+                                            <p class="text-xs text-theme-secondary">默认在任务卡片上显示专注按钮</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="settings-show-focus-button" class="sr-only peer" checked>
+                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+                                        </label>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-theme-secondary mb-1">无日期任务位置</label>
+                                        <p class="text-xs text-theme-secondary mb-1">默认无日期任务的显示位置</p>
+                                        <select id="settings-no-date-position" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                            <option value="last">底部</option>
+                                            <option value="first">顶部</option>
+                                            <option value="none">不显示</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-theme-secondary mb-1">周开始于</label>
@@ -3084,34 +3341,6 @@
                                     <option value="monday">周一</option>
                                     <option value="sunday">周日</option>
                                 </select>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">无日期任务显示位置</label>
-                                <p class="text-xs text-theme-secondary mb-1">未设置时间的任务在任务/日程视图中的位置</p>
-                                <select id="settings-no-date-position" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                    <option value="first">优先显示</option>
-                                    <option value="last">最末显示</option>
-                                </select>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <label class="text-sm font-medium text-theme-primary">显示已完成任务</label>
-                                    <p class="text-xs text-theme-secondary">在视图中显示已完成的任务（灰色样式）</p>
-                                </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" id="settings-show-completed" class="sr-only peer">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <label class="text-sm font-medium text-theme-primary">显示农历</label>
-                                    <p class="text-xs text-theme-secondary">在月、周、日程视图中显示农历日期</p>
-                                </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" id="settings-show-lunar" class="sr-only peer">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
@@ -3153,16 +3382,6 @@
                                     <option value="none">不显示</option>
                                 </select>
                             </div>
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <label class="text-sm font-medium text-theme-primary">显示"开始专注"按钮</label>
-                                    <p class="text-xs text-theme-secondary">在任务列表、四象限、日程视图中显示快捷专注按钮</p>
-                                </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" id="settings-show-focus-button" class="sr-only peer" checked>
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                </label>
-                            </div>
                         </div>
                     </div>
                     
@@ -3195,6 +3414,16 @@
                                     <span class="text-sm text-theme-secondary">分钟</span>
                                 </div>
                             </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-1">默认任务日期</label>
+                                <p class="text-xs text-theme-muted mb-2">新建任务时未指定日期的默认日期，影响命令面板及各视图的添加任务按钮</p>
+                                <select id="settings-default-task-date" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="none">无日期</option>
+                                    <option value="today">今天</option>
+                                    <option value="tomorrow">明天</option>
+                                    <option value="nextmonday">下周一</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
                     
@@ -3211,14 +3440,6 @@
                                     <input type="checkbox" id="settings-cmd-remove-time" class="sr-only peer" checked>
                                     <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
                                 </label>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">未识别日期时的默认日期</label>
-                                <p class="text-xs text-theme-muted mb-2">当输入中未包含任何日期信息时，任务的默认日期</p>
-                                <select id="settings-cmd-default-date" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                    <option value="none">无日期</option>
-                                    <option value="today">今天</option>
-                                </select>
                             </div>
                         </div>
                     </div>
@@ -3421,7 +3642,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.5.1</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.2</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3629,6 +3850,7 @@
     <script src="quadrantView.js"></script>
     <script src="taskListView.js"></script>
     <script src="summaryView.js"></script>
+    <script src="kanbanView.js"></script>
     <script src="views.js"></script>
     <script src="tasks.js"></script>
     <script src="pomodoro.js"></script>
@@ -3636,7 +3858,340 @@
     <script src="easterEgg.js"></script>
     <script src="countdown.js"></script>
     <script src="holiday.js"></script>
+
+    <!-- 看板视图配置：右侧滑出面板 -->
+    <aside id="kanbanConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">看板视图配置</h3>
+            <button onclick="closeKanbanConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">分组依据</label>
+                <select id="kc-groupby" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="custom">自定义</option>
+                    <option value="time">时间</option>
+                    <option value="createdTime">创建时间</option>
+                    <option value="tag">标签</option>
+                    <option value="priority">优先级</option>
+                    <option value="none">无</option>
+                </select>
+            </div>
+            <div id="kc-tagsub-wrap" class="hidden">
+                <label class="block text-sm text-theme-secondary mb-1">标签下二级分组</label>
+                <select id="kc-tagsub" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="list">清单</option>
+                    <option value="time">时间</option>
+                    <option value="createdTime">创建时间</option>
+                    <option value="priority">优先级</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">排序依据</label>
+                <select id="kc-sortby" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="time">时间</option>
+                    <option value="createdTime">创建时间</option>
+                    <option value="modifiedTime">修改时间</option>
+                    <option value="title">标题名称</option>
+                    <option value="tag">标签</option>
+                    <option value="priority">优先级</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">排序方式</label>
+                <div class="flex gap-4">
+                    <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="kc-sortdir" id="kc-sortdir-asc" value="asc" onchange="onKanbanConfigChange()"> 升序</label>
+                    <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="kc-sortdir" id="kc-sortdir-desc" value="desc" onchange="onKanbanConfigChange()"> 降序</label>
+                </div>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示任务详情</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="kc-showdetails" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="kc-showcompleted" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="kc-showfocus" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">列头仅显示未完成计数</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="kc-countuncompleted" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div id="kc-groupconfig-entry" class="hidden border-t border-theme pt-4">
+                <button onclick="openKanbanGroupConfig()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-theme-tertiary hover:bg-theme text-theme-primary transition">
+                    <span class="text-sm font-medium">分组配置</span>
+                    <i class="fas fa-chevron-right text-theme-muted"></i>
+                </button>
+                <p class="text-xs text-theme-muted mt-2">调整分组顺序、重命名、新增或删除分组</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 任务视图配置：右侧滑出面板 -->
+    <aside id="taskConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">任务视图配置</h3>
+            <button onclick="closeTaskConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">分组依据</label>
+                <select id="tc-groupby" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="time">时间</option>
+                    <option value="createdTime">创建时间</option>
+                    <option value="list">清单</option>
+                    <option value="tag">标签</option>
+                    <option value="priority">优先级</option>
+                    <option value="none">无</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">排序依据</label>
+                <select id="tc-sortby" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="time">时间</option>
+                    <option value="createdTime">创建时间</option>
+                    <option value="modifiedTime">修改时间</option>
+                    <option value="title">标题名称</option>
+                    <option value="tag">标签</option>
+                    <option value="priority">优先级</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">排序方式</label>
+                <div class="flex gap-4">
+                    <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="tc-sortdir" id="tc-sortdir-asc" value="asc" onchange="onTaskConfigChange()"> 升序</label>
+                    <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="tc-sortdir" id="tc-sortdir-desc" value="desc" onchange="onTaskConfigChange()"> 降序</label>
+                </div>
+            </div>
+            <div class="border-t border-theme pt-4 space-y-4">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-theme-primary">显示已完成任务</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="tc-showcompleted" onchange="onTaskConfigChange()" class="sr-only peer">
+                        <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                    </label>
+                </div>
+                <div>
+                    <label class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
+                    <select id="tc-nodatepos" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                        <option value="last">最末显示</option>
+                        <option value="first">优先显示</option>
+                    </select>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="tc-showfocus" onchange="onTaskConfigChange()" class="sr-only peer">
+                        <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                    </label>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-theme-primary">显示任务详情</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="tc-showdetails" onchange="onTaskConfigChange()" class="sr-only peer">
+                        <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                    </label>
+                </div>
+                <div>
+                    <label class="block text-sm text-theme-secondary mb-1">分组默认折叠/展开</label>
+                    <select id="tc-collapse" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                        <option value="all-expanded">全部展开</option>
+                        <option value="only-completed-collapsed">仅折叠已完成</option>
+                        <option value="all-collapsed">全部折叠</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 四象限视图配置：右侧滑出面板 -->
+    <aside id="quadrantConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">四象限视图配置</h3>
+            <button onclick="closeQuadrantConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="qc-showcompleted" onchange="onQuadrantConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="qc-showfocus" onchange="onQuadrantConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示任务详情</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="qc-showdetails" onchange="onQuadrantConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 日程视图配置：右侧滑出面板 -->
+    <aside id="scheduleConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">日程视图配置</h3>
+            <button onclick="closeScheduleConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="sc-showcompleted" onchange="onScheduleConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div>
+                <label class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
+                <select id="sc-nodatepos" onchange="onScheduleConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="last">最末显示（放置于今天最末）</option>
+                    <option value="first">优先显示（放置于今天最前）</option>
+                    <option value="none">不显示</option>
+                </select>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示农历</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="sc-showlunar" onchange="onScheduleConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="sc-showfocus" onchange="onScheduleConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 周视图配置：右侧滑出面板 -->
+    <aside id="weekConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">周视图配置</h3>
+            <button onclick="closeWeekConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="wc-showcompleted" onchange="onWeekConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示农历</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="wc-showlunar" onchange="onWeekConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 月视图配置：右侧滑出面板 -->
+    <aside id="monthConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">月视图配置</h3>
+            <button onclick="closeMonthConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="mc-showcompleted" onchange="onMonthConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-sm text-theme-primary">显示农历</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="mc-showlunar" onchange="onMonthConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 分组配置：覆盖于视图配置面板上 -->
+    <aside id="kanbanGroupConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-50 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center gap-2 p-4 border-b border-theme flex-shrink-0">
+            <button onclick="closeKanbanGroupConfig()" class="p-2 -ml-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-chevron-left text-theme-muted"></i></button>
+            <h3 class="text-lg font-semibold text-theme-primary">分组配置</h3>
+        </div>
+        <div id="kanbanGroupConfigBody" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
+        <div class="p-4 border-t border-theme flex-shrink-0">
+            <button onclick="kanbanGroupCfgAdd()" class="w-full px-4 py-2 rounded-lg border-2 border-dashed border-theme text-theme-secondary hover:text-accent hover:border-accent transition"><i class="fas fa-plus mr-1"></i>新增分组</button>
+        </div>
+    </aside>
+
+    <div id="kanbanGroupModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40" onclick="if(event.target===this)closeKanbanGroupModal()">
+        <div class="bg-theme-secondary rounded-2xl shadow-2xl w-[360px] max-w-[92vw] p-5 border border-theme">
+            <div class="flex items-center justify-between mb-4">
+                <h3 id="kanbanGroupModalTitle" class="text-lg font-semibold text-theme-primary">新增分组</h3>
+                <button onclick="closeKanbanGroupModal()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+            </div>
+            <input id="kanbanGroupInput" type="text" onkeydown="if(event.key==='Enter')confirmKanbanGroupModal()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme focus:outline-none focus:border-accent" placeholder="输入分组名称" />
+            <div class="flex justify-end gap-2 mt-5">
+                <button onclick="closeKanbanGroupModal()" class="px-4 py-2 rounded-lg text-theme-secondary hover:bg-theme-tertiary transition">取消</button>
+                <button onclick="confirmKanbanGroupModal()" class="px-4 py-2 rounded-lg bg-accent text-white hover:bg-accent-hover transition">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="kanbanConfirmModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40" onclick="if(event.target===this)cancelKanbanConfirm()">
+        <div class="bg-theme-secondary rounded-2xl shadow-2xl w-[360px] max-w-[92vw] p-5 border border-theme">
+            <div class="flex items-center gap-3 mb-3">
+                <i class="fas fa-exclamation-triangle text-amber-500 text-xl"></i>
+                <h3 class="text-lg font-semibold text-theme-primary">确认操作</h3>
+            </div>
+            <p id="kanbanConfirmMsg" class="text-sm text-theme-secondary leading-relaxed"></p>
+            <div class="flex justify-end gap-2 mt-5">
+                <button onclick="cancelKanbanConfirm()" class="px-4 py-2 rounded-lg text-theme-secondary hover:bg-theme-tertiary transition">取消</button>
+                <button onclick="confirmKanbanConfirm()" class="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition">确认删除</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="kanbanListDeleteModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40" onclick="if(event.target===this)closeKanbanListDeleteChoice()">
+        <div class="bg-theme-secondary rounded-2xl shadow-2xl w-[360px] max-w-[92vw] p-5 border border-theme">
+            <div class="flex items-center gap-3 mb-3">
+                <i class="fas fa-exclamation-triangle text-amber-500 text-xl"></i>
+                <h3 id="kanbanListDeleteTitle" class="text-lg font-semibold text-theme-primary">删除清单</h3>
+            </div>
+            <p id="kanbanListDeleteMsg" class="text-sm text-theme-secondary leading-relaxed"></p>
+            <div class="flex flex-col gap-2 mt-5">
+                <button id="kanbanListDeleteMoveBtn" onclick="confirmKanbanListDelete(true)" class="px-4 py-2 rounded-lg bg-accent text-white hover:bg-accent-hover transition text-sm">移入默认清单（保留任务）</button>
+                <button id="kanbanListDeletePurgeBtn" onclick="confirmKanbanListDelete(false)" class="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition text-sm">删除所有任务</button>
+                <button onclick="closeKanbanListDeleteChoice()" class="px-4 py-2 rounded-lg text-theme-secondary hover:bg-theme-tertiary transition text-sm">取消</button>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
-<script src="mobile.js"></script>
 </body>
 </html>

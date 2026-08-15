@@ -131,18 +131,28 @@ function resolveCountdownItem(key) {
 function cdDaysHtml(days) {
     if (days === null || days === undefined) return '';
     if (days < 0) {
+        // 已过期：天数绝对值 +1（含两端，与未来分组保持一致）
+        const passed = (-days) + 1;
         return '<span class="holiday-countdown-unit">已过</span>' +
-            '<span class="holiday-countdown-number">' + (-days) + '</span>' +
+            '<span class="holiday-countdown-number">' + passed + '</span>' +
             '<span class="holiday-countdown-unit">天</span>';
     }
     if (days === 0) {
-        return '<span class="holiday-countdown-number" data-days="0">今</span><span class="holiday-countdown-unit">天</span>';
+        // 今天：不渲染数字行，由 cdItemInner 改用放大名称布局
+        return '';
     }
-    return '<span class="holiday-countdown-number" data-days="' + days + '">' + days + '</span><span class="holiday-countdown-unit">天</span>';
+    // 未来：天数 +1（含两端），data-days 仍保留真实剩余天数以维持临近高亮逻辑
+    const remaining = days + 1;
+    return '<span class="holiday-countdown-number" data-days="' + days + '">' + remaining + '</span><span class="holiday-countdown-unit">天后</span>';
 }
 
-// 单个展示项的三行内部 HTML
+// 单个展示项的内部 HTML（侧边栏与卡片共用）
 function cdItemInner(item) {
+    if (item.days === 0) {
+        // 今天：放大名称（与数字相同的衬线字体）占据原名称+数字两行，第二行直接显示日期
+        return '<div class="holiday-countdown-name-today">' + escapeHtml(item.name) + '</div>' +
+            '<div class="holiday-countdown-date">' + escapeHtml(item.dateLabel) + '</div>';
+    }
     return '<div class="holiday-countdown-label">' + escapeHtml(item.name) + '</div>' +
         '<div>' + cdDaysHtml(item.days) + '</div>' +
         '<div class="holiday-countdown-date">' + escapeHtml(item.dateLabel) + '</div>';
@@ -226,9 +236,15 @@ function renderCountdownView(container) {
 
     container.innerHTML =
         '<div class="countdown-container">' +
-            '<div class="flex items-center p-4 pb-2 flex-shrink-0">' +
-                '<h1 class="text-2xl font-bold text-theme-primary">倒计时</h1>' +
-            '</div>' +
+            (typeof isMobileView === 'function' && isMobileView()
+                ? '<div class="flex items-center justify-between px-4 py-3 border-b border-theme/30 flex-shrink-0">' +
+                      '<h1 class="text-lg font-bold text-theme-primary">倒计时</h1>' +
+                      '<button onclick="switchView(\'task\')" class="w-9 h-9 rounded-full border-2 border-theme text-theme-secondary flex items-center justify-center hover:bg-theme-tertiary transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
+                  '</div>'
+                : '<div class="flex items-center p-4 pb-2 flex-shrink-0">' +
+                      '<h1 class="text-2xl font-bold text-theme-primary">倒计时</h1>' +
+                  '</div>'
+            ) +
             '<div class="px-4 pb-6 space-y-6">' +
 
                 // 顶部：两个固定槽（槽位即侧边栏预览，全宽并排）
@@ -360,9 +376,6 @@ function cdCardHtml(it) {
     const pinned = (settings.pinnedCountdowns || []).includes(it.key);
     const pinnedCls = pinned ? ' cd-pinned' : '';
     const pinActive = pinned ? ' active' : '';
-    const labelHtml = '<div class="holiday-countdown-label">' + escapeHtml(it.name) + '</div>';
-    const daysHtml = '<div>' + cdDaysHtml(it.days) + '</div>';
-    const dateHtml = '<div class="holiday-countdown-date">' + escapeHtml(it.dateLabel) + '</div>';
     let rightHtml = '';
     if (it.editable) {
         rightHtml = '<button type="button" onclick="editCountdown(\'' + it.key + '\')" ' +
@@ -377,7 +390,7 @@ function cdCardHtml(it) {
             '<button type="button" onclick="toggleCountdownPin(\'' + it.key + '\')" ' +
                 'class="cd-icon-btn cd-pin-btn' + pinActive + '" title="' + (pinned ? '已在侧边栏显示，点击取消' : '固定到侧边栏') + '">' +
                 '<i class="fas fa-thumbtack"></i></button>' +
-            '<div class="cd-side-body">' + labelHtml + daysHtml + dateHtml + '</div>' +
+            '<div class="cd-side-body">' + cdItemInner(it) + '</div>' +
             rightHtml +
         '</div>';
 }

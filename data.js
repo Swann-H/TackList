@@ -674,6 +674,17 @@ const DEFAULT_SETTINGS = {
     defaultUrgent: false,
     defaultDuration: 30,
     defaultView: 'task',
+    // 视图自定义：六视图的顺序与显隐；顺序即显示顺序，enabled=false 表示隐藏该视图
+    viewOrder: [
+        { id: 'task', enabled: true },
+        { id: 'schedule', enabled: true },
+        { id: 'week', enabled: true },
+        { id: 'month', enabled: true },
+        { id: 'quadrant', enabled: true },
+        { id: 'kanban', enabled: true }
+    ],
+    // 默认首页视图（须为 viewOrder 中已启用的项；summary 不可设为首页）
+    defaultHomeView: 'task',
     weekStart: 'monday',
     showCompleted: true,
     showLunar: true,
@@ -689,7 +700,7 @@ const DEFAULT_SETTINGS = {
     snoozeDelay: 15,
     refreshInterval: 30,
     cmdRemoveTimeText: true,
-    cmdDefaultDate: 'none',
+    defaultTaskDate: 'today',
     easterEggEnabled: true,
     showHolidayCountdown: true,
     priorityTaskBg: true,
@@ -718,13 +729,117 @@ const DEFAULT_SETTINGS = {
     tags: [],
     filters: [],
     countdowns: [],
-    pinnedCountdowns: []
+    pinnedCountdowns: [],
+    // 看板视图配置：分组依据 / 排序依据 / 排序方式 / 是否展开详情 / 标签二级分组
+    kanbanConfig: {
+        groupBy: 'custom',      // custom | time | createdTime | tag | priority | none
+        sortBy: 'time',         // time | createdTime | modifiedTime | title | tag | priority
+        sortDir: 'asc',         // asc | desc
+        showDetails: false,     // 显示任务详情（备注/子任务）
+        tagSubGroup: 'list',    // list | time | createdTime | priority（仅 groupBy=tag 时生效）
+        showCompleted: true,    // 显示已完成任务（迁移自全局设置「显示已完成任务」，作用于全部视图）
+        showFocusButton: true,  // 显示"开始专注"按钮（迁移自全局设置「显示"开始专注"按钮」）
+        countOnlyUncompleted: true, // 列头计数仅显示未完成数（默认 true，与原行为一致）；false 显示总数
+        // 注：看板「无日期任务位置」沿用全局设置 settings.noDateTaskPosition
+    },
+    // 任务视图配置：分组依据 / 排序依据 / 排序方式 + 迁移自全局的可分离项
+    // 默认值与任务视图原有行为一致：按时间状态桶分组（已过期/今天/明天/后天/最近7天/更远/无日期），组内按时间升序。
+    taskViewConfig: {
+        groupBy: 'time',        // time | createdTime | tag | priority | list | none
+        sortBy: 'time',         // time | createdTime | modifiedTime | title | tag | priority
+        sortDir: 'asc',         // asc | desc
+        showCompleted: true,    // 显示已完成任务（迁移自全局设置）
+        noDateTaskPosition: 'last', // 无日期任务显示位置 first|last（迁移自全局设置）
+        showFocusButton: true,  // 显示"开始专注"按钮（迁移自全局设置，作用于任务/四象限/日程）
+        showDetails: false,     // 显示任务详情（备注/子任务）
+        groupCollapseStrategy: 'only-completed-collapsed' // all-expanded | only-completed-collapsed | all-collapsed
+    },
+    // 日程视图配置（迁移自全局的可分离项）
+    scheduleConfig: {
+        showCompleted: true,
+        noDateTaskPosition: 'last',
+        showLunar: true,
+        showFocusButton: true
+    },
+    // 周视图配置（迁移自全局的可分离项）
+    weekConfig: {
+        showCompleted: true,
+        showLunar: true
+    },
+    // 月视图配置（迁移自全局的可分离项）
+    monthConfig: {
+        showCompleted: true,
+        showLunar: true
+    },
+    // 四象限视图配置（迁移自全局的可分离项）
+    quadrantConfig: {
+        showCompleted: true,
+        showFocusButton: true,
+        showDetails: true       // 显示任务详情（备注/子任务，原始终显示，现可开关）
+    }
 };
 
 function applySettings(parsed) {
-    settings = Object.assign({}, DEFAULT_SETTINGS, parsed || {});
+    // 深复制 DEFAULT_SETTINGS，避免子对象引用共享污染默认值
+    settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+    // 合并用户数据：标量/数组直接覆盖；子对象做字段级合并（保证旧数据缺少新字段时回退默认值）
+    if (parsed && typeof parsed === 'object') {
+        Object.keys(parsed).forEach(function (key) {
+            var pv = parsed[key];
+            var dv = settings[key];
+            if (pv && typeof pv === 'object' && !Array.isArray(pv) &&
+                dv && typeof dv === 'object' && !Array.isArray(dv)) {
+                Object.assign(dv, pv);
+            } else {
+                settings[key] = pv;
+            }
+        });
+    }
     // 修复旧版本遗留：内置配色深色变体次级背景被误存为白色（详见 utils.js repairStalePaletteCustoms）
     if (typeof repairStalePaletteCustoms === 'function') repairStalePaletteCustoms();
+    // 迁移背景图取色调色板：旧扁平格式 → 新 light/dark 双变体；'dark' → 'steady'
+    if (typeof migrateBgImagePalettes === 'function') migrateBgImagePalettes();
+    // 迁移：cmdDefaultDate → defaultTaskDate（设置项从「命令面板」移至「新建任务默认值」并更名）
+    if (settings.cmdDefaultDate !== undefined && settings.defaultTaskDate === undefined) {
+        settings.defaultTaskDate = settings.cmdDefaultDate;
+        delete settings.cmdDefaultDate;
+    }
+    // 迁移：视图自定义 viewOrder / defaultHomeView
+    if (!Array.isArray(settings.viewOrder) || settings.viewOrder.length === 0) {
+        settings.viewOrder = [
+            { id: 'task', enabled: true },
+            { id: 'schedule', enabled: true },
+            { id: 'week', enabled: true },
+            { id: 'month', enabled: true },
+            { id: 'quadrant', enabled: true },
+            { id: 'kanban', enabled: true }
+        ];
+    } else {
+        // 保证六个视图齐全（旧数据可能缺少新视图）
+        VIEW_ORDER_DEFAULT.forEach(function (id) {
+            if (!settings.viewOrder.some(function (v) { return v.id === id; })) {
+                settings.viewOrder.push({ id: id, enabled: true });
+            }
+        });
+        // 去重：相同 id 仅保留首次出现，避免重复项导致视图被重复渲染
+        const _seen = {};
+        settings.viewOrder = settings.viewOrder.filter(function (v) {
+            if (!v || !v.id || _seen[v.id]) return false;
+            _seen[v.id] = true;
+            return true;
+        });
+    }
+    // 默认首页须为已启用项；否则沿用旧 defaultView 或回退首个启用项
+    var _firstEnabled = settings.viewOrder.find(function (v) { return v.enabled; });
+    var _homeValid = settings.defaultHomeView && settings.viewOrder.some(function (v) { return v.id === settings.defaultHomeView && v.enabled; });
+    if (!_homeValid) {
+        settings.defaultHomeView = (settings.defaultView && settings.viewOrder.some(function (v) { return v.id === settings.defaultView && v.enabled; }))
+            ? settings.defaultView
+            : (_firstEnabled ? _firstEnabled.id : 'task');
+    }
+    if (settings.defaultView !== settings.defaultHomeView) {
+        settings.defaultView = settings.defaultHomeView; // 兼容旧读取方（如彩蛋刷新）
+    }
     pomodoroState.focusDuration = settings.focusDuration;
     pomodoroState.shortBreakDuration = settings.shortBreakDuration || 5;
     pomodoroState.longBreakDuration = settings.longBreakDuration || 15;
@@ -861,8 +976,8 @@ async function loadData() {
         }
     }
     
-    if (settings.defaultView && !_initialLoadDone) {
-        currentView = settings.defaultView;
+    if (!_initialLoadDone) {
+        currentView = getHomeView();
     }
     _initialLoadDone = true;
     // 数据加载完成后重建专注时长缓存与搜索索引（覆盖上方所有恢复分支）
@@ -1003,15 +1118,16 @@ function handleBgImageUpload(event) {
             showToast('背景图片已设置', 'success');
 
             // 自动触发调色板提取（仅在设置面板已渲染该 UI 时执行）
+            // 传入 true：根据背景图明暗自动切换深色/浅色模式
             if (typeof generatePalettePreview === 'function') {
-                setTimeout(generatePalettePreview, 400);
+                setTimeout(function() { generatePalettePreview(true); }, 400);
             }
         };
         reader.readAsDataURL(file);
     }
 }
 
-// 清除背景图片（二次确认 + 根据取色模式自动切换深浅色并恢复内置配色）
+// 清除背景图片（二次确认 + 保留当前深浅模式 + 恢复内置配色"星夜"）
 let _bgImageDeleteConfirming = false;
 let _bgImageDeleteTimer = null;
 function clearBgImage() {
@@ -1023,15 +1139,9 @@ function clearBgImage() {
         if (_bgImageDeleteTimer) { clearTimeout(_bgImageDeleteTimer); _bgImageDeleteTimer = null; }
         _resetBgImageDeleteBtn(btn);
 
-        // 根据当前取色模式决定切换的深浅色
+        // 保留当前深色/浅色模式（按用户要求：删除背景图时不切换主题）
+        // 仅恢复为内置配色"星夜"（清除背景图取色数据后，vibrant/muted/steady 不再可用）
         const palette = settings.themePalette;
-        if (palette === 'vibrant' || palette === 'muted') {
-            setTheme('light');
-        } else if (palette === 'dark') {
-            setTheme('dark');
-        }
-
-        // 恢复为内置配色"星夜"
         if (palette && palette !== 'none' && !palette.startsWith('builtin:')) {
             selectThemePalette('builtin:blue');
         }

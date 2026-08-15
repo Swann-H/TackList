@@ -62,6 +62,7 @@ function confirmDeleteList(listId) {
 
 let draggedTaskId = null;
 let dragTargetType = null;
+let _lastDragOver = null; // 当前高亮的拖拽落点（仅其显示虚线，移出/换列即清除，避免划过的列残留选定样式）
 
 function handleTaskDragStart(e, taskId) {
     draggedTaskId = taskId;
@@ -72,13 +73,19 @@ function handleTaskDragStart(e, taskId) {
 
 function handleTaskDragOver(e) {
     e.preventDefault();
-    e.target.closest('.task-item, .calendar-day, .quadrant-card, .drop-zone')?.classList.add('drag-over');
+    const zone = e.target.closest('.task-item, .calendar-day, .quadrant-card, .drop-zone');
+    if (!zone) return;
+    if (zone === _lastDragOver) return; // 同一落点无需重复处理
+    if (_lastDragOver) _lastDragOver.classList.remove('drag-over'); // 清除上一个落点的虚线
+    _lastDragOver = zone;
+    zone.classList.add('drag-over');
 }
 
 function handleTaskDragEnd(e) {
     document.querySelectorAll('.dragging, .drag-over').forEach(el => {
         el.classList.remove('dragging', 'drag-over');
     });
+    _lastDragOver = null;
     draggedTaskId = null;
 }
 
@@ -437,9 +444,8 @@ function openAddTaskModal(presetDate = null) {
     if (presetDate) {
         startTime = new Date(presetDate + 'T00:00:00');
     } else {
-        // 默认今日全天任务
-        const today = new Date();
-        startTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0);
+        // 根据设置项 defaultTaskDate 决定默认日期
+        startTime = getDefaultTaskDate(settings.defaultTaskDate);
     }
     
     const newTask = {
@@ -836,6 +842,9 @@ function openTaskDetailPanel(taskId, readOnly = false) {
         updateDetailRepeatText();
     }
     
+    // 设置分组（清单的自定义分组），须在 populateDetailListSelect 之前，其内部会带出分组行
+    detailSelectedGroupId = task.groupId || '';
+
     // 设置清单
     populateDetailListSelect(task.listId);
     
@@ -1203,6 +1212,45 @@ function saveSubtasksToTask() {
     updateTaskProgressFromSubtasks(task);
 }
 
+// ==================== 子任务拖拽排序（性能优化：复用清单拖拽同款逻辑） ====================
+// 状态与高亮辅助：用 rAF 收敛、单元素追踪、box-shadow 非布局高亮，避免每事件扫描 DOM / 读布局 / 改边框导致重排卡顿
+let draggingSubtaskId = null;
+let activeSubtaskEl = null;
+let subtaskDragRAF = null;
+let subtaskRects = []; // 拖拽开始时缓存各子任务行视口坐标，避免热路径里 getBoundingClientRect
+
+function clearSubtaskHighlight() {
+    if (subtaskDragRAF) { cancelAnimationFrame(subtaskDragRAF); subtaskDragRAF = null; }
+    if (activeSubtaskEl) {
+        activeSubtaskEl.style.boxShadow = '';
+        activeSubtaskEl.style.background = '';
+        activeSubtaskEl.style.transition = '';
+        activeSubtaskEl.classList.remove('drag-over');
+        activeSubtaskEl = null;
+    }
+}
+
+// kind: 'item' 用 box-shadow 指示插入线（不触发布局）；'zone' 用背景高亮
+function applySubtaskHighlight(el, kind, side) {
+    if (!el || el === activeSubtaskEl) return;
+    clearSubtaskHighlight();
+    activeSubtaskEl = el;
+    el.style.transition = 'none';
+    if (kind === 'zone') {
+        el.classList.add('drag-over');
+    } else {
+        el.style.boxShadow = side === 'top' ? 'inset 0 3px 0 -1px #3b82f6' : 'inset 0 -3px 0 -1px #3b82f6';
+    }
+}
+
+function scheduleSubtaskHighlight(el, kind, side) {
+    if (subtaskDragRAF) return;
+    subtaskDragRAF = requestAnimationFrame(() => {
+        subtaskDragRAF = null;
+        applySubtaskHighlight(el, kind, side);
+    });
+}
+
 function renderSubtasks() {
     const container = document.getElementById('subtasks-container');
     if (!container) return;
@@ -1226,7 +1274,7 @@ function renderSubtasks() {
         return (a.originalOrder || 0) - (b.originalOrder || 0);
     });
     
-    // 创建拖放区域
+    // 创建拖放区域（组首/组尾的快速落点）
     function createDropZone(completed, position) {
         const zone = document.createElement('div');
         zone.className = 'subtask-drop-zone';
@@ -1234,19 +1282,16 @@ function renderSubtasks() {
         zone.dataset.position = position; // 'top' or 'bottom'
         zone.ondragover = (e) => {
             e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-        };
-        zone.ondragenter = (e) => {
-            e.preventDefault();
-            zone.classList.add('drag-over');
-        };
-        zone.ondragleave = () => {
-            zone.classList.remove('drag-over');
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            scheduleSubtaskHighlight(zone, 'zone');
         };
         zone.ondrop = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const draggedId = e.dataTransfer.getData('text/plain');
+            clearSubtaskHighlight();
+            const draggedId = draggingSubtaskId;
+            draggingSubtaskId = null;
+            if (!draggedId) return;
             // 找到该组的第一个或最后一个子任务
             const groupItems = sortedSubtasks.filter(st => st.completed === completed);
             if (groupItems.length === 0) return;
@@ -1324,50 +1369,41 @@ function renderSubtasks() {
         wrapper.ondragstart = (e) => {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', subtask.id);
+            draggingSubtaskId = subtask.id;
             wrapper.classList.add('opacity-50');
-            container.querySelectorAll('.subtask-drop-zone').forEach(el => {
-                el.classList.add('active');
+            // 拖拽开始时缓存各行视口坐标（仅需一次，避免热路径里反复 getBoundingClientRect 触发重排）
+            subtaskRects = [...container.querySelectorAll('.subtask-item')].map(el => {
+                const r = el.getBoundingClientRect();
+                return { el, top: r.top, bottom: r.bottom, midY: r.top + r.height / 2 };
             });
+            container.querySelectorAll('.subtask-drop-zone').forEach(el => el.classList.add('active'));
         };
         wrapper.ondragend = () => {
             wrapper.draggable = false;
-            container.querySelectorAll('.subtask-item').forEach(el => {
-                el.classList.remove('opacity-50', 'border-t-2', 'border-b-2', 'border-accent-secondary');
-            });
-            container.querySelectorAll('.subtask-drop-zone').forEach(el => {
-                el.classList.remove('active');
-            });
+            wrapper.classList.remove('opacity-50');
+            container.querySelectorAll('.subtask-drop-zone').forEach(el => el.classList.remove('active'));
+            clearSubtaskHighlight();
+            draggingSubtaskId = null;
+            subtaskRects = [];
         };
         wrapper.ondragover = (e) => {
             e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-        };
-        wrapper.ondragenter = (e) => {
-            e.preventDefault();
-            const draggedEl = container.querySelector('.subtask-item.opacity-50');
-            if (draggedEl && draggedEl !== wrapper) {
-                const rect = wrapper.getBoundingClientRect();
-                const midY = rect.top + rect.height / 2;
-                if (e.clientY < midY) {
-                    wrapper.classList.add('border-t-2', 'border-accent-secondary');
-                    wrapper.classList.remove('border-b-2', 'border-accent-secondary');
-                } else {
-                    wrapper.classList.add('border-b-2', 'border-accent-secondary');
-                    wrapper.classList.remove('border-t-2', 'border-accent-secondary');
-                }
-            }
-        };
-        wrapper.ondragleave = () => {
-            wrapper.classList.remove('border-t-2', 'border-b-2', 'border-accent-secondary');
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            // 命中光标下方的子任务行（用缓存坐标，无布局读取），rAF 收敛高亮
+            const hit = subtaskRects.find(r => e.clientY >= r.top && e.clientY <= r.bottom);
+            if (!hit) return;
+            const side = e.clientY < hit.midY ? 'top' : 'bottom';
+            scheduleSubtaskHighlight(hit.el, 'item', side);
         };
         wrapper.ondrop = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const draggedId = e.dataTransfer.getData('text/plain');
-            if (draggedId === subtask.id) return;
-            const rect = wrapper.getBoundingClientRect();
-            const midY = rect.top + rect.height / 2;
-            const insertAfter = e.clientY >= midY;
+            clearSubtaskHighlight();
+            const draggedId = draggingSubtaskId;
+            draggingSubtaskId = null;
+            if (!draggedId || draggedId === subtask.id) return;
+            const hit = subtaskRects.find(r => e.clientY >= r.top && e.clientY <= r.bottom);
+            const insertAfter = hit ? (e.clientY >= hit.midY) : true;
             handleSubtaskReorder(draggedId, subtask.id, insertAfter);
         };
         
@@ -1886,6 +1922,7 @@ function generateUntitledName() {
 }
 
 let detailSelectedListId = 'default';
+let detailSelectedGroupId = ''; // 详情面板中为任务选中的自定义分组 id（'' 表示未分组）
 
 function populateDetailListSelect(selectedListId) {
     detailSelectedListId = selectedListId || 'default';
@@ -1893,7 +1930,7 @@ function populateDetailListSelect(selectedListId) {
     if (!pillsContainer) return;
     pillsContainer.innerHTML = '';
 
-    lists.filter(l => !l.archived).forEach(list => {
+    lists.filter(l => !l.archived && !l.isFolder).forEach(list => {
         const isSelected = list.id === detailSelectedListId;
         const color = list.color || '#6b7280';
         const btn = document.createElement('button');
@@ -1903,13 +1940,51 @@ function populateDetailListSelect(selectedListId) {
         btn.textContent = list.name;
         btn.onclick = (e) => {
             e.stopPropagation();
+            const changed = list.id !== detailSelectedListId;
             detailSelectedListId = list.id;
+            if (changed) detailSelectedGroupId = ''; // 仅当切换清单时才复位分组；重选同一清单保留已选分组
             populateDetailListSelect(list.id);
             updateDetailListBtnText();
-            // 清单为单选，选择后收起选择器
-            document.getElementById('detail-list-picker').classList.add('hidden');
+            // 若该清单有自定义分组，保持面板展开以等待用户选择分组；无分组时才收起
+            const hasGroups = Array.isArray(list.groups) && list.groups.length > 0;
+            if (!hasGroups) {
+                document.getElementById('detail-list-picker').classList.add('hidden');
+            }
         };
         pillsContainer.appendChild(btn);
+    });
+    populateDetailGroupSelect();
+}
+
+function populateDetailGroupSelect() {
+    const row = document.getElementById('detail-group-row');
+    if (!row) return;
+    const list = getList(detailSelectedListId);
+    const groups = (list && Array.isArray(list.groups)) ? list.groups : [];
+    row.innerHTML = '';
+    if (groups.length === 0) {
+        row.classList.add('hidden');
+        return;
+    }
+    row.classList.remove('hidden');
+    const color = (list && list.color) || '#6b7280';
+    const opts = [{ id: '', name: '未分组' }].concat(groups.map(g => ({ id: g.id, name: g.name || '未命名分组' })));
+    opts.forEach(opt => {
+        const isSel = opt.id === detailSelectedGroupId;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = isSel ? 'detail-group-chip-selected' : 'detail-group-chip';
+        btn.style.setProperty('--tag-color', color);
+        btn.title = isSel ? '当前分组' : '点击选择此分组';
+        btn.textContent = opt.name;
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            detailSelectedGroupId = opt.id;
+            populateDetailGroupSelect();
+            // 选择分组后收起清单选择面板
+            document.getElementById('detail-list-picker').classList.add('hidden');
+        };
+        row.appendChild(btn);
     });
 }
 
@@ -1952,6 +2027,7 @@ function saveTaskDetail() {
     }
     
     task.listId = detailSelectedListId;
+    task.groupId = detailSelectedGroupId || null;
     task.important = detailImportantState;
     task.urgent = detailUrgentState;
     
@@ -2702,6 +2778,7 @@ function saveTaskDetailWithoutClose() {
     }
     
     task.listId = detailSelectedListId;
+    task.groupId = detailSelectedGroupId || null;
     task.important = detailImportantState;
     task.urgent = detailUrgentState;
     
@@ -3557,9 +3634,9 @@ function toggleTaskComplete(taskId) {
 
 function editList(listId) {
     editingListId = listId;
-    if (typeof listDeleteConfirming !== 'undefined') listDeleteConfirming = false;
-    if (typeof listArchiveConfirming !== 'undefined') listArchiveConfirming = false;
-    renderLists();
+    if (typeof listDeleteConfirming !== 'undefined') listDeleteConfirming = null;
+    if (typeof listArchiveConfirming !== 'undefined') listArchiveConfirming = null;
+    renderLists(true);
 }
 
 function postponeOverdueTasks() {
@@ -3625,20 +3702,25 @@ function updatePostponeButton() {
 
 function showAddListInput() {
     editingListId = '__new__';
-    if (typeof listDeleteConfirming !== 'undefined') listDeleteConfirming = false;
-    if (typeof listArchiveConfirming !== 'undefined') listArchiveConfirming = false;
-    renderLists();
+    if (typeof listDeleteConfirming !== 'undefined') listDeleteConfirming = null;
+    if (typeof listArchiveConfirming !== 'undefined') listArchiveConfirming = null;
+    renderLists(true);
 }
 
 function hideAddListInput() {
+    if (typeof pendingNewFolder !== 'undefined' && pendingNewFolder) {
+        if (typeof revertNewFolder === 'function') revertNewFolder();
+    }
     editingListId = null;
-    if (typeof listDeleteConfirming !== 'undefined') listDeleteConfirming = false;
-    if (typeof listArchiveConfirming !== 'undefined') listArchiveConfirming = false;
+    if (typeof listDeleteConfirming !== 'undefined') listDeleteConfirming = null;
+    if (typeof listArchiveConfirming !== 'undefined') listArchiveConfirming = null;
     renderLists();
 }
 
 function saveListInput() {
-    const name = document.getElementById('new-list-name').value.trim();
+    const nameEl = document.getElementById('new-list-name');
+    if (!nameEl) return;
+    const name = nameEl.value.trim();
     const color = document.getElementById('new-list-color').value;
     const editId = document.getElementById('edit-list-id').value;
     
@@ -3665,6 +3747,7 @@ function saveListInput() {
                 list.color = color;
             }
         }
+        if (typeof pendingNewFolder !== 'undefined') pendingNewFolder = null;
         saveData();
         editingListId = null;
         renderLists();
@@ -3716,9 +3799,7 @@ function filterAllTasks() {
     currentFilter = null;
     currentTagIds = [];
     currentFilterId = null;
-    if (currentView === 'summary') {
-        switchView('task');
-    } else if (currentView !== 'task' && currentView !== 'schedule' && currentView !== 'week' && currentView !== 'month' && currentView !== 'quadrant') {
+    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');
     } else {
         renderView();

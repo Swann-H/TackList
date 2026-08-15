@@ -1,7 +1,22 @@
 // ==================== 四象限视图（从 views.js 拆分） ====================
 
+// 四象限视图配置：迁移自全局「视图偏好」
+function getQuadrantConfig() {
+    if (!settings.quadrantConfig || typeof settings.quadrantConfig !== 'object') {
+        settings.quadrantConfig = {};
+    }
+    const c = settings.quadrantConfig;
+    // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
+    if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
+    if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
+    if (typeof c.showDetails !== 'boolean') c.showDetails = true;
+    return c;
+}
+_registerViewConfig('quadrant', 'quadrantConfigPanel', 'quadrant-config-btn');
+
 function renderQuadrantView(container) {
-    const filteredTasks = filterTasks(tasks);
+    const quadrantCfg = getQuadrantConfig();
+    const filteredTasks = filterTasks(tasks, { includeCompleted: quadrantCfg.showCompleted !== false });
 
     const quadrants = {
         'urgent-important': {
@@ -131,7 +146,7 @@ function renderQuadrantView(container) {
                                                 <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-accent dark:border-white hover:border-accent-hover dark:hover:border-accent-secondary'}">
                                                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                                                 </button>
-                                                ${renderFocusButton(task.id)}
+                                                ${renderFocusButton(task.id, quadrantCfg.showFocusButton !== false)}
                                             </div>
                                             <div class="flex-1 bg-theme-tertiary rounded-r-lg p-3 cursor-pointer hover:opacity-80 transition" style="border-left: 4px solid ${listColor}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                                                 <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
@@ -145,7 +160,7 @@ function renderQuadrantView(container) {
                                                 <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
                                                     ${task.title || '新任务'}
                                                 </div>
-                                                ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs text-theme-muted mt-1">${task.notes}</div>` : '')}
+                                                ${(quadrantCfg.showDetails !== false) ? (renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs text-theme-muted mt-1">${task.notes}</div>` : '')) : ''}
                                             </div>
                                         </div>
                                     `;
@@ -289,4 +304,34 @@ function openAddTaskForQuadrant(quadrantKey) {
     openAddTaskModal();
     document.getElementById('task-important').checked = important;
     document.getElementById('task-urgent').checked = urgent;
+}
+
+// ---------- 四象限视图配置面板 ----------
+function toggleQuadrantConfig() {
+    if (_viewConfigPanels.quadrant && _viewConfigPanels.quadrant.open) closeViewConfigPanel('quadrant');
+    else openQuadrantConfig();
+}
+function openQuadrantConfig() {
+    const cfg = getQuadrantConfig();
+    const scEl = document.getElementById('qc-showcompleted');
+    const sfEl = document.getElementById('qc-showfocus');
+    const sdEl = document.getElementById('qc-showdetails');
+    if (scEl) scEl.checked = cfg.showCompleted !== false;
+    if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
+    if (sdEl) sdEl.checked = cfg.showDetails !== false;
+    openViewConfigPanel('quadrant', () => { saveData(); renderView(); });
+}
+function closeQuadrantConfig() {
+    closeViewConfigPanel('quadrant');
+}
+function onQuadrantConfigChange() {
+    const cfg = getQuadrantConfig();
+    const scEl = document.getElementById('qc-showcompleted');
+    const sfEl = document.getElementById('qc-showfocus');
+    const sdEl = document.getElementById('qc-showdetails');
+    if (scEl) cfg.showCompleted = scEl.checked;
+    if (sfEl) cfg.showFocusButton = sfEl.checked;
+    if (sdEl) cfg.showDetails = sdEl.checked;
+    saveData();
+    renderView();
 }

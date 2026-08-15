@@ -441,6 +441,156 @@ document.addEventListener('touchstart', function (e) {
     document.addEventListener('touchcancel', cancel);
 }, { passive: true });
 
+// ==================== 11. 任务列表侧滑手势（右滑完成 / 左滑删除，§5.3） ====================
+// 仅作用于任务列表视图的 .task-list-item；桌面端无 touch 事件且 isMobileView() 守卫，不受影响。
+// 与 §6.3 长按动作面板共存：侧滑锁定后取消长按计时器，避免双重触发。
+(function () {
+    const SWIPE_ACTION = 72;     // 触发完成的水平位移阈值（px）
+    const LOCK_MIN = 8;          // 判定为水平滑动的最小位移（px）
+    const EDGE = 24;             // 屏幕左右避让区，让位给系统级边缘返回手势
+    const MAX_PULL = 140;        // 最大视觉位移
+    let _sw = null;              // 当前滑动状态
+    let _swipeSuppressClick = false;
+
+    function _swipeTaskId(item) {
+        const cb = item.querySelector('button[onclick*="toggleTaskComplete"]');
+        if (cb) {
+            const m = (cb.getAttribute('onclick') || '').match(/toggleTaskComplete\('([^']+)'\)/);
+            if (m) return m[1];
+        }
+        const m = (item.getAttribute('onclick') || '').match(/openTaskDetailPanel\('([^']+)'\)/);
+        return m ? m[1] : null;
+    }
+
+    function _containerOf(item) {
+        const c = item.closest('.task-list-view') || item.parentElement;
+        if (c && getComputedStyle(c).position === 'static') c.style.position = 'relative';
+        return c;
+    }
+
+    function _offsetTopWithin(el, ancestor) {
+        let t = 0, node = el;
+        while (node && node !== ancestor) { t += node.offsetTop; node = node.offsetParent; }
+        return t;
+    }
+
+    function _makeReveal(item, dx) {
+        const c = _containerOf(item);
+        const reveal = document.createElement('div');
+        reveal.className = 'task-swipe-reveal ' + (dx > 0 ? 'sr-complete' : 'sr-delete');
+        reveal.style.top = _offsetTopWithin(item, c) + 'px';
+        reveal.style.left = '0';
+        reveal.style.right = '0';
+        reveal.style.height = item.offsetHeight + 'px';
+        reveal.innerHTML = dx > 0
+            ? '<span class="sr-icon"><i class="fas fa-check"></i></span><span>完成</span>'
+            : '<span>删除</span><span class="sr-icon"><i class="fas fa-trash"></i></span>';
+        c.appendChild(reveal);
+        return reveal;
+    }
+
+    function _refreshReveal(item, dx) {
+        let reveal = item._swipeReveal;
+        if (!reveal) { reveal = _makeReveal(item, dx); item._swipeReveal = reveal; }
+        reveal.className = 'task-swipe-reveal ' + (dx > 0 ? 'sr-complete' : 'sr-delete');
+        reveal.innerHTML = dx > 0
+            ? '<span class="sr-icon"><i class="fas fa-check"></i></span><span>完成</span>'
+            : '<span>删除</span><span class="sr-icon"><i class="fas fa-trash"></i></span>';
+        // 仅展示与位移成比例的那一段，其余裁剪
+        if (dx > 0) { reveal.style.clipPath = 'inset(0 ' + (100 - Math.min(100, dx / MAX_PULL * 100)) + '% 0 0)'; }
+        else { reveal.style.clipPath = 'inset(0 0 0 ' + (100 - Math.min(100, -dx / MAX_PULL * 100)) + '%)'; }
+    }
+
+    function _clearReveal(item) {
+        if (item && item._swipeReveal) { item._swipeReveal.remove(); item._swipeReveal = null; }
+    }
+
+    function _translate(item, dx) {
+        let tx = dx;
+        if (tx > MAX_PULL) tx = MAX_PULL + (tx - MAX_PULL) * 0.2;
+        if (tx < -MAX_PULL) tx = -MAX_PULL + (tx + MAX_PULL) * 0.2;
+        item.style.transition = 'none';
+        item.style.transform = 'translateX(' + tx + 'px)';
+    }
+
+    function _reset(item) {
+        if (!item) return;
+        item.style.transition = 'transform 0.2s ease';
+        item.style.transform = '';
+        _clearReveal(item);
+    }
+
+    function _onSwipeStart(e) {
+        if (!isMobileView() || e.touches.length !== 1) { _sw = null; return; }
+        const item = e.target.closest('.task-list-item');
+        if (!item) { _sw = null; return; }
+        if (_mobileLongPressTimer) { clearTimeout(_mobileLongPressTimer); _mobileLongPressTimer = null; }
+        const id = _swipeTaskId(item);
+        if (!id) { _sw = null; return; }
+        const sx = e.touches[0].clientX, sy = e.touches[0].clientY;
+        _sw = { item, id, sx, sy, dx: 0, dy: 0, locked: false,
+                edge: sx < EDGE || sx > (window.innerWidth - EDGE) };
+        document.addEventListener('touchmove', _onSwipeMove, { passive: false });
+        document.addEventListener('touchend', _onSwipeEnd);
+        document.addEventListener('touchcancel', _onSwipeEnd);
+    }
+
+    function _onSwipeMove(e) {
+        if (!_sw) return;
+        const t = e.touches[0];
+        const dx = t.clientX - _sw.sx, dy = t.clientY - _sw.sy;
+        _sw.dx = dx; _sw.dy = dy;
+        if (!_sw.locked) {
+            if (Math.abs(dx) > LOCK_MIN && Math.abs(dx) > Math.abs(dy)) _sw.locked = true;
+            else if (Math.abs(dy) > LOCK_MIN && Math.abs(dy) >= Math.abs(dx)) { _endSwipe(false); return; }
+            else return;
+        }
+        if (_sw.edge) { _endSwipe(false); return; }
+        if (e.cancelable) e.preventDefault(); // 阻止页面横向滚动/橡皮筋
+        _sw.item.style.zIndex = '2';
+        _translate(_sw.item, dx);
+        _refreshReveal(_sw.item, dx);
+    }
+
+    function _onSwipeEnd() {
+        if (!_sw) return;
+        const s = _sw, dx = s.dx;
+        if (s.locked && !s.edge && Math.abs(dx) > SWIPE_ACTION) {
+            const dir = dx > 0 ? 1 : -1;
+            const id = s.id;
+            // 滑动飞出动画
+            s.item.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
+            s.item.style.transform = 'translateX(' + (dir * (window.innerWidth + 60)) + 'px)';
+            s.item.style.opacity = '0';
+            _swipeSuppressClick = true;
+            setTimeout(() => { _swipeSuppressClick = false; }, 350);
+            if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) {} }
+            if (dx > 0) { if (typeof toggleTaskComplete === 'function') toggleTaskComplete(id); }
+            else { if (typeof deleteTask === 'function') deleteTask(id); }
+            _clearReveal(s.item);
+        } else {
+            _reset(s.item);
+        }
+        _endSwipe(true);
+    }
+
+    function _endSwipe(keepTransform) {
+        if (_sw && !keepTransform) _reset(_sw.item);
+        if (_sw) { _sw.item.style.zIndex = ''; }
+        _sw = null;
+        document.removeEventListener('touchmove', _onSwipeMove, { passive: false });
+        document.removeEventListener('touchend', _onSwipeEnd);
+        document.removeEventListener('touchcancel', _onSwipeEnd);
+    }
+
+    // 侧滑触发动作后抑制随后的 click（避免误开详情）
+    document.addEventListener('click', function (e) {
+        if (_swipeSuppressClick) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+
+    document.addEventListener('touchstart', _onSwipeStart, { passive: true });
+})();
+
 // ==================== 8. 高频操作防抖（防止网络不佳时重复点击） ====================
 const _mobileApiGuard = {};
 function _mobileDebounced(taskId, fn, args) {
@@ -547,22 +697,70 @@ if (typeof closeSettingsModal === 'function') {
     };
 }
 
-// —— 番茄专注页：返回键层 + FAB 隐藏 + 移动端默认收起右栏 ——
+// —— 番茄专注页：返回键层 + FAB 隐藏 + 移动端默认收起概况为顶部紧凑条 ——
 if (typeof switchToPomodoroPage === 'function') {
     const _origSwitchToPomodoroPage = switchToPomodoroPage;
     switchToPomodoroPage = function () {
         _origSwitchToPomodoroPage.apply(this, arguments);
         mobilePushLayer('pomodoro', function () { closePomodoroPage(); });
         if (isMobileView()) {
-            // 历史记录（右栏）移动端默认收起，点击右上角按钮展开为底部面板
+            // 概况面板移动端默认收起为顶部紧凑条（仅标题行），点击把手或上滑展开
             const rightPanel = document.getElementById('pomodoro-right-panel');
-            if (rightPanel && !rightPanel.classList.contains('hidden') && typeof togglePomodoroRightPanel === 'function') {
-                togglePomodoroRightPanel();
+            if (rightPanel && !rightPanel.classList.contains('mobile-overview-collapsed')) {
+                rightPanel.classList.add('mobile-overview-collapsed');
+                const icon = document.getElementById('pomodoro-overview-toggle-icon');
+                if (icon) icon.className = 'fas fa-chevron-down text-sm';
             }
+            _initPomodoroOverviewGesture();
             closeMobileSidebar();
         }
         updateMobileFabVisibility();
     };
+}
+
+// 专注概况面板：移动端顶部紧凑条 展开/收起 切换
+function togglePomodoroOverviewMobile() {
+    const panel = document.getElementById('pomodoro-right-panel');
+    if (!panel || !isMobileView()) return;
+    const collapsed = panel.classList.toggle('mobile-overview-collapsed');
+    const icon = document.getElementById('pomodoro-overview-toggle-icon');
+    if (icon) icon.className = collapsed ? 'fas fa-chevron-down text-sm' : 'fas fa-chevron-up text-sm';
+}
+
+// 专注概况面板：下滑收起 / 上滑展开 手势（历史记录区独立滚动，不触发）
+let _pomodoroGestureInited = false;
+function _initPomodoroOverviewGesture() {
+    if (_pomodoroGestureInited) return;
+    const panel = document.getElementById('pomodoro-right-panel');
+    if (!panel) return;
+    _pomodoroGestureInited = true;
+    let startY = null, startX = null;
+    panel.addEventListener('touchstart', function (e) {
+        // 历史记录区：交由其自身滚动，不处理收起手势
+        if (e.target.closest('#pomodoro-history')) { startY = null; return; }
+        if (e.touches.length !== 1) { startY = null; return; }
+        startY = e.touches[0].clientY;
+        startX = e.touches[0].clientX;
+    }, { passive: true });
+    panel.addEventListener('touchend', function (e) {
+        if (startY === null) return;
+        const t = e.changedTouches[0];
+        const dy = t.clientY - startY;
+        const dx = t.clientX - startX;
+        startY = null;
+        if (Math.abs(dx) > Math.abs(dy)) return; // 横向滑动忽略
+        if (dy > 50) {
+            // 下滑 → 收起
+            panel.classList.add('mobile-overview-collapsed');
+            const icon = document.getElementById('pomodoro-overview-toggle-icon');
+            if (icon) icon.className = 'fas fa-chevron-down text-sm';
+        } else if (dy < -50) {
+            // 上滑 → 展开
+            panel.classList.remove('mobile-overview-collapsed');
+            const icon = document.getElementById('pomodoro-overview-toggle-icon');
+            if (icon) icon.className = 'fas fa-chevron-up text-sm';
+        }
+    }, { passive: true });
 }
 if (typeof closePomodoroPage === 'function') {
     const _origClosePomodoroPage = closePomodoroPage;
@@ -650,6 +848,7 @@ function _onMobileBreakpointChange() {
         enhanceWeekViewMobile();
         enhanceMonthViewMobile();
         enhanceQuadrantViewMobile();
+        if (typeof renderMobileBottomNav === 'function') renderMobileBottomNav();
     } else {
         // 还原桌面端状态
         document.body.classList.remove('sidebar-open');
@@ -669,6 +868,76 @@ if (_mobileMQ.addEventListener) {
     _mobileMQ.addEventListener('change', _onMobileBreakpointChange);
 } else if (_mobileMQ.addListener) { // 旧版 Safari 兜底
     _mobileMQ.addListener(_onMobileBreakpointChange);
+}
+
+// ==================== 12. 底部视图切换导航栏 ====================
+const _mobileNavViewMap = {
+    task: 'task', schedule: 'schedule', week: 'week', month: 'month',
+    quadrant: 'quadrant', kanban: 'kanban', summary: 'summary', countdown: 'countdown',
+    holiday: 'holiday'
+};
+
+function toggleMobileNavMore(event) {
+    if (!isMobileView()) return;
+    event.stopPropagation();
+    const menu = document.getElementById('mobile-nav-more-menu');
+    if (!menu) return;
+    const hidden = menu.classList.contains('hidden');
+    if (hidden) {
+        menu.classList.remove('hidden');
+        // 点击其他区域关闭
+        setTimeout(() => {
+            document.addEventListener('click', closeMobileNavMore, { once: true });
+        }, 0);
+    } else {
+        menu.classList.add('hidden');
+    }
+}
+
+function closeMobileNavMore() {
+    const menu = document.getElementById('mobile-nav-more-menu');
+    if (menu) menu.classList.add('hidden');
+}
+
+function renderMobileBottomNav() {
+    const main = document.getElementById('mobile-nav-main');
+    if (!main) return;
+    const moreBtn = document.getElementById('mobile-nav-more-btn');
+    // 移除既有的动态视图项（保留「更多」按钮）
+    Array.from(main.querySelectorAll('.mobile-nav-item')).forEach(function (btn) {
+        if (btn.id !== 'mobile-nav-more-btn') btn.remove();
+    });
+    // 按 viewOrder 的启用项重建主视图按钮
+    getEnabledViews().forEach(function (id) {
+        const def = VIEW_DEFS[id];
+        if (!def) return;
+        const btn = document.createElement('button');
+        btn.setAttribute('onclick', "switchView('" + id + "')");
+        btn.setAttribute('data-mnav', id);
+        btn.className = 'mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary';
+        btn.innerHTML = '<i class="' + def.icon + ' text-lg"></i><span class="text-[10px] mt-0.5">' + def.label + '</span>';
+        if (moreBtn) main.insertBefore(btn, moreBtn);
+        else main.appendChild(btn);
+    });
+}
+
+function updateMobileBottomNav() {
+    if (!isMobileView()) return;
+    // 检查是否需要重建（按钮数量或顺序变化）
+    const order = getViewOrder().filter(v => v.enabled);
+    const existingBtns = document.querySelectorAll('#mobile-bottom-nav .mobile-nav-item');
+    let needsRebuild = existingBtns.length !== order.length;
+    if (!needsRebuild) {
+        existingBtns.forEach((btn, i) => {
+            if (btn.dataset.mnav !== _mobileNavViewMap[order[i].id]) needsRebuild = true;
+        });
+    }
+    if (needsRebuild && typeof renderMobileBottomNav === 'function') renderMobileBottomNav();
+    // 切换 active 状态
+    document.querySelectorAll('#mobile-bottom-nav .mobile-nav-item').forEach(btn => {
+        const key = btn.dataset.mnav;
+        btn.classList.toggle('active', key === _mobileNavViewMap[currentView]);
+    });
 }
 
 // ==================== 初始化 ====================

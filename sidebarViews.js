@@ -33,56 +33,88 @@ document.addEventListener('click', function(e) {
 
 // ==================== 清单渲染与归档管理 ====================
 
-function renderLists() {
+// ==================== 清单树（多级层级）辅助 ====================
+function getList(id) { return lists.find(l => l.id === id); }
+
+// 将 lists 重排为树的前序遍历，保证父节点总在其子节点之前；
+// 同时把 parentId 指向不存在节点的孤儿回退顶层，避免悬空引用。
+function normalizeListsOrder() {
+    lists.forEach(l => { if (l.parentId && !getList(l.parentId)) l.parentId = null; });
+    const byParent = {};
+    lists.forEach(l => { const p = l.parentId || null; (byParent[p] = byParent[p] || []).push(l); });
+    const result = [];
+    (function emit(pid) {
+        (byParent[pid] || []).forEach(ch => { result.push(ch); if (ch.isFolder) emit(ch.id); });
+    })(null);
+    // 安全兜底：任何未被发出的节点（理论上不会发生）补到末尾
+    lists.forEach(l => { if (result.indexOf(l) === -1) result.push(l); });
+    lists = result;
+}
+
+// ancestorId 是否为 nodeId 的祖先（含间接）
+function isAncestor(ancestorId, nodeId) {
+    let cur = getList(nodeId);
+    while (cur && cur.parentId) {
+        if (cur.parentId === ancestorId) return true;
+        cur = getList(cur.parentId);
+    }
+    return false;
+}
+
+function isAncestorOfCurrent(folderId) {
+    if (!currentListId) return false;
+    return isAncestor(folderId, currentListId);
+}
+
+// 文件夹是否应展开：默认展开；但若其为当前选中清单的祖先则强制展开（保证可见/高亮）
+function shouldExpandFolder(folderId) {
+    const f = getList(folderId);
+    if (!f) return false;
+    if (isAncestorOfCurrent(folderId)) return true;
+    return f.collapsed !== true;
+}
+
+// 递归统计某清单集下所有叶子清单的未完成任务数（map: listId -> 未完成数）
+function folderUncompleted(map, folderId) {
+    let c = 0;
+    lists.filter(l => l.parentId === folderId && !l.archived).forEach(ch => {
+        if (ch.isFolder) c += folderUncompleted(map, ch.id);
+        else c += (map[ch.id] || 0);
+    });
+    return c;
+}
+
+// ==================== 清单渲染与归档管理 ====================
+
+let draggingListId = null;     // 当前正在拖拽的清单/清单集 id
+let pendingNewFolder = null;   // 刚由"合并"新建、仍在命名中的清单集（取消时回退）
+
+function renderLists(force) {
     const container = document.getElementById('lists-container');
     if (!container) return;
 
+    // 编辑中跳过自动刷新触发的重建（避免行内编辑焦点丢失）；force=true 时强制重建（editList/showAddListInput 等显式调用）
+    if (!force && editingListId !== null) return;
+
     container.innerHTML = '';
 
-    // 只显示未归档的清单
-    const activeLists = lists.filter(l => !l.archived);
-    const archivedLists = lists.filter(l => l.archived);
+    // 未完成任务按清单预聚合，避免递归计数时重复遍历 tasks
+    const uncompletedMap = {};
+    tasks.forEach(t => { if (!t.completed) uncompletedMap[t.listId] = (uncompletedMap[t.listId] || 0) + 1; });
 
-    activeLists.forEach(list => {
-        const listItem = document.createElement('button');
-        listItem.dataset.listId = list.id;
-        const uncompletedCount = tasks.filter(t => t.listId === list.id && !t.completed).length;
-        listItem.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 ${currentListId === list.id ? 'bg-accent-soft text-accent-dark' : ''}`;
-        listItem.innerHTML = `
-            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${list.color}" onclick="event.stopPropagation(); editList('${list.id}')"></span>
-            <span class="sidebar-text flex-1">${list.name}</span>
-            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
-        `;
-        listItem.onclick = () => {
-            currentListId = list.id;
-            currentFilter = null;
-            currentTagIds = [];
-            currentFilterId = null;
-            // 在摘要/过滤器编辑视图下点击清单，切换到默认任务视图并按清单筛选
-            if (currentView === 'summary' || currentView === 'filterEdit') {
-                switchView('task');
-            } else {
-                renderView();
-            }
-            renderLists();
-            renderTags();
-            renderFilters();
-            updateSidebarHighlight();
-        };
-        container.appendChild(listItem);
-
-        // 如果正在编辑此清单，在其下方插入编辑表单
-        if (editingListId === list.id) {
-            const editForm = createListEditForm(list);
-            container.appendChild(editForm);
-        }
-    });
+    const topLevel = lists.filter(l => !l.archived && (!l.parentId || !getList(l.parentId)));
+    for (let i = 0; i < topLevel.length; i++) {
+        appendListGap(container, null, i);
+        renderListNode(topLevel[i], 0, container, uncompletedMap);
+    }
+    appendListGap(container, null, topLevel.length);
 
     // 已归档清单入口（放在清单分组末位，"新建清单"按钮之前）
+    const archivedLists = lists.filter(l => l.archived);
     if (archivedLists.length > 0) {
         const archivedBtn = document.createElement('button');
         archivedBtn.id = 'sidebar-archived-btn';
-        archivedBtn.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-muted flex items-center justify-center gap-2 ${currentListId === '__archived__' ? 'bg-theme-tertiary font-semibold' : ''}`;
+        archivedBtn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-muted flex items-center justify-center gap-2 ${currentListId === '__archived__' ? 'bg-theme-tertiary font-semibold' : ''}`;
         archivedBtn.innerHTML = `
             <i class="fas fa-archive w-3 text-center text-xs"></i>
             <span class="sidebar-text flex-1">已归档</span>
@@ -91,40 +123,367 @@ function renderLists() {
         container.appendChild(archivedBtn);
     }
 
-    // 如果正在新建清单，在"新建清单"按钮前插入表单
+    // 如果正在新建清单，在末位插入表单
     if (editingListId === '__new__') {
-        const newForm = createListEditForm(null);
-        container.appendChild(newForm);
+        container.appendChild(createListEditForm(null));
     }
 
     updateTaskListSelect();
     updateSettingsListSelect();
+    updateSidebarHighlight();
+    applySectionCollapse();
+    if (editingListId) ensureSectionVisible('lists');
 }
 
-let listDeleteConfirming = false;
-let listArchiveConfirming = false;
+// 在兄弟节点之间插入一个"落点空隙"，用于排序/同级移动/移入文件夹
+function appendListGap(parentEl, parentId, index) {
+    const gap = document.createElement('div');
+    gap.className = '';
+    gap.style.height = '3px';
+    gap.style.borderRadius = '4px';
+    gap.addEventListener('dragover', e => handleListDragOver(e, 'gap'));
+    gap.addEventListener('drop', e => handleListDrop(e, null, 'gap', parentId, index));
+    parentEl.appendChild(gap);
+}
+
+// 行内名称输入框：编辑态下替换行内名称文本为 input（方案A：名称原地编辑，其余控件留在下方表单）
+// saveCall / cancelCall 为内联 JS 表达式（如 saveListInput() / editingListId=null; renderLists();）
+function inlineNameInput(id, value, saveCall, cancelCall) {
+    // onblur 时先确认自身仍存在（避免 Enter 保存后元素被移除再次触发 blur 导致二次保存报错）
+    return `<input id="${id}" type="text" value="${escapeHtml(value)}" maxlength="20" class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault(); ${saveCall}} else if(event.key==='Escape'){event.preventDefault(); ${cancelCall}}" onblur="if(document.getElementById('${id}') && !(event.relatedTarget && event.relatedTarget.closest('[data-edit-form]'))){ ${saveCall} }">`;
+}
+
+function renderListNode(node, depth, container, uncompletedMap) {
+    const isFolder = !!node.isFolder;
+    const row = document.createElement('button');
+    row.dataset.listId = node.id;
+    row.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 group ${currentListId === node.id ? 'bg-accent-soft text-accent-dark' : ''}`;
+    row.style.cursor = 'pointer';
+
+    // 默认清单不可拖拽、不可作为合并目标
+    if (node.id !== 'default') {
+        row.draggable = true;
+        row.addEventListener('dragstart', e => handleListDragStart(e, node.id));
+        row.addEventListener('dragend', handleListDragEnd);
+        row.addEventListener('dragover', e => handleListDragOver(e, 'merge'));
+        row.addEventListener('drop', e => handleListDrop(e, node.id, 'merge', null, null));
+    }
+
+    if (isFolder) {
+        const expanded = shouldExpandFolder(node.id);
+        // 改进：去掉展开箭头，文件夹图标直接作为展开/收起开关（fa-folder-open=展开 / fa-folder=收起），
+        // 名称与普通清单/标签同竖线对齐（文件夹图标占 w-3，与普通清单圆点 w-3 同宽）
+        const nameHtml = editingListId === node.id && node.id !== 'default'
+            ? inlineNameInput('new-list-name', node.name || '', 'saveListInput()', 'editingListId=null; renderLists();')
+            : `<span class="sidebar-text flex-1 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑清单集">${node.name || '未命名清单集'}</span>`;
+        row.innerHTML = `
+            <i class="fas ${expanded ? 'fa-folder-open' : 'fa-folder'} w-3 text-center text-sm flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="color:${node.color || '#f59e0b'}" onclick="event.stopPropagation(); toggleFolder('${node.id}')" ondblclick="event.stopPropagation(); editList('${node.id}')" title="${expanded ? '收起' : '展开'}清单集（双击编辑）"></i>
+            ${nameHtml}
+            ${folderUncompleted(uncompletedMap, node.id) > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${folderUncompleted(uncompletedMap, node.id)}</span>` : '<span class="sidebar-count w-5"></span>'}
+        `;
+        row.onclick = () => toggleFolder(node.id);
+    } else {
+        const uncompletedCount = uncompletedMap[node.id] || 0;
+        const nameHtml = editingListId === node.id && node.id !== 'default'
+            ? inlineNameInput('new-list-name', node.name || '', 'saveListInput()', 'editingListId=null; renderLists();')
+            : `<span class="sidebar-text flex-1 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑名称">${node.name}</span>`;
+        row.innerHTML = `
+            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${node.color}" onclick="event.stopPropagation(); editList('${node.id}')"></span>
+            ${nameHtml}
+            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
+        `;
+        row.onclick = () => selectList(node.id);
+    }
+    container.appendChild(row);
+
+    // 正在编辑此节点时，在其下方插入编辑表单
+    if (editingListId === node.id) {
+        container.appendChild(createListEditForm(node));
+    }
+
+    // 文件夹且展开时，递归渲染其子节点：取消左侧缩进（paddingLeft=0），
+    // 使清单集内的清单与一级清单左对齐（行内 px-3 一致），仅保留左侧竖线以区分是否在清单集内。
+    // 注意：用 inset box-shadow 画竖线而非 border-left —— border 会占用 3px 布局宽度，导致子清单内容右移 3px 与一级清单错位；
+    // inset 阴影不占布局，内容仍对齐，同时保留 3px 竖线。
+    if (isFolder && shouldExpandFolder(node.id)) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'mt-1';
+        childContainer.style.paddingLeft = '0px';
+        childContainer.style.boxShadow = 'inset 3px 0 0 0 var(--border-color, rgba(128,128,128,0.25))';
+        const children = lists.filter(l => l.parentId === node.id && !l.archived);
+        for (let i = 0; i < children.length; i++) {
+            appendListGap(childContainer, node.id, i);
+            renderListNode(children[i], depth + 1, childContainer, uncompletedMap);
+        }
+        appendListGap(childContainer, node.id, children.length);
+        container.appendChild(childContainer);
+    }
+}
+
+// ==================== 清单拖拽 / 合并 / 排序 ====================
+
+// 当前高亮的元素（仅一个）+ rAF 收敛，避免每次 dragover 全文档扫描与反复重排
+let activeDragEl = null;
+let dragOverRAF = null;
+let pendingDragEl = null;
+let pendingDragMode = null;
+
+function clearListDragHighlight() {
+    if (dragOverRAF) { cancelAnimationFrame(dragOverRAF); dragOverRAF = null; }
+    if (activeDragEl) {
+        activeDragEl.style.background = '';
+        activeDragEl.style.boxShadow = '';
+        activeDragEl.style.transform = '';
+        activeDragEl.style.transition = '';
+        activeDragEl = null;
+    }
+}
+
+// 仅当目标元素变化时才写 DOM；gap 用 transform（合成层）而非改 height，避免重排卡顿
+function applyDragHighlight(el, mode) {
+    if (el === activeDragEl) return;
+    if (activeDragEl) {
+        activeDragEl.style.background = '';
+        activeDragEl.style.boxShadow = '';
+        activeDragEl.style.transform = '';
+        activeDragEl.style.transition = '';
+    }
+    activeDragEl = el;
+    el.style.transition = 'none'; // 高亮期间关闭补间，消除动画拖影
+    if (mode === 'gap') {
+        el.style.background = '#3b82f6';
+        el.style.transform = 'scaleY(2.4)';
+    } else {
+        el.style.boxShadow = 'inset 0 0 0 2px #3b82f6';
+    }
+}
+
+function handleListDragStart(e, id) {
+    if (id === 'default') { e.preventDefault(); return; }
+    draggingListId = id;
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
+    // 让被拖拽行变淡提示"已拿起"；opacity 走合成层，不触发重排
+    const src = e.currentTarget;
+    if (src && src.style) src.style.opacity = '0.4';
+}
+
+function handleListDragEnd(e) {
+    if (e) { const src = e.currentTarget; if (src && src.style) src.style.opacity = ''; }
+    clearListDragHighlight();
+    draggingListId = null;
+}
+
+function handleListDragOver(e, mode) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    // 记录最新目标，再用 rAF 把高亮收敛到每帧一次、与绘制对齐，避免高频事件丢帧/不跟手
+    pendingDragEl = e.currentTarget;
+    pendingDragMode = mode;
+    if (dragOverRAF) return;
+    dragOverRAF = requestAnimationFrame(() => {
+        dragOverRAF = null;
+        applyDragHighlight(pendingDragEl, pendingDragMode);
+    });
+}
+
+function handleListDrop(e, targetId, mode, parentId, index) {
+    e.preventDefault();
+    const draggedId = draggingListId;
+    clearListDragHighlight();
+    draggingListId = null;
+    if (!draggedId) return;
+    if (mode === 'gap') doReorderToGap(draggedId, parentId, index);
+    else doMerge(draggedId, targetId);
+}
+
+function toggleFolder(folderId) {
+    const f = getList(folderId);
+    if (!f) return;
+    f.collapsed = (f.collapsed === true) ? false : true;
+    saveData();
+    renderLists();
+}
+
+// ==================== 侧边栏分区（清单/标签/过滤器）展开/收起 ====================
+// 折叠状态持久化到 localStorage，刷新后保持
+const SECTION_COLLAPSE_KEY = 'tacklist_section_collapsed';
+let sectionCollapsed = { lists: false, tags: false, filters: false };
+(function loadSectionCollapse() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(SECTION_COLLAPSE_KEY) || '{}');
+        if (saved && typeof saved === 'object') {
+            sectionCollapsed.lists = !!saved.lists;
+            sectionCollapsed.tags = !!saved.tags;
+            sectionCollapsed.filters = !!saved.filters;
+        }
+    } catch (_) {}
+})();
+function saveSectionCollapse() {
+    try { localStorage.setItem(SECTION_COLLAPSE_KEY, JSON.stringify(sectionCollapsed)); } catch (_) {}
+}
+function toggleSectionCollapse(key) {
+    if (!(key in sectionCollapsed)) return;
+    sectionCollapsed[key] = !sectionCollapsed[key];
+    saveSectionCollapse();
+    applySectionCollapse();
+}
+// 依据状态设置各分区容器可见性与头部箭头
+function applySectionCollapse() {
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
+    ['lists', 'tags', 'filters'].forEach(key => {
+        const c = document.getElementById(containers[key]);
+        if (c) c.classList.toggle('hidden', !!sectionCollapsed[key]);
+        const h = document.getElementById(headers[key]);
+        if (h) {
+            const chev = h.querySelector('.section-chevron');
+            if (chev) chev.className = `section-chevron fas ${sectionCollapsed[key] ? 'fa-chevron-right' : 'fa-chevron-down'} w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition`;
+        }
+    });
+}
+// 编辑某分区时强制展开（不影响已保存的折叠状态）
+function ensureSectionVisible(key) {
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
+    const c = document.getElementById(containers[key]);
+    if (c) c.classList.remove('hidden');
+    const h = document.getElementById(headers[key]);
+    if (h) {
+        const chev = h.querySelector('.section-chevron');
+        if (chev) chev.className = 'section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition';
+    }
+    if (key in sectionCollapsed && sectionCollapsed[key]) {
+        sectionCollapsed[key] = false;
+        saveSectionCollapse();
+    }
+}
+
+// 拖到清单/清单集"行上"：合并成清单集
+function doMerge(draggedId, targetId) {
+    if (!draggedId || !targetId) return;
+    if (draggedId === targetId) return;
+    // 若上一个合并产生的清单集尚未命名/取消，先回退它，避免叠加
+    if (pendingNewFolder) { revertNewFolder(); }
+    if (targetId === 'default') { showToast('默认清单不能放入清单集', 'warning'); return; }
+    const dragged = getList(draggedId), target = getList(targetId);
+    if (!dragged || !target) return;
+    // 防循环：不能把清单集放入自身或其子孙
+    if (isAncestor(draggedId, targetId) || isAncestor(targetId, draggedId)) {
+        showToast('不能将清单集放入自身的子级', 'warning');
+        return;
+    }
+    if (target.isFolder) {
+        // 加入已有清单集（不再询问名称）
+        dragged.parentId = targetId;
+        normalizeListsOrder();
+        saveData();
+        renderLists();
+        showToast('已加入清单集', 'success');
+        return;
+    }
+    // 首次合并：新建清单集，并把双方归入，随后内联输入名称
+    const newFolder = {
+        id: generateId(),
+        name: '',
+        color: target.color || '#f59e0b',
+        isFolder: true,
+        parentId: dragged.parentId || null
+    };
+    const draggedOldParent = dragged.parentId || null;
+    const targetOldParent = target.parentId || null;
+    const idx = lists.findIndex(l => l.id === draggedId);
+    lists.splice(idx, 0, newFolder);
+    dragged.parentId = newFolder.id;
+    target.parentId = newFolder.id;
+    normalizeListsOrder();
+    pendingNewFolder = {
+        id: newFolder.id,
+        revert: { [draggedId]: draggedOldParent, [targetId]: targetOldParent, folderParent: newFolder.parentId }
+    };
+    editingListId = newFolder.id;
+    saveData();
+    renderLists();
+    setTimeout(() => { const inp = document.getElementById('new-list-name'); if (inp) inp.focus(); }, 50);
+}
+
+// 拖到"空隙"：排序 / 移出原集 / 移入某集（reparent）
+function doReorderToGap(draggedId, parentId, index) {
+    if (!draggedId) return;
+    if (parentId && (parentId === draggedId || isAncestor(draggedId, parentId))) {
+        showToast('不能将清单集拖入自身或其子级', 'warning');
+        return;
+    }
+    const dragged = getList(draggedId);
+    if (!dragged) return;
+    if (draggedId === 'default' && parentId) { showToast('默认清单必须保持在顶层', 'warning'); return; }
+    const newParent = parentId || null;
+    const siblings = lists.filter(l => (l.parentId || null) === newParent && !l.archived);
+    const targetSibling = siblings[index];
+    if (targetSibling && targetSibling.id === draggedId) return; // 落入自身原位，无变化
+    lists = lists.filter(l => l.id !== draggedId);
+    let insertAt;
+    if (targetSibling) {
+        insertAt = lists.findIndex(l => l.id === targetSibling.id);
+    } else {
+        const childrenNow = lists.filter(l => (l.parentId || null) === newParent);
+        if (childrenNow.length > 0) {
+            insertAt = lists.findIndex(l => l.id === childrenNow[childrenNow.length - 1].id) + 1;
+        } else if (newParent) {
+            insertAt = lists.findIndex(l => l.id === newParent) + 1;
+        } else {
+            insertAt = lists.length;
+        }
+    }
+    if (insertAt < 0) insertAt = lists.length;
+    dragged.parentId = newParent;
+    lists.splice(insertAt, 0, dragged);
+    normalizeListsOrder();
+    saveData();
+    renderLists();
+}
+
+// 取消新建清单集的命名时，回退到合并前状态
+function revertNewFolder() {
+    const pf = pendingNewFolder;
+    pendingNewFolder = null;
+    if (!pf) return;
+    const folder = getList(pf.id);
+    if (folder) lists = lists.filter(l => l.id !== pf.id);
+    Object.keys(pf.revert).forEach(id => {
+        if (id === 'folderParent') return;
+        const l = getList(id);
+        if (l) l.parentId = pf.revert[id];
+    });
+    normalizeListsOrder();
+    saveData();
+}
+
+let listDeleteConfirming = null;
+let listArchiveConfirming = null;
 
 function createListEditForm(existingList) {
     const form = document.createElement('div');
     form.className = 'mt-1 mb-1 p-3 bg-theme-tertiary rounded-lg border border-theme';
     form.setAttribute('data-edit-form', 'list');
     const isDefault = existingList && existingList.id === 'default';
+    const isFolder = existingList && existingList.isFolder;
     form.innerHTML = `
         <input type="hidden" id="edit-list-id" value="${existingList ? existingList.id : ''}">
-        <input type="text" id="new-list-name" placeholder="清单名称" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary mb-2 ${isDefault ? 'opacity-50 cursor-not-allowed' : ''}" value="${existingList ? existingList.name : ''}" ${isDefault ? 'readonly' : ''}>
         <div class="flex items-center gap-2">
+            ${!existingList ? `<input id="new-list-name" type="text" value="" maxlength="20" class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveListInput()}">` : ''}
             <input type="color" id="new-list-color" value="${existingList ? existingList.color : '#3b82f6'}" class="w-8 h-8 rounded cursor-pointer flex-shrink-0">
             ${existingList && existingList.id !== 'default' ? `
-                <button onclick="deleteListInput()" id="list-delete-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border ${listDeleteConfirming ? 'bg-red-600 text-white border-red-600' : 'border-red-500 text-red-500 hover:bg-red-50'} transition" title="${listDeleteConfirming ? '确认删除' : '删除清单'}">
+                <button onclick="deleteListInput()" id="list-delete-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border ${listDeleteConfirming === existingList.id ? 'bg-red-600 text-white border-red-600' : 'border-red-500 text-red-500 hover:bg-red-50'} transition" title="${listDeleteConfirming === existingList.id ? '确认删除' : (isFolder ? '删除清单集' : '删除清单')}">
                     <i class="fas fa-trash text-sm"></i>
                 </button>
             ` : ''}
-            ${existingList && existingList.id !== 'default' && !existingList.archived ? `
-                <button onclick="archiveListConfirm()" id="list-archive-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border ${listArchiveConfirming ? 'bg-amber-600 text-white border-amber-600' : 'border-amber-500 text-amber-500 hover:bg-amber-50'} transition" title="${listArchiveConfirming ? '确认归档' : '归档清单'}">
+            ${existingList && existingList.id !== 'default' && !existingList.archived && !existingList.isFolder ? `
+                <button onclick="archiveListConfirm()" id="list-archive-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border ${listArchiveConfirming === existingList.id ? 'bg-amber-600 text-white border-amber-600' : 'border-amber-500 text-amber-500 hover:bg-amber-50'} transition" title="${listArchiveConfirming === existingList.id ? '确认归档' : '归档清单'}">
                     <i class="fas fa-archive text-sm"></i>
                 </button>
             ` : ''}
-            <div class="flex-1"></div>
+            ${existingList ? '<div class="flex-1"></div>' : ''}
             <button onclick="saveListInput()" id="list-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white hover:bg-accent-hover transition" title="${existingList ? '保存' : '添加'}">
                 <i class="fas fa-check text-sm"></i>
             </button>
@@ -144,30 +503,40 @@ function deleteListInput() {
     const listId = document.getElementById('edit-list-id').value;
     if (!listId || listId === 'default') return;
 
-    if (listDeleteConfirming) {
+    if (listDeleteConfirming === listId) {
         // 第二次点击：确认删除
         const list = lists.find(l => l.id === listId);
         const listName = list ? list.name : '该清单';
+        const isFolder = list && list.isFolder;
 
-        // 将任务移入默认清单
-        tasks.forEach(t => { if (t.listId === listId) t.listId = 'default'; });
-        lists = lists.filter(l => l.id !== listId);
+        if (isFolder) {
+            // 清单集：子清单回退顶层（不删除其中的任务）
+            lists.forEach(l => { if (l.parentId === listId) l.parentId = null; });
+            lists = lists.filter(l => l.id !== listId);
+            if (currentListId === listId) currentListId = null;
+            listDeleteConfirming = null;
+            editingListId = null;
+            normalizeListsOrder();
+            saveData();
+            renderLists();
+            renderTags();
+            renderFilters();
+            renderView();
+            updateSidebarHighlight();
+            showToast(`清单集"${listName}"已删除，子清单已移回顶层`, 'success');
+            return;
+        }
 
-        if (currentListId === listId) currentListId = null;
-
-        listDeleteConfirming = false;
+        // 普通清单：弹出选择弹窗，让用户决定任务处理方式
+        const taskCount = tasks.filter(t => t.listId === listId).length;
+        listDeleteConfirming = null;
         editingListId = null;
-        saveData();
-        renderLists();
-        renderTags();
-        renderFilters();
-        renderView();
-        updateSidebarHighlight();
-        showToast(`清单"${listName}"已删除，任务已移至默认清单`, 'success');
+        renderLists(); // 先关闭编辑表单
+        openKanbanListDeleteChoice(listId, listName, taskCount);
         return;
     }
 
-    listDeleteConfirming = true;
+    listDeleteConfirming = listId;
     const btn = document.getElementById('list-delete-inline-btn');
     if (btn) {
         btn.classList.add('bg-red-600', 'border-red-600', 'text-white');
@@ -176,7 +545,7 @@ function deleteListInput() {
     }
 
     setTimeout(() => {
-        listDeleteConfirming = false;
+        listDeleteConfirming = null;
         if (btn) {
             btn.classList.remove('bg-red-600', 'border-red-600', 'text-white');
             btn.classList.add('border-red-500', 'text-red-500', 'hover:bg-red-50');
@@ -189,14 +558,14 @@ function archiveListConfirm() {
     const listId = document.getElementById('edit-list-id').value;
     if (!listId || listId === 'default') return;
 
-    if (listArchiveConfirming) {
-        listArchiveConfirming = false;
+    if (listArchiveConfirming === listId) {
+        listArchiveConfirming = null;
         editingListId = null;
         archiveList(listId);
         return;
     }
 
-    listArchiveConfirming = true;
+    listArchiveConfirming = listId;
     const btn = document.getElementById('list-archive-inline-btn');
     if (btn) {
         btn.classList.add('bg-amber-600', 'border-amber-600', 'text-white');
@@ -205,7 +574,7 @@ function archiveListConfirm() {
     }
 
     setTimeout(() => {
-        listArchiveConfirming = false;
+        listArchiveConfirming = null;
         if (btn) {
             btn.classList.remove('bg-amber-600', 'border-amber-600', 'text-white');
             btn.classList.add('border-amber-500', 'text-amber-500', 'hover:bg-amber-50');
@@ -468,10 +837,14 @@ function deleteArchivedList(listId) {
 }
 
 function selectList(listId) {
+    // 看板内切换清单时，先提交/清理行内改名和未命名分组
+    if (currentView === 'kanban' && typeof leaveKanbanView === 'function') {
+        leaveKanbanView();
+    }
     currentListId = listId;
     currentFilter = null;
-    // 在摘要/过滤器编辑视图下点击清单，切换到默认任务视图并按清单筛选
-    if (currentView === 'summary' || currentView === 'filterEdit') {
+    // 非任务筛选视图下点击清单，切换到默认任务视图并按清单筛选
+    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task'); // 内部已调用 renderView/renderLists/updateSidebarHighlight
     } else {
         renderView();
@@ -485,7 +858,7 @@ function updateTaskListSelect() {
     const select = document.getElementById('task-list');
     if (select) {
         select.innerHTML = '';
-        lists.filter(l => !l.archived).forEach(list => {
+        lists.filter(l => !l.archived && !l.isFolder).forEach(list => {
             const option = document.createElement('option');
             option.value = list.id;
             option.textContent = list.name;
@@ -498,7 +871,7 @@ function updateSettingsListSelect() {
     const select = document.getElementById('settings-default-list');
     if (select) {
         select.innerHTML = '';
-        lists.filter(l => !l.archived).forEach(list => {
+        lists.filter(l => !l.archived && !l.isFolder).forEach(list => {
             const option = document.createElement('option');
             option.value = list.id;
             option.textContent = list.name;
@@ -517,9 +890,7 @@ function filterNext7Days() {
     currentFilter = 'recent7days';
     currentTagIds = [];
     currentFilterId = null;
-    if (currentView === 'summary') {
-        switchView('task');
-    } else if (currentView !== 'task' && currentView !== 'schedule' && currentView !== 'week' && currentView !== 'month' && currentView !== 'quadrant') {
+    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');
     } else {
         renderView();
@@ -583,7 +954,7 @@ function updateSidebarHighlight() {
         if (cdBox) cdBox.classList.add('cd-active');
     } else if (currentView === 'holiday') {
         // 独立管理视图：不与侧边栏任何导航项（含“所有任务”）联动高亮
-    } else if (currentView === 'task' && currentListId) {
+    } else if ((currentView === 'task' || currentView === 'kanban') && currentListId) {
         if (currentListId === '__archived__') {
             const btn = document.getElementById('sidebar-archived-btn');
             if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
@@ -625,6 +996,50 @@ function updateSidebarCounts() {
 
 let editingTagId = null;
 
+// ==================== 标签 / 过滤器拖拽排序（扁平数组重排，无清单集概念） ====================
+let draggingTagId = null;
+let draggingFilterId = null;
+
+// 通用：在扁平数组内把 draggedId 移动到 gap 位置（gap index = 插入到 arr[index] 之前）
+function reorderFlatArray(arr, draggedId, index) {
+    const from = arr.findIndex(x => x.id === draggedId);
+    if (from === -1) return false;
+    if (index === from) return false; // 落在自身原位，无变化
+    const target = arr[index];
+    const item = arr[from];
+    arr.splice(from, 1);
+    let insertAt;
+    if (target && target.id !== draggedId) insertAt = arr.findIndex(x => x.id === target.id);
+    else insertAt = arr.length;
+    if (insertAt < 0) insertAt = arr.length;
+    arr.splice(insertAt, 0, item);
+    return true;
+}
+
+function doReorderTags(draggedId, index) {
+    const tags = settings.tags || [];
+    if (reorderFlatArray(tags, draggedId, index)) { saveData(); renderTags(); }
+}
+function doReorderFilters(draggedId, index) {
+    const filters = settings.filters || [];
+    if (reorderFlatArray(filters, draggedId, index)) { saveData(); renderFilters(); }
+}
+
+// 在容器内插入一个"排序落点"（复用清单的同款高亮机制：handleListDragOver / clearListDragHighlight）
+function appendFlatGap(container, index, onDrop) {
+    const gap = document.createElement('div');
+    gap.className = '';
+    gap.style.height = '3px';
+    gap.style.borderRadius = '4px';
+    gap.addEventListener('dragover', e => handleListDragOver(e, 'gap'));
+    gap.addEventListener('drop', e => {
+        e.preventDefault();
+        clearListDragHighlight();
+        onDrop();
+    });
+    container.appendChild(gap);
+}
+
 function renderTags() {
     const section = document.getElementById('sidebar-tags-section');
     const container = document.getElementById('sidebar-tags-container');
@@ -637,18 +1052,37 @@ function renderTags() {
 
     container.innerHTML = '';
 
-    tags.forEach(tag => {
+    tags.forEach((tag, i) => {
+        // 排序落点（插入到当前标签之前）
+        appendFlatGap(container, i, () => { if (draggingTagId) doReorderTags(draggingTagId, i); draggingTagId = null; });
+
         const uncompletedCount = tasks.filter(t => (t.tags || []).includes(tag.id) && !t.completed).length;
         const isActive = currentTagIds && currentTagIds.includes(tag.id);
         const btn = document.createElement('button');
         btn.id = `sidebar-tag-${tag.id}`;
-        btn.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-tag-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
+        btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-tag-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
+        const tagNameHtml = editingTagId === tag.id
+            ? inlineNameInput('new-tag-name', tag.name || '', 'saveTagInput()', 'editingTagId=null; renderTags();')
+            : `<span class="sidebar-text flex-1 cursor-pointer" ondblclick="event.stopPropagation(); showAddTagInput('${tag.id}')" title="双击编辑名称">${tag.name}</span>`;
         btn.innerHTML = `
             <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-green-400 transition" style="background-color: ${tag.color}" onclick="event.stopPropagation(); showAddTagInput('${tag.id}')"></span>
-            <span class="sidebar-text flex-1">${tag.name}</span>
+            ${tagNameHtml}
             ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
         `;
         btn.onclick = () => toggleTagFilter(tag.id);
+        // 拖拽排序（仅重排顺序，不使用清单集概念）
+        btn.draggable = true;
+        btn.addEventListener('dragstart', e => {
+            draggingTagId = tag.id;
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', tag.id); } catch (_) {}
+            btn.style.opacity = '0.4';
+        });
+        btn.addEventListener('dragend', e => {
+            if (e) { const s = e.currentTarget; if (s && s.style) s.style.opacity = ''; }
+            clearListDragHighlight();
+            draggingTagId = null;
+        });
         container.appendChild(btn);
 
         // 如果正在编辑此标签，在其下方插入编辑表单
@@ -658,11 +1092,16 @@ function renderTags() {
         }
     });
 
+    // 末尾排序落点（插入到所有标签之后）
+    appendFlatGap(container, tags.length, () => { if (draggingTagId) doReorderTags(draggingTagId, tags.length); draggingTagId = null; });
+
     // 如果正在新建标签，在所有标签之后插入新建表单
     if (editingTagId === '__new__') {
         const newForm = createTagEditForm(null);
         container.appendChild(newForm);
     }
+    applySectionCollapse();
+    if (editingTagId) ensureSectionVisible('tags');
 }
 
 function createTagEditForm(existingTag) {
@@ -671,15 +1110,15 @@ function createTagEditForm(existingTag) {
     form.setAttribute('data-edit-form', 'tag');
     form.innerHTML = `
         <input type="hidden" id="edit-tag-id" value="${existingTag ? existingTag.id : ''}">
-        <input type="text" id="new-tag-name" placeholder="标签名称" maxlength="20" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary mb-2" value="${existingTag ? existingTag.name : ''}">
         <div class="flex items-center gap-2">
+            ${!existingTag ? `<input id="new-tag-name" type="text" value="" maxlength="20" class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveTagInput()}">` : ''}
             <input type="color" id="new-tag-color" value="${existingTag ? existingTag.color : '#10b981'}" class="w-8 h-8 rounded cursor-pointer flex-shrink-0">
             ${existingTag ? `
                 <button onclick="deleteTagInput()" id="tag-delete-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border border-red-500 text-red-500 hover:bg-red-50 transition" title="删除标签">
                     <i class="fas fa-trash text-sm"></i>
                 </button>
             ` : ''}
-            <div class="flex-1"></div>
+            ${existingTag ? '<div class="flex-1"></div>' : ''}
             <button onclick="saveTagInput()" id="tag-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-green-500 text-white hover:bg-green-600 transition" title="${existingTag ? '保存' : '添加'}">
                 <i class="fas fa-check text-sm"></i>
             </button>
@@ -709,10 +1148,8 @@ function toggleTagFilter(tagId) {
         currentFilterId = null;
     }
 
-    // 确保在五个视图中
-    if (currentView === 'summary' || currentView === 'filterEdit') {
-        switchView('task');
-    } else if (!['task', 'schedule', 'week', 'month', 'quadrant'].includes(currentView)) {
+    // 确保在支持任务筛选的视图中
+    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');
     } else {
         renderView();
@@ -737,7 +1174,7 @@ function clearTagFilter() {
 // ==================== 过滤器渲染与筛选 ====================
 
 let editingFilterId = null; // null | filterId | '__new__'
-let filterDeleteConfirming = false;
+let filterDeleteConfirming = null;
 
 function renderFilters() {
     const section = document.getElementById('sidebar-filters-section');
@@ -751,7 +1188,10 @@ function renderFilters() {
 
     container.innerHTML = '';
 
-    filters.forEach(filter => {
+    filters.forEach((filter, i) => {
+        // 排序落点（插入到当前过滤器之前）
+        appendFlatGap(container, i, () => { if (draggingFilterId) doReorderFilters(draggingFilterId, i); draggingFilterId = null; });
+
         const isActive = currentFilterId === filter.id;
         const uncompletedCount = tasks.filter(t => {
             // 简单计数：检查任务是否满足过滤条件
@@ -760,15 +1200,44 @@ function renderFilters() {
 
         const btn = document.createElement('button');
         btn.id = `sidebar-filter-${filter.id}`;
-        btn.className = `w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
+        btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
+        const filterNameHtml = editingFilterId === filter.id
+            ? inlineNameInput('new-filter-name', filter.name || '', 'saveFilterInput()', 'editingFilterId=null; renderFilters();')
+            : `<span class="sidebar-text flex-1 cursor-pointer" ondblclick="event.stopPropagation(); editFilter('${filter.id}')" title="双击编辑名称">${filter.name}</span>`;
         btn.innerHTML = `
             <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')"></span>
-            <span class="sidebar-text flex-1">${filter.name}</span>
+            ${filterNameHtml}
             ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
         `;
         btn.onclick = () => applyFilter(filter.id);
+        // 拖拽排序（仅重排顺序，不使用清单集概念）
+        btn.draggable = true;
+        btn.addEventListener('dragstart', e => {
+            draggingFilterId = filter.id;
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', filter.id); } catch (_) {}
+            btn.style.opacity = '0.4';
+        });
+        btn.addEventListener('dragend', e => {
+            if (e) { const s = e.currentTarget; if (s && s.style) s.style.opacity = ''; }
+            clearListDragHighlight();
+            draggingFilterId = null;
+        });
         container.appendChild(btn);
+        if (editingFilterId === filter.id) {
+            container.appendChild(createFilterEditForm(filter));
+        }
     });
+
+    // 新建过滤器时，在末尾插入编辑表单（与标签一致，名称原地编辑）
+    if (editingFilterId === '__new__') {
+        container.appendChild(createFilterEditForm(null));
+    }
+
+    // 末尾排序落点（插入到所有过滤器之后）
+    appendFlatGap(container, filters.length, () => { if (draggingFilterId) doReorderFilters(draggingFilterId, filters.length); draggingFilterId = null; });
+    applySectionCollapse();
+    if (editingFilterId) ensureSectionVisible('filters');
 }
 
 function matchFilterConditions(task, filter) {
@@ -853,16 +1322,14 @@ function matchFilterConditions(task, filter) {
 function createFilterEditForm(existingFilter) {
     const form = document.createElement('div');
     form.className = 'mt-1 mb-1 p-3 bg-theme-tertiary rounded-lg border border-theme';
+    form.setAttribute('data-edit-form', 'filter');
 
     const c = existingFilter ? (existingFilter.conditions || {}) : {};
-    const activeLists = lists.filter(l => !l.archived);
+    const activeLists = lists.filter(l => !l.archived && !l.isFolder);
     const allTags = settings.tags || [];
 
     form.innerHTML = `
         <input type="hidden" id="edit-filter-id" value="${existingFilter ? existingFilter.id : ''}">
-        <div class="mb-2">
-            <input type="text" id="new-filter-name" placeholder="过滤器名称" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm" value="${existingFilter ? existingFilter.name : ''}">
-        </div>
         <div class="flex gap-2 mb-3">
             <input type="color" id="new-filter-color" value="${existingFilter ? existingFilter.color : '#8b5cf6'}" class="w-8 h-8 rounded cursor-pointer flex-shrink-0">
             <div class="flex-1">
@@ -1010,9 +1477,7 @@ function applyFilter(filterId) {
         currentTagIds = [];
     }
 
-    if (currentView === 'summary') {
-        switchView('task');
-    } else if (!['task', 'schedule', 'week', 'month', 'quadrant'].includes(currentView)) {
+    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');
     } else {
         renderView();
@@ -1026,31 +1491,26 @@ function applyFilter(filterId) {
 
 function showAddFilterInput() {
     editingFilterId = '__new__';
-    filterDeleteConfirming = false;
-    currentView = 'filterEdit';
-    renderView();
+    filterDeleteConfirming = null;
     renderFilters();
 }
 
 function editFilter(filterId) {
     editingFilterId = filterId;
-    filterDeleteConfirming = false;
-    currentView = 'filterEdit';
-    renderView();
+    filterDeleteConfirming = null;
     renderFilters();
 }
 
 function hideFilterInput() {
     editingFilterId = null;
-    filterDeleteConfirming = false;
-    currentView = 'task';
-    renderView();
+    filterDeleteConfirming = null;
     renderFilters();
-    updateSidebarHighlight();
 }
 
 function saveFilterInput() {
-    const name = document.getElementById('new-filter-name').value.trim();
+    const nameEl = document.getElementById('new-filter-name');
+    if (!nameEl) return;
+    const name = nameEl.value.trim();
     const color = document.getElementById('new-filter-color').value;
     const editId = document.getElementById('edit-filter-id').value;
     const timeRange = document.getElementById('new-filter-timeRange').value;
@@ -1113,7 +1573,6 @@ function saveFilterInput() {
         }
         saveData();
         editingFilterId = null;
-        currentView = 'task';
         renderFilters();
         renderView();
         updateSidebarHighlight();
@@ -1133,7 +1592,6 @@ function saveFilterInput() {
         settings.filters.push(newFilter);
         saveData();
         editingFilterId = null;
-        currentView = 'task';
         renderFilters();
         renderView();
         updateSidebarHighlight();
@@ -1145,15 +1603,14 @@ function deleteFilterInput() {
     const filterId = document.getElementById('edit-filter-id').value;
     if (!filterId) return;
 
-    if (filterDeleteConfirming) {
+    if (filterDeleteConfirming === filterId) {
         settings.filters = (settings.filters || []).filter(f => f.id !== filterId);
         if (currentFilterId === filterId) {
             currentFilterId = null;
         }
         saveData();
         editingFilterId = null;
-        filterDeleteConfirming = false;
-        currentView = 'task';
+        filterDeleteConfirming = null;
         renderFilters();
         renderView();
         updateSidebarHighlight();
@@ -1161,7 +1618,7 @@ function deleteFilterInput() {
         return;
     }
 
-    filterDeleteConfirming = true;
+    filterDeleteConfirming = filterId;
     const btn = document.getElementById('filter-delete-inline-btn');
     if (btn) {
         btn.textContent = '确认删除';
@@ -1170,179 +1627,11 @@ function deleteFilterInput() {
     }
 
     setTimeout(() => {
-        filterDeleteConfirming = false;
+        filterDeleteConfirming = null;
         if (btn) {
             btn.textContent = '删除过滤器';
             btn.classList.remove('bg-red-600', 'text-white', 'border-red-600');
             btn.classList.add('text-red-500', 'border-red-500', 'hover:bg-red-50');
         }
     }, 3000);
-}
-
-function renderFilterEditView(container) {
-    const existingFilter = editingFilterId && editingFilterId !== '__new__'
-        ? (settings.filters || []).find(f => f.id === editingFilterId)
-        : null;
-    const c = existingFilter ? (existingFilter.conditions || {}) : {};
-    const activeLists = lists.filter(l => !l.archived);
-    const allTags = settings.tags || [];
-    const isEditing = !!existingFilter;
-
-    // 保存表单滚动位置（自动刷新等重渲染场景），避免跳回顶部
-    const prevFormScroll = container.querySelector('.bg-theme-secondary.rounded-xl.shadow-theme');
-    const savedFormScrollTop = prevFormScroll ? prevFormScroll.scrollTop : 0;
-
-    container.innerHTML = `
-        <div class="h-full flex flex-col">
-            <div class="flex items-center justify-between p-4 pb-2">
-                <h1 class="text-2xl font-bold text-theme-primary">${isEditing ? '编辑过滤器' : '新建过滤器'}</h1>
-            </div>
-            <div class="bg-theme-secondary rounded-xl shadow-theme p-6 flex-1 min-h-0 overflow-y-auto mx-4 mb-4">
-                <input type="hidden" id="edit-filter-id" value="${existingFilter ? existingFilter.id : ''}">
-
-                <div class="max-w-2xl space-y-6">
-                    <!-- 名称和颜色 -->
-                    <div>
-                        <label class="text-sm font-medium text-theme-primary block mb-2">名称</label>
-                        <div class="flex items-center gap-3">
-                            <input type="color" id="new-filter-color" value="${existingFilter ? existingFilter.color : '#8b5cf6'}" class="w-10 h-10 rounded-lg cursor-pointer flex-shrink-0 border border-theme">
-                            <input type="text" id="new-filter-name" placeholder="过滤器名称" class="flex-1 px-4 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" value="${existingFilter ? existingFilter.name : ''}">
-                        </div>
-                    </div>
-
-                    <!-- 时间范围 -->
-                    <div>
-                        <label class="text-sm font-medium text-theme-primary block mb-2">时间范围</label>
-                        <select id="new-filter-timeRange" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" onchange="toggleCustomDateRange()">
-                            <option value="" ${!c.timeRange ? 'selected' : ''}>不限</option>
-                            <option value="today" ${c.timeRange === 'today' ? 'selected' : ''}>今天</option>
-                            <option value="yesterday" ${c.timeRange === 'yesterday' ? 'selected' : ''}>昨天</option>
-                            <option value="last3days" ${c.timeRange === 'last3days' ? 'selected' : ''}>最近三天</option>
-                            <option value="week" ${c.timeRange === 'week' ? 'selected' : ''}>本周</option>
-                            <option value="lastweek" ${c.timeRange === 'lastweek' ? 'selected' : ''}>上周</option>
-                            <option value="month" ${c.timeRange === 'month' ? 'selected' : ''}>本月</option>
-                            <option value="lastmonth" ${c.timeRange === 'lastmonth' ? 'selected' : ''}>上月</option>
-                            <option value="overdue" ${c.timeRange === 'overdue' ? 'selected' : ''}>已过期</option>
-                            <option value="nodate" ${c.timeRange === 'nodate' ? 'selected' : ''}>无日期</option>
-                            <option value="custom" ${c.timeRange === 'custom' ? 'selected' : ''}>自定义</option>
-                        </select>
-                        <div id="custom-date-range-inputs" class="mt-3 ${c.timeRange === 'custom' ? '' : 'hidden'}">
-                            <div class="flex gap-4">
-                                <div class="flex-1">
-                                    <label class="text-xs text-theme-muted block mb-1">开始日期</label>
-                                    <input type="date" id="new-filter-customStart" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" value="${c.customStartDate || ''}">
-                                </div>
-                                <div class="flex-1">
-                                    <label class="text-xs text-theme-muted block mb-1">结束日期</label>
-                                    <input type="date" id="new-filter-customEnd" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" value="${c.customEndDate || ''}">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 清单 -->
-                    <div>
-                        <label class="text-sm font-medium text-theme-primary block mb-2">清单</label>
-                        <div class="flex flex-wrap gap-2">
-                            ${activeLists.map(list => `
-                                <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer hover:bg-theme-tertiary transition border border-theme ${c.listIds && c.listIds.includes(list.id) ? 'bg-accent-strong dark:bg-accent-strong text-accent-dark border-accent-light' : 'text-theme-secondary'}">
-                                    <input type="checkbox" class="filter-list-check hidden" value="${list.id}" ${c.listIds && c.listIds.includes(list.id) ? 'checked' : ''}>
-                                    <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${list.color}"></span>
-                                    ${list.name}
-                                </label>
-                            `).join('')}
-                        </div>
-                    </div>
-
-                    <!-- 标签 -->
-                    <div>
-                        <label class="text-sm font-medium text-theme-primary block mb-2">标签</label>
-                        <div class="flex flex-wrap gap-2">
-                            ${allTags.length > 0 ? allTags.map(tag => `
-                                <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer hover:bg-theme-tertiary transition border border-theme ${c.tagIds && c.tagIds.includes(tag.id) ? 'text-white border-transparent' : 'text-theme-secondary'}" style="${c.tagIds && c.tagIds.includes(tag.id) ? `background-color: ${tag.color}` : ''}">
-                                    <input type="checkbox" class="filter-tag-check hidden" value="${tag.id}" ${c.tagIds && c.tagIds.includes(tag.id) ? 'checked' : ''}>
-                                    ${tag.name}
-                                </label>
-                            `).join('') : '<span class="text-sm text-theme-muted">暂无标签</span>'}
-                        </div>
-                    </div>
-
-                    <!-- 优先级 -->
-                    <div>
-                        <label class="text-sm font-medium text-theme-primary block mb-2">优先级</label>
-                        <div class="flex flex-wrap gap-3">
-                            <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer text-theme-secondary">
-                                <input type="radio" name="filter-important" value="" ${c.important === null || c.important === undefined ? 'checked' : ''}> 重要不限
-                            </label>
-                            <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer text-theme-secondary">
-                                <input type="radio" name="filter-important" value="true" ${c.important === true ? 'checked' : ''}> 重要
-                            </label>
-                            <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer text-theme-secondary">
-                                <input type="radio" name="filter-important" value="false" ${c.important === false ? 'checked' : ''}> 不重要
-                            </label>
-                        </div>
-                        <div class="flex flex-wrap gap-3 mt-2">
-                            <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer text-theme-secondary">
-                                <input type="radio" name="filter-urgent" value="" ${c.urgent === null || c.urgent === undefined ? 'checked' : ''}> 紧急不限
-                            </label>
-                            <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer text-theme-secondary">
-                                <input type="radio" name="filter-urgent" value="true" ${c.urgent === true ? 'checked' : ''}> 紧急
-                            </label>
-                            <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer text-theme-secondary">
-                                <input type="radio" name="filter-urgent" value="false" ${c.urgent === false ? 'checked' : ''}> 不紧急
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- 操作按钮 -->
-                    <div class="flex gap-3 pt-4 border-t border-theme">
-                        <button onclick="saveFilterInput()" class="px-6 py-2 bg-accent text-white rounded-lg hover:bg-accent-hover transition font-medium">${isEditing ? '保存' : '添加'}</button>
-                        ${isEditing ? `<button onclick="deleteFilterInput()" id="filter-delete-inline-btn" class="px-6 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition font-medium">删除</button>` : ''}
-                        <button onclick="hideFilterInput()" class="px-6 py-2 border border-theme rounded-lg hover:bg-theme-tertiary transition font-medium text-theme-secondary">取消</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    // 同步恢复表单滚动位置，实现自动刷新无感
-    const newFormScroll = container.querySelector('.bg-theme-secondary.rounded-xl.shadow-theme');
-    if (newFormScroll && savedFormScrollTop > 0) {
-        newFormScroll.scrollTop = savedFormScrollTop;
-    }
-
-    // 清单标签点击切换样式
-    setTimeout(() => {
-        container.querySelectorAll('.filter-list-check').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const label = cb.closest('label');
-                if (cb.checked) {
-                    label.classList.add('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark', 'border-accent-light');
-                    label.classList.remove('text-theme-secondary');
-                } else {
-                    label.classList.remove('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark', 'border-accent-light');
-                    label.classList.add('text-theme-secondary');
-                }
-            });
-        });
-        container.querySelectorAll('.filter-tag-check').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const label = cb.closest('label');
-                const tagId = cb.value;
-                const tag = (settings.tags || []).find(t => t.id === tagId);
-                if (cb.checked && tag) {
-                    label.style.backgroundColor = tag.color;
-                    label.classList.add('text-white', 'border-transparent');
-                    label.classList.remove('text-theme-secondary');
-                } else {
-                    label.style.backgroundColor = '';
-                    label.classList.remove('text-white', 'border-transparent');
-                    label.classList.add('text-theme-secondary');
-                }
-            });
-        });
-
-        const nameInput = document.getElementById('new-filter-name');
-        if (nameInput) nameInput.focus();
-    }, 50);
 }

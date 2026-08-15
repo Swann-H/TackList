@@ -52,6 +52,14 @@ function renderSummaryView(container) {
 
     container.innerHTML = `
         <div class="summary-container h-full flex flex-col">
+            ${typeof isMobileView === 'function' && isMobileView() ? `
+            <div class="flex items-center justify-between px-4 py-3 border-b border-theme/30 flex-shrink-0">
+                <h1 class="text-lg font-bold text-theme-primary">摘要</h1>
+                <button onclick="switchView('task')" class="w-9 h-9 rounded-full border-2 border-theme text-theme-secondary flex items-center justify-center hover:bg-theme-tertiary transition" title="返回">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+            </div>
+            ` : ''}
             <div class="flex items-center justify-between p-4 pb-2">
                 <div class="flex items-center gap-4 flex-wrap">
                     <select id="summary-time-range" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
@@ -64,21 +72,20 @@ function renderSummaryView(container) {
 
                     <select id="summary-list" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
                         <option value="all" ${summaryList === 'all' ? 'selected' : ''}>所有清单</option>
-                        ${lists.filter(l => !l.archived).map(list => `<option value="${list.id}" ${summaryList === list.id ? 'selected' : ''}>${list.name}</option>`).join('')}
+                        ${lists.filter(l => !l.archived && !l.isFolder).map(list => `<option value="${list.id}" ${summaryList === list.id ? 'selected' : ''}>${list.name}</option>`).join('')}
                     </select>
 
                     <select id="summary-status" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
                         ${statusOptions.map(opt => `<option value="${opt.value}" ${summaryStatus === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
                     </select>
-                </div>
 
-                <div class="flex items-center gap-4">
-                    <div class="flex bg-theme-tertiary rounded-lg p-1">
-                        <button id="summary-view-time" class="px-4 py-1.5 rounded-md transition ${summaryViewMode === 'time' ? 'bg-accent text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}">
-                            按时间排布
+                    <!-- 排布切换：图标按钮，与筛选栏同级 -->
+                    <div class="flex bg-theme-tertiary rounded-lg p-0.5 ml-auto">
+                        <button id="summary-view-time" class="w-9 h-9 rounded-md transition flex items-center justify-center ${summaryViewMode === 'time' ? 'bg-accent text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}" title="按时间排布">
+                            <i class="fas fa-clock"></i>
                         </button>
-                        <button id="summary-view-list" class="px-4 py-1.5 rounded-md transition ${summaryViewMode === 'list' ? 'bg-accent text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}">
-                            按清单排布
+                        <button id="summary-view-list" class="w-9 h-9 rounded-md transition flex items-center justify-center ${summaryViewMode === 'list' ? 'bg-accent text-white summary-view-toggle-active' : 'text-theme-primary hover:text-theme-secondary'}" title="按清单排布">
+                            <i class="fas fa-list-ul"></i>
                         </button>
                     </div>
                 </div>
@@ -321,7 +328,7 @@ function renderTodayOverviewCard(data, isYesterday = false) {
             <div class="relative flex-shrink-0">
                 ${ringSvg}
             </div>
-            <div class="flex-1 min-w-0 grid grid-cols-3 gap-x-2 gap-y-3">
+            <div class="flex-1 min-w-0 grid grid-cols-3 gap-x-2 gap-y-3 summary-stat-grid">
                 ${infoItem(data.completed + '<span class="text-xs text-theme-muted"> / ' + data.total + '</span>', '已完成')}
                 ${infoItem(data.importantCompleted, '高优完成', 'title="高优任务指标记为重要的任务" style="cursor:help"', data.importantCompleted > 4 ? 'text-orange-500' : 'text-theme-primary')}
                 ${infoItem(data.remaining, '剩余待办')}
@@ -984,7 +991,7 @@ function generateListBasedContent(filteredTasks) {
     }
 
     const listGroups = {};
-    const allLists = [...lists].filter(l => !l.archived);
+    const allLists = [...lists].filter(l => !l.archived && !l.isFolder);
     if (summaryList === 'all') {
         allLists.forEach(list => {
             listGroups[list.id] = { name: list.name, tasks: [] };
@@ -1071,7 +1078,7 @@ function copySummaryText() {
         }
     } else {
         const listGroups = {};
-        const allLists = [...lists].filter(l => !l.archived);
+        const allLists = [...lists].filter(l => !l.archived && !l.isFolder);
         if (summaryList === 'all') {
             allLists.forEach(list => {
                 listGroups[list.id] = { name: list.name, tasks: [] };

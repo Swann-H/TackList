@@ -269,7 +269,7 @@ function parseNLPInput(input) {
     const listMatch = titleText.match(/~(\S+)/);
     if (listMatch) {
         const listName = listMatch[1];
-        const foundList = lists.find(l => l.name === listName);
+        const foundList = lists.find(l => l.name === listName && !l.isFolder);
         if (foundList) {
             listId = foundList.id;
         }
@@ -332,12 +332,13 @@ function parseNLPInput(input) {
     titleText = titleText.replace(/\s+/g, ' ').trim();
     notes = notes.replace(/\s+/g, ' ').trim();
 
-    // 5. 设置项 cmdDefaultDate：未识别到日期时的默认日期
-    if (!startTime && settings.cmdDefaultDate === 'today') {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        startTime = today;
-        isAllDay = true;
+    // 5. 设置项 defaultTaskDate：未识别到日期时的默认日期
+    if (!startTime && settings.defaultTaskDate && settings.defaultTaskDate !== 'none') {
+        const defaultDate = getDefaultTaskDate(settings.defaultTaskDate);
+        if (defaultDate) {
+            startTime = defaultDate;
+            isAllDay = true;
+        }
     }
 
     return {
@@ -1324,5 +1325,5 @@ function togglePomodoroPage() {
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;');
 }

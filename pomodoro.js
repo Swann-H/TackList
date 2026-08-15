@@ -888,11 +888,15 @@ function openPomodoroTaskPanel() {
         pomodoroState.currentTaskId
     );
     document.getElementById('pomodoro-task-panel').classList.remove('translate-x-full');
+    document.getElementById('pomodoro-task-panel').classList.add('shadow-2xl');
+    document.getElementById('pomodoro-task-panel').classList.remove('shadow-none');
     document.getElementById('pomodoro-task-panel-overlay').classList.remove('hidden');
 }
 
 function closePomodoroTaskPanel() {
     document.getElementById('pomodoro-task-panel').classList.add('translate-x-full');
+    document.getElementById('pomodoro-task-panel').classList.remove('shadow-2xl');
+    document.getElementById('pomodoro-task-panel').classList.add('shadow-none');
     document.getElementById('pomodoro-task-panel-overlay').classList.add('hidden');
     // 如果任务选择面板是从"新增专注记录"弹窗中打开的，关闭后重新显示弹窗
     if (_addRecordTaskPanelOpen) {
@@ -1561,10 +1565,6 @@ function startPomodoro() {
     _pomodoroPaused = false;
     _pomodoroPhaseTransition = false;
 
-    // 移除可能残留的确认弹窗
-    const confirmModal = document.getElementById('pomodoro-confirm-modal');
-    if (confirmModal) confirmModal.remove();
-
     updateMainViewBackground();
     updateMainContentBackground();
     pomodoroState.startedAt = Date.now();
@@ -1934,14 +1934,22 @@ function getTaskFocusMinutes(taskId) {
     return _taskFocusMinutesCache[taskId] || 0;
 }
 
-// 统计唯一番茄专注周期数（同一date的拆分记录算作1个周期）
+// 统计番茄专注周期数：
+// - 按 date 分组（同一会话的拆分记录共享 date，算 1 个周期）
+// - 每组取最大 pomodoroCount（默认 1，手动新增可指定如 3 表示 3 个番茄）
+// - 全部求和
 function countUniqueSessions(records) {
-    const seen = new Set();
+    const groups = new Map();
     records.forEach(r => {
         const key = r.date;
-        if (!seen.has(key)) seen.add(key);
+        const cnt = r.pomodoroCount || 1;
+        if (!groups.has(key) || cnt > groups.get(key)) {
+            groups.set(key, cnt);
+        }
     });
-    return seen.size;
+    let total = 0;
+    groups.forEach(v => total += v);
+    return total;
 }
 
 function formatFocusMinutes(minutes) {
@@ -2163,6 +2171,10 @@ function updateSidebarPomodoroTimer() {
         }
         
         // 根据阶段和状态设置背景色
+        // 注意：侧栏背景流动效果遵循"背景流动效果"开关（settings.bgFlowEffect）。
+        //   开关开启时播放 background-position 流动动画（pomodoro-focus-flow / pomodoro-break-flow）；
+        //   开关关闭时使用静态渐变背景，不播放动画。
+        const flowEnabled = settings.bgFlowEffect === true;
         if (pomodoroState.phase === 'focus') {
             if (pomodoroState.state === 'rest_ended') {
                 // rest_ended 状态：静态蓝色背景，不播放动画
@@ -2170,11 +2182,18 @@ function updateSidebarPomodoroTimer() {
                 sidebarTimer.style.backgroundSize = '100% 100%';
                 sidebarTimer.style.animation = 'none';
                 sidebarTimer.style.animationPlayState = '';
-            } else {
+            } else if (flowEnabled) {
+                // 开关开启：播放蓝色渐变流动动画
                 sidebarTimer.style.background = 'linear-gradient(135deg, #0A1628 0%, #122543 14%, #1A3562 28%, #234780 42%, #2F5A9C 57%, #3D6DB5 71%, #4B7EC9 85%, #3D6DB5 100%)';
                 sidebarTimer.style.backgroundSize = '400% 400%';
                 sidebarTimer.style.animation = 'pomodoro-focus-flow 25s ease-in-out infinite';
                 sidebarTimer.style.animationPlayState = (pomodoroState.state === 'focusing') ? 'running' : 'paused';
+            } else {
+                // 开关关闭：静态蓝色渐变背景，不播放动画
+                sidebarTimer.style.background = 'linear-gradient(135deg, #0A1628 0%, #1A3562 50%, #2F5A9C 100%)';
+                sidebarTimer.style.backgroundSize = '100% 100%';
+                sidebarTimer.style.animation = 'none';
+                sidebarTimer.style.animationPlayState = '';
             }
         } else if (pomodoroState.state === 'completed') {
             // completed 状态：静态绿色背景，不播放动画
@@ -2182,12 +2201,18 @@ function updateSidebarPomodoroTimer() {
             sidebarTimer.style.backgroundSize = '100% 100%';
             sidebarTimer.style.animation = 'none';
             sidebarTimer.style.animationPlayState = '';
-        } else {
-            // resting 状态：播放绿色渐变动画
+        } else if (flowEnabled) {
+            // 开关开启：resting 状态播放绿色渐变流动动画
             sidebarTimer.style.background = 'linear-gradient(135deg, #184A36 0%, #1F5A43 14%, #266950 28%, #2D795C 42%, #348869 57%, #3C9876 71%, #40A37F 85%, #3C9876 100%)';
             sidebarTimer.style.backgroundSize = '400% 400%';
             sidebarTimer.style.animation = 'pomodoro-break-flow 25s ease-in-out infinite';
             sidebarTimer.style.animationPlayState = (pomodoroState.state === 'resting') ? 'running' : 'paused';
+        } else {
+            // 开关关闭：resting 状态静态绿色渐变背景，不播放动画
+            sidebarTimer.style.background = 'linear-gradient(135deg, #1F5A43 0%, #266950 25%, #2D795C 50%, #348869 75%, #3C9876 100%)';
+            sidebarTimer.style.backgroundSize = '100% 100%';
+            sidebarTimer.style.animation = 'none';
+            sidebarTimer.style.animationPlayState = '';
         }
     } else {
         // idle / end_settlement / ended 状态：隐藏
@@ -2225,6 +2250,8 @@ function openRelinkTaskPanel(recordIdx) {
         record.taskId
     );
     document.getElementById('pomodoro-task-panel').classList.remove('translate-x-full');
+    document.getElementById('pomodoro-task-panel').classList.add('shadow-2xl');
+    document.getElementById('pomodoro-task-panel').classList.remove('shadow-none');
     document.getElementById('pomodoro-task-panel-overlay').classList.remove('hidden');
 }
 
@@ -2413,6 +2440,8 @@ function closePomodoroAddRecord() {
     if (_addRecordTaskPanelOpen) {
         _addRecordTaskPanelOpen = false;
         document.getElementById('pomodoro-task-panel').classList.add('translate-x-full');
+    document.getElementById('pomodoro-task-panel').classList.remove('shadow-2xl');
+    document.getElementById('pomodoro-task-panel').classList.add('shadow-none');
         document.getElementById('pomodoro-task-panel-overlay').classList.add('hidden');
     }
     const modal = document.getElementById('pomodoro-add-record-modal');
@@ -2450,6 +2479,8 @@ function openPomodoroAddRecordTaskPanel() {
     _addRecordTaskPanelOpen = true;
 
     document.getElementById('pomodoro-task-panel').classList.remove('translate-x-full');
+    document.getElementById('pomodoro-task-panel').classList.add('shadow-2xl');
+    document.getElementById('pomodoro-task-panel').classList.remove('shadow-none');
     document.getElementById('pomodoro-task-panel-overlay').classList.remove('hidden');
 }
 
@@ -2577,13 +2608,14 @@ function submitPomodoroAddRecord() {
         return;
     }
 
-    let finalEnd, durationMin;
+    let finalEnd, durationMin, finalPomodoroCount;
+    const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
 
     if (_addRecordLastFilled === 'pomodoroCount' && hasCount) {
         // 番茄数为准
-        const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
         durationMin = Math.max(1, Math.round(pomodoroCount * fd));
         finalEnd = new Date(start.getTime() + durationMin * 60000);
+        finalPomodoroCount = pomodoroCount;
     } else if (hasEnd) {
         // 结束时间为准（或默认）
         if (end <= start) {
@@ -2592,11 +2624,13 @@ function submitPomodoroAddRecord() {
         }
         durationMin = Math.max(1, Math.round((end - start) / 60000));
         finalEnd = end;
+        // 由时长反算番茄数（按当前专注时长设置，四舍五入，至少 1）
+        finalPomodoroCount = Math.max(1, Math.round(durationMin / fd));
     } else {
         // 仅有番茄数
-        const fd = pomodoroState.focusDuration || settings.focusDuration || 25;
         durationMin = Math.max(1, Math.round(pomodoroCount * fd));
         finalEnd = new Date(start.getTime() + durationMin * 60000);
+        finalPomodoroCount = pomodoroCount;
     }
 
     // 校验：结束时间不能超过当前时刻
@@ -2606,7 +2640,7 @@ function submitPomodoroAddRecord() {
         return;
     }
 
-    // 构造记录（与服务器端 _do_pomodoro_complete 的结构一致）
+    // 构造记录（与服务器端 _do_pomodoro_complete 的结构一致，新增 pomodoroCount 字段）
     const task = _addRecordTaskId ? tasks.find(t => t.id === _addRecordTaskId) : null;
     const startedAtISO = start.toISOString();
     const endedAtISO = finalEnd.toISOString();
@@ -2617,7 +2651,8 @@ function submitPomodoroAddRecord() {
         endedAt: endedAtISO,
         duration: durationMin,
         taskName: task ? task.title : '一般专注',
-        taskId: _addRecordTaskId || null
+        taskId: _addRecordTaskId || null,
+        pomodoroCount: finalPomodoroCount
     };
 
     pomodoroHistory.push(record);

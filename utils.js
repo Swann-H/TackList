@@ -671,7 +671,7 @@ function getTaskBarColor(task, fallbackColor) {
 // 工具函数
 // filterTasks：单次遍历合并所有条件，避免链式 .filter() 重复扫描与中间数组分配。
 // 各条件被预计算为闭包/集合，循环内一次判断全部通过才入结果数组。
-function filterTasks(taskList) {
+function filterTasks(taskList, opts) {
     // 预计算各筛选条件（在循环外完成，避免每任务重复计算）
     const hasListFilter = !!currentListId;
     const hasTagFilter = currentTagIds && currentTagIds.length > 0;
@@ -758,7 +758,11 @@ function filterTasks(taskList) {
     lists.forEach(l => { if (l.archived) archivedSet.add(l.id); });
     const hasArchived = archivedSet.size > 0;
 
-    const hideCompleted = !settings.showCompleted && settings.showCompleted !== undefined;
+    // 完成态过滤：优先使用视图级传入的 includeCompleted 覆盖；否则回退全局 settings.showCompleted
+    const includeCompleted = (opts && typeof opts.includeCompleted === 'boolean')
+        ? opts.includeCompleted
+        : (settings.showCompleted !== false);
+    const hideCompleted = !includeCompleted;
 
     // 单次遍历合并所有条件
     const filtered = [];
@@ -901,17 +905,151 @@ function sortTasksByCompletion(taskList) {
     return [...incomplete, ...completed];
 }
 
-function getTasksForDate(date) {
-    const dateTasks = filterTasks(tasks).filter(t => {
+function getTasksForDate(date, opts) {
+    const includeCompleted = (opts && typeof opts.includeCompleted === 'boolean') ? opts.includeCompleted : (settings.showCompleted !== false);
+    const dateTasks = filterTasks(tasks, { includeCompleted }).filter(t => {
         return isTaskVisibleOnDate(t, date);
     });
     return sortTasksByCompletion(dateTasks);
+}
+
+// ---------- 视图自定义（增删 / 排序 / 默认首页）----------
+// 六个可自定义视图的元数据。id 与 switchView 的视图名一致；icon 用于移动端底部导航。
+const VIEW_DEFS = {
+    task:     { label: '任务',   icon: 'fas fa-list-check' },
+    schedule: { label: '日程',   icon: 'fas fa-calendar-day' },
+    week:     { label: '周',     icon: 'fas fa-calendar-week' },
+    month:    { label: '月',     icon: 'fas fa-calendar' },
+    quadrant: { label: '四象限', icon: 'fas fa-th-large' },
+    kanban:   { label: '看板',   icon: 'fas fa-columns' }
+};
+const VIEW_ORDER_DEFAULT = ['task', 'schedule', 'week', 'month', 'quadrant', 'kanban'];
+
+// 读取/规范化视图顺序数组（[{id, enabled}]）；保证六个视图齐全、顺序合法。
+function getViewOrder() {
+    if (!settings.viewOrder || !Array.isArray(settings.viewOrder) || settings.viewOrder.length === 0) {
+        settings.viewOrder = VIEW_ORDER_DEFAULT.map(function (id) { return { id: id, enabled: true }; });
+    }
+    const existing = settings.viewOrder.map(function (v) { return v.id; });
+    VIEW_ORDER_DEFAULT.forEach(function (id) {
+        if (!existing.includes(id)) settings.viewOrder.push({ id: id, enabled: true });
+    });
+    // 去重：相同 id 仅保留首次出现，避免 viewOrder 出现重复项导致视图被重复渲染
+    // （典型表现：禁用某视图后，「已启用」区仍多出一份同名视图）
+    const _seen = {};
+    settings.viewOrder = settings.viewOrder.filter(function (v) {
+        if (!v || !v.id || _seen[v.id]) return false;
+        _seen[v.id] = true;
+        return true;
+    });
+    return settings.viewOrder;
+}
+
+// 已启用的视图 id（按设置顺序）
+function getEnabledViews() {
+    return getViewOrder().filter(function (v) { return v.enabled; }).map(function (v) { return v.id; });
+}
+
+// 默认首页视图：优先 settings.defaultHomeView（须为已启用项），否则回退到第一个启用项
+function getHomeView() {
+    const order = getViewOrder();
+    if (settings.defaultHomeView && order.some(function (v) { return v.id === settings.defaultHomeView && v.enabled; })) {
+        return settings.defaultHomeView;
+    }
+    const first = order.find(function (v) { return v.enabled; });
+    return first ? first.id : VIEW_ORDER_DEFAULT[0];
+}
+
+function setHomeView(id) {
+    settings.defaultHomeView = id;
+    settings.defaultView = id; // 兼容旧读取方
+}
+
+// ---------- 通用「视图配置」右侧滑出面板管理 ----------
+// 象限/日程/周/月四视图复用同一套显隐与「点击外部关闭」逻辑，避免分散实现。
+// _showKanbanPanel / _hideKanbanPanel 为通用显隐（仅切换 translate-x-full），可直接复用。
+const _viewConfigPanels = {};
+function _registerViewConfig(key, panelId, btnId) {
+    _viewConfigPanels[key] = { panelId: panelId, btnId: btnId, open: false, onClose: null };
+}
+let _viewConfigOutsideBound = false;
+function openViewConfigPanel(key, onClose) {
+    const st = _viewConfigPanels[key];
+    if (!st) return;
+    st.open = true;
+    st.onClose = onClose || null;
+    _showKanbanPanel(st.panelId);
+    if (!_viewConfigOutsideBound) {
+        document.addEventListener('click', onViewConfigPanelOutside, true);
+        _viewConfigOutsideBound = true;
+    }
+}
+function closeViewConfigPanel(key, skipCb) {
+    const st = _viewConfigPanels[key];
+    if (!st || !st.open) return;
+    st.open = false;
+    const cb = st.onClose;
+    st.onClose = null;
+    _hideKanbanPanel(st.panelId);
+    let anyOpen = false;
+    for (const k in _viewConfigPanels) { if (_viewConfigPanels[k].open) { anyOpen = true; break; } }
+    if (!anyOpen && _viewConfigOutsideBound) {
+        document.removeEventListener('click', onViewConfigPanelOutside, true);
+        _viewConfigOutsideBound = false;
+    }
+    if (!skipCb && cb) cb();
+}
+function onViewConfigPanelOutside(e) {
+    for (const k in _viewConfigPanels) {
+        const st = _viewConfigPanels[k];
+        if (!st.open) continue;
+        const panel = document.getElementById(st.panelId);
+        if (panel && panel.contains(e.target)) continue;
+        if (e.target.closest && e.target.closest('#' + st.btnId)) continue;
+        closeViewConfigPanel(k);
+        break;
+    }
+}
+
+// 关闭所有已打开的视图配置面板（切换视图时调用）
+function closeAllViewConfigPanels() {
+    for (const k in _viewConfigPanels) {
+        if (_viewConfigPanels[k].open) closeViewConfigPanel(k, true);
+    }
+    if (typeof closeKanbanConfig === 'function') closeKanbanConfig(true);
+    if (typeof closeTaskConfig === 'function') closeTaskConfig(true);
 }
 
 function isSameDay(d1, d2) {
     return d1.getFullYear() === d2.getFullYear() &&
            d1.getMonth() === d2.getMonth() &&
            d1.getDate() === d2.getDate();
+}
+
+/**
+ * 根据设置项 defaultTaskDate 的值，返回对应的默认任务日期（00:00:00）。
+ * @param {string} mode - 'none' | 'today' | 'tomorrow' | 'nextmonday'
+ * @returns {Date|null} 对应的日期，或 null（无日期）
+ */
+function getDefaultTaskDate(mode) {
+    if (!mode || mode === 'none') return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (mode === 'today') return today;
+    if (mode === 'tomorrow') {
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        return tomorrow;
+    }
+    if (mode === 'nextmonday') {
+        const dayOfWeek = today.getDay(); // 0=周日, 1=周一, ..., 6=周六
+        let daysUntilMonday = (8 - dayOfWeek) % 7;
+        if (daysUntilMonday === 0) daysUntilMonday = 7;
+        const nextMonday = new Date(today);
+        nextMonday.setDate(nextMonday.getDate() + daysUntilMonday);
+        return nextMonday;
+    }
+    return null;
 }
 
 function formatDate(date) {
@@ -1158,8 +1296,9 @@ function loadGoogleFont(fontFamily, callback) {
 // ==================== 主题配色系统 ====================
 // 包含：内置配色（3套，适配深色/浅色）、自定义强调色生成、背景图提取（3套）
 // 调色板结构：
-//   - 内置/自定义：{ light: {...}, dark: {...} }，根据当前主题自动选择变体
-//   - 背景图提取：{ vibrant: {...}, muted: {...}, dark: {...} }，扁平结构，固定配色
+//   - 内置/自定义/背景图提取：均采用 { light: {...}, dark: {...} } 双变体结构，
+//     根据当前主题自动选择变体，确保文字与背景对比度始终达标
+//   - 背景图提取的 3 套：vibrant（鲜艳）/ muted（柔和）/ steady（沉稳）
 
 // 内置配色方案（每套含 light/dark 双变体）
 const BUILTIN_PALETTES = {
@@ -1308,8 +1447,9 @@ function generatePaletteFromAccent(hex) {
 }
 
 // 根据调色板名解析出调色板对象（用于应用和预览）
-// 支持的 key：none / builtin:blue / builtin:green / builtin:amber / custom:<hex> / vibrant / muted / dark
+// 支持的 key：none / builtin:blue / builtin:green / builtin:amber / custom:<hex> / vibrant / muted / steady
 // 优先级：用户编辑后的 customPalettes > 内置 BUILTIN_PALETTES / themePaletteColors
+// 返回的对象可能是 {light, dark} 双变体结构或扁平结构，由 applyPaletteToCssVars 统一处理
 function resolvePaletteObject(name) {
     if (!name || name === 'none') return null;
     // 用户编辑后的调色板优先（含内置和背景图提取的）
@@ -1348,9 +1488,63 @@ function repairStalePaletteCustoms() {
     }
 }
 
+// 背景图取色调色板数据迁移：
+// 旧版本 vibrant/muted/dark 为扁平结构（无 light/dark 双变体），且 'dark' 键在新版本中
+// 已重命名为 'steady'。本函数：
+//   1. 检测 themePaletteColors 是否为旧扁平格式，若是则清空（用户需重新提取）
+//   2. 同时清空 customPalettes 中遗留的 vibrant/muted/dark/steady 编辑记录
+//   3. 若 themePalette 仍指向 'dark'，迁移为 'steady'（仅当 themePaletteColors 为新格式时才有效）
+//   4. 若 themePalette 指向已被清空的 vibrant/muted/steady，重置为 'none'
+function migrateBgImagePalettes() {
+    var BG_PALETTE_KEYS = ['vibrant', 'muted', 'dark', 'steady'];
+    var tp = settings.themePaletteColors;
+    var hasOldFormat = false;
+    if (tp) {
+        // 旧扁平格式：vibrant/muted/dark 任一存在但不包含 light/dark 子键
+        BG_PALETTE_KEYS.forEach(function (key) {
+            if (tp[key] && !tp[key].light && !tp[key].dark) {
+                hasOldFormat = true;
+            }
+        });
+    }
+    if (hasOldFormat) {
+        // 旧格式无法直接迁移到双变体结构，清空让用户重新提取
+        settings.themePaletteColors = null;
+        // themePalette 若指向任意背景图调色板，重置为 none（避免悬空引用）
+        if (BG_PALETTE_KEYS.indexOf(settings.themePalette) !== -1) {
+            settings.themePalette = 'none';
+        }
+    } else if (tp) {
+        // 新格式：将 'dark' 键重命名为 'steady'
+        if (tp.dark && !tp.steady) {
+            tp.steady = tp.dark;
+            delete tp.dark;
+        }
+        if (settings.themePalette === 'dark') {
+            settings.themePalette = 'steady';
+        }
+    } else {
+        // 无 themePaletteColors：仅做 themePalette 命名迁移
+        if (settings.themePalette === 'dark') {
+            settings.themePalette = 'steady';
+        }
+    }
+    // 丢弃 customPalettes 中遗留的背景图调色板编辑记录
+    // （旧扁平结构与新双变体结构不兼容，按用户确认直接丢弃）
+    if (settings.customPalettes) {
+        BG_PALETTE_KEYS.forEach(function (key) {
+            delete settings.customPalettes[key];
+        });
+        if (Object.keys(settings.customPalettes).length === 0) {
+            settings.customPalettes = null;
+        }
+    }
+}
+
 // ==================== 背景图主题色提取（从背景图生成 3 套调色板） ====================
-// 三种风格：vibrant（鲜艳）/ muted（柔和）/ dark（深色）
-// 每套包含：accent（强调色）、bgPrimary/bgSecondary/bgTertiary（背景）、textPrimary/textSecondary/textMuted（文字）、border（边框）
+// 三种风格：vibrant（鲜艳）/ muted（柔和）/ steady（沉稳）
+// 每套含 light/dark 双变体，根据当前主题自动选择，确保文字与背景对比度始终达标。
+// 每个变体包含：accent（强调色）、bgPrimary/bgSecondary/bgTertiary（背景）、textPrimary/textSecondary/textMuted（文字）、border（边框）
 
 // RGB 转 HSL
 function _rgbToHsl(r, g, b) {
@@ -1467,7 +1661,7 @@ function _extractDominantColors(imageData, maxColors) {
     return sorted.map(e => e[0].split(',').map(Number));
 }
 
-// 根据主色调生成 3 套调色板
+// 根据主色调生成 3 套调色板（每套含 light/dark 双变体）
 // options.randomPerturb: 是否对色相/饱和度/亮度加随机扰动（用于"重新生成"按钮）
 function generateThemePalettes(dominantColors, options) {
     if (!dominantColors || dominantColors.length === 0) return null;
@@ -1493,86 +1687,139 @@ function generateThemePalettes(dominantColors, options) {
         l = Math.max(0.15, Math.min(0.85, l + (Math.random() - 0.5) * 0.1));
     }
 
-    // 生成 3 套调色板
     const palettes = {};
 
-    // 1. Vibrant 鲜艳风格：高饱和、明亮强调色 + 浅色背景
-    const vAccent = _hslToRgb(hue, Math.min(1, s + 0.2), 0.5);
-    const vAccentHover = _hslToRgb(hue, Math.min(1, s + 0.2), 0.42);
-    const vBgPrimary = _hslToRgb(hue, 0.15, 0.97);
-    const vBgSecondary = _hslToRgb(hue, 0.1, 1.0);
-    const vBgTertiary = _hslToRgb(hue, 0.18, 0.94);
-    // 文字色经 WCAG 对比度验证（正文 4.5:1，次要 3.0:1）
-    const vTextPrimary = _ensureContrast([hue, 0.2, 0.12], vBgPrimary, 4.5);
-    const vTextSecondary = _ensureContrast([hue, 0.1, 0.4], vBgPrimary, 3.0);
-    const vTextMuted = _ensureContrast([hue, 0.08, 0.5], vBgPrimary, 3.0);
-    const vBorder = _hslToRgb(hue, 0.15, 0.88);
+    // ---- 1. Vibrant 鲜艳风格：高饱和强调色 ----
     palettes.vibrant = {
-        accent: _rgbToHex(...vAccent),
-        accentHover: _rgbToHex(...vAccentHover),
-        bgPrimary: _rgbToHex(...vBgPrimary),
-        bgPrimaryRgb: _rgbToRgbStr(...vBgPrimary),
-        bgSecondary: _rgbToHex(...vBgSecondary),
-        bgSecondaryRgb: _rgbToRgbStr(...vBgSecondary),
-        bgTertiary: _rgbToHex(...vBgTertiary),
-        bgTertiaryRgb: _rgbToRgbStr(...vBgTertiary),
-        textPrimary: _rgbToHex(...vTextPrimary),
-        textSecondary: _rgbToHex(...vTextSecondary),
-        textMuted: _rgbToHex(...vTextMuted),
-        border: _rgbToHex(...vBorder)
+        light: _buildVibrantLight(hue, s),
+        dark: _buildVibrantDark(hue, s)
     };
 
-    // 2. Muted 柔和风格：低饱和、温和色调
-    const mAccent = _hslToRgb(hue, Math.max(0.3, s * 0.7), 0.5);
-    const mAccentHover = _hslToRgb(hue, Math.max(0.3, s * 0.7), 0.42);
-    const mBgPrimary = _hslToRgb(hue, 0.08, 0.96);
-    const mBgSecondary = _hslToRgb(hue, 0.05, 0.99);
-    const mBgTertiary = _hslToRgb(hue, 0.1, 0.93);
-    const mTextPrimary = _ensureContrast([hue, 0.1, 0.18], mBgPrimary, 4.5);
-    const mTextSecondary = _ensureContrast([hue, 0.06, 0.42], mBgPrimary, 3.0);
-    const mTextMuted = _ensureContrast([hue, 0.05, 0.5], mBgPrimary, 3.0);
-    const mBorder = _hslToRgb(hue, 0.08, 0.87);
+    // ---- 2. Muted 柔和风格：低饱和、温和色调 ----
     palettes.muted = {
-        accent: _rgbToHex(...mAccent),
-        accentHover: _rgbToHex(...mAccentHover),
-        bgPrimary: _rgbToHex(...mBgPrimary),
-        bgPrimaryRgb: _rgbToRgbStr(...mBgPrimary),
-        bgSecondary: _rgbToHex(...mBgSecondary),
-        bgSecondaryRgb: _rgbToRgbStr(...mBgSecondary),
-        bgTertiary: _rgbToHex(...mBgTertiary),
-        bgTertiaryRgb: _rgbToRgbStr(...mBgTertiary),
-        textPrimary: _rgbToHex(...mTextPrimary),
-        textSecondary: _rgbToHex(...mTextSecondary),
-        textMuted: _rgbToHex(...mTextMuted),
-        border: _rgbToHex(...mBorder)
+        light: _buildMutedLight(hue, s),
+        dark: _buildMutedDark(hue, s)
     };
 
-    // 3. Dark 深色风格：深色背景 + 高对比强调色
-    const dAccent = _hslToRgb(hue, Math.min(1, s + 0.15), 0.62);
-    const dAccentHover = _hslToRgb(hue, Math.min(1, s + 0.15), 0.52);
-    const dBgPrimary = _hslToRgb(hue, 0.15, 0.1);
-    const dBgSecondary = _hslToRgb(hue, 0.18, 0.15);
-    const dBgTertiary = _hslToRgb(hue, 0.15, 0.22);
-    const dTextPrimary = _ensureContrast([hue, 0.1, 0.95], dBgPrimary, 4.5);
-    const dTextSecondary = _ensureContrast([hue, 0.08, 0.75], dBgPrimary, 3.0);
-    const dTextMuted = _ensureContrast([hue, 0.06, 0.55], dBgPrimary, 3.0);
-    const dBorder = _hslToRgb(hue, 0.12, 0.28);
-    palettes.dark = {
-        accent: _rgbToHex(...dAccent),
-        accentHover: _rgbToHex(...dAccentHover),
-        bgPrimary: _rgbToHex(...dBgPrimary),
-        bgPrimaryRgb: _rgbToRgbStr(...dBgPrimary),
-        bgSecondary: _rgbToHex(...dBgSecondary),
-        bgSecondaryRgb: _rgbToRgbStr(...dBgSecondary),
-        bgTertiary: _rgbToHex(...dBgTertiary),
-        bgTertiaryRgb: _rgbToRgbStr(...dBgTertiary),
-        textPrimary: _rgbToHex(...dTextPrimary),
-        textSecondary: _rgbToHex(...dTextSecondary),
-        textMuted: _rgbToHex(...dTextMuted),
-        border: _rgbToHex(...dBorder)
+    // ---- 3. Steady 沉稳风格：中性、低饱和、稳定 ----
+    palettes.steady = {
+        light: _buildSteadyLight(hue, s),
+        dark: _buildSteadyDark(hue, s)
     };
 
     return palettes;
+}
+
+// ---- Vibrant 鲜艳：高饱和强调色 ----
+// Light 变体：浅色背景 + 高饱和强调色 + 深色文字
+function _buildVibrantLight(hue, s) {
+    const accent = _hslToRgb(hue, Math.min(1, s + 0.2), 0.5);
+    const accentHover = _hslToRgb(hue, Math.min(1, s + 0.2), 0.42);
+    const bgPrimary = _hslToRgb(hue, 0.15, 0.97);
+    const bgSecondary = _hslToRgb(hue, 0.1, 1.0);
+    const bgTertiary = _hslToRgb(hue, 0.18, 0.94);
+    const textPrimary = _ensureContrast([hue, 0.2, 0.12], bgPrimary, 4.5);
+    const textSecondary = _ensureContrast([hue, 0.1, 0.4], bgPrimary, 3.0);
+    const textMuted = _ensureContrast([hue, 0.08, 0.5], bgPrimary, 3.0);
+    const border = _hslToRgb(hue, 0.15, 0.88);
+    return _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+        textPrimary, textSecondary, textMuted, border);
+}
+
+// Dark 变体：深色背景 + 高饱和明亮强调色 + 浅色文字
+function _buildVibrantDark(hue, s) {
+    const accent = _hslToRgb(hue, Math.min(1, s + 0.2), 0.62);
+    const accentHover = _hslToRgb(hue, Math.min(1, s + 0.2), 0.72);
+    const bgPrimary = _hslToRgb(hue, 0.15, 0.1);
+    const bgSecondary = _hslToRgb(hue, 0.18, 0.15);
+    const bgTertiary = _hslToRgb(hue, 0.15, 0.22);
+    const textPrimary = _ensureContrast([hue, 0.1, 0.95], bgPrimary, 4.5);
+    const textSecondary = _ensureContrast([hue, 0.08, 0.75], bgPrimary, 3.0);
+    const textMuted = _ensureContrast([hue, 0.06, 0.6], bgPrimary, 3.0);
+    const border = _hslToRgb(hue, 0.12, 0.28);
+    return _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+        textPrimary, textSecondary, textMuted, border);
+}
+
+// ---- Muted 柔和：低饱和、温和色调 ----
+// Light 变体：柔和浅色背景 + 低饱和强调色
+function _buildMutedLight(hue, s) {
+    const accent = _hslToRgb(hue, Math.max(0.3, s * 0.7), 0.5);
+    const accentHover = _hslToRgb(hue, Math.max(0.3, s * 0.7), 0.42);
+    const bgPrimary = _hslToRgb(hue, 0.08, 0.96);
+    const bgSecondary = _hslToRgb(hue, 0.05, 0.99);
+    const bgTertiary = _hslToRgb(hue, 0.1, 0.93);
+    const textPrimary = _ensureContrast([hue, 0.1, 0.18], bgPrimary, 4.5);
+    const textSecondary = _ensureContrast([hue, 0.06, 0.42], bgPrimary, 3.0);
+    const textMuted = _ensureContrast([hue, 0.05, 0.5], bgPrimary, 3.0);
+    const border = _hslToRgb(hue, 0.08, 0.87);
+    return _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+        textPrimary, textSecondary, textMuted, border);
+}
+
+// Dark 变体：柔和深色背景 + 低饱和强调色
+function _buildMutedDark(hue, s) {
+    const accent = _hslToRgb(hue, Math.max(0.3, s * 0.7), 0.6);
+    const accentHover = _hslToRgb(hue, Math.max(0.3, s * 0.7), 0.7);
+    const bgPrimary = _hslToRgb(hue, 0.1, 0.13);
+    const bgSecondary = _hslToRgb(hue, 0.12, 0.18);
+    const bgTertiary = _hslToRgb(hue, 0.1, 0.24);
+    const textPrimary = _ensureContrast([hue, 0.08, 0.92], bgPrimary, 4.5);
+    const textSecondary = _ensureContrast([hue, 0.06, 0.7], bgPrimary, 3.0);
+    const textMuted = _ensureContrast([hue, 0.05, 0.55], bgPrimary, 3.0);
+    const border = _hslToRgb(hue, 0.1, 0.3);
+    return _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+        textPrimary, textSecondary, textMuted, border);
+}
+
+// ---- Steady 沉稳：中性、低饱和、稳定 ----
+// Light 变体：中性浅色背景 + 中等饱和强调色
+function _buildSteadyLight(hue, s) {
+    const accent = _hslToRgb(hue, Math.max(0.25, s * 0.5), 0.45);
+    const accentHover = _hslToRgb(hue, Math.max(0.25, s * 0.5), 0.38);
+    const bgPrimary = _hslToRgb(hue, 0.05, 0.96);
+    const bgSecondary = _hslToRgb(hue, 0.03, 0.99);
+    const bgTertiary = _hslToRgb(hue, 0.06, 0.92);
+    const textPrimary = _ensureContrast([hue, 0.05, 0.15], bgPrimary, 4.5);
+    const textSecondary = _ensureContrast([hue, 0.04, 0.4], bgPrimary, 3.0);
+    const textMuted = _ensureContrast([hue, 0.03, 0.5], bgPrimary, 3.0);
+    const border = _hslToRgb(hue, 0.05, 0.86);
+    return _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+        textPrimary, textSecondary, textMuted, border);
+}
+
+// Dark 变体：中性深色背景 + 中等饱和强调色
+function _buildSteadyDark(hue, s) {
+    const accent = _hslToRgb(hue, Math.max(0.25, s * 0.5), 0.58);
+    const accentHover = _hslToRgb(hue, Math.max(0.25, s * 0.5), 0.68);
+    const bgPrimary = _hslToRgb(hue, 0.08, 0.11);
+    const bgSecondary = _hslToRgb(hue, 0.1, 0.16);
+    const bgTertiary = _hslToRgb(hue, 0.08, 0.22);
+    const textPrimary = _ensureContrast([hue, 0.05, 0.93], bgPrimary, 4.5);
+    const textSecondary = _ensureContrast([hue, 0.04, 0.72], bgPrimary, 3.0);
+    const textMuted = _ensureContrast([hue, 0.03, 0.58], bgPrimary, 3.0);
+    const border = _hslToRgb(hue, 0.08, 0.27);
+    return _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+        textPrimary, textSecondary, textMuted, border);
+}
+
+// 装配调色板对象（含 RGB 字符串字段）
+function _assemblePalette(accent, accentHover, bgPrimary, bgSecondary, bgTertiary,
+    textPrimary, textSecondary, textMuted, border) {
+    return {
+        accent: _rgbToHex(...accent),
+        accentHover: _rgbToHex(...accentHover),
+        bgPrimary: _rgbToHex(...bgPrimary),
+        bgPrimaryRgb: _rgbToRgbStr(...bgPrimary),
+        bgSecondary: _rgbToHex(...bgSecondary),
+        bgSecondaryRgb: _rgbToRgbStr(...bgSecondary),
+        bgTertiary: _rgbToHex(...bgTertiary),
+        bgTertiaryRgb: _rgbToRgbStr(...bgTertiary),
+        textPrimary: _rgbToHex(...textPrimary),
+        textSecondary: _rgbToHex(...textSecondary),
+        textMuted: _rgbToHex(...textMuted),
+        border: _rgbToHex(...border)
+    };
 }
 
 // 主入口：从背景图提取 3 套调色板
@@ -1599,6 +1846,17 @@ function extractThemePalettes(imageSrc, callback, options) {
             const imageData = ctx.getImageData(0, 0, sampleSize, sampleSize);
             const dominant = _extractDominantColors(imageData, 5);
             const palettes = generateThemePalettes(dominant, options);
+            // 同时计算图片整体亮度，供调用方据此自动切换深色/浅色主题
+            // 使用与 analyzeBgImageBrightness 一致的感知亮度公式（Rec.601）
+            if (palettes) {
+                const data = imageData.data;
+                let totalBrightness = 0;
+                const pixelCount = data.length / 4;
+                for (let i = 0; i < data.length; i += 4) {
+                    totalBrightness += (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255;
+                }
+                palettes._brightness = totalBrightness / pixelCount;
+            }
             callback(palettes);
         } catch (e) {
             console.error('Theme palette extraction failed:', e);
@@ -1822,9 +2080,12 @@ function isTaskOverdue(task) {
     return taskDate < now;
 }
 
-// 渲染"开始专注"按钮（受 settings.showFocusButton 开关控制）
-function renderFocusButton(taskId, extraClasses = '') {
-    if (settings && settings.showFocusButton === false) return '';
+// 渲染"开始专注"按钮（受 showFocusButton 开关控制；视图级可传布尔覆盖，不传则回退全局 settings.showFocusButton）
+function renderFocusButton(taskId, showFocusButton, extraClasses = '') {
+    const visible = (typeof showFocusButton === 'boolean')
+        ? showFocusButton
+        : (settings.showFocusButton !== false);
+    if (!visible) return '';
     return `<button onclick="event.stopPropagation(); startPomodoroForTask('${taskId}')"
             class="pomodoro-focus-btn flex-shrink-0 opacity-0 group-hover:opacity-100 text-green-600 w-5 h-5 flex items-center justify-center transition duration-200 ${extraClasses}"
             title="开始专注">
