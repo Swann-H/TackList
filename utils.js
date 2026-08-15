@@ -613,7 +613,11 @@ function getQuadrantColorClass(task, opts) {
     const hasBg = !!settings.bgImage;
     // 底色仅在 'bg' 模式启用；forceBg 可强制开启（计划面板等保持现状的视图）
     const usePriority = (opts && opts.forceBg) || getPriorityDisplayMode() === 'bg';
-    const neutralBg = hasBg ? 'bg-slate-300/25' : (isDark ? 'bg-gray-700/30' : 'bg-gray-50');
+    // 有背景图时，中性底色跟随图片明暗（复用 shouldUseLightText 的亮度分析），
+    // 暗图用深色叠加、亮图用浅色叠加，避免固定浅灰在暗图上发雾、与自适应文字错配。
+    const neutralBg = hasBg
+        ? (shouldUseLightText() ? 'bg-black/25' : 'bg-white/25')
+        : (isDark ? 'bg-gray-700/30' : 'bg-gray-50');
     if (task.important && task.urgent) {
         if (hasBg) return { bg: usePriority ? 'bg-red-500/25' : neutralBg, border: 'border-l-red-400', dot: 'bg-red-400', light: '#fee2e2' };
         return isDark
@@ -630,10 +634,11 @@ function getQuadrantColorClass(task, opts) {
             ? { bg: usePriority ? 'bg-yellow-900/20' : neutralBg, border: 'border-l-yellow-400', dot: 'bg-yellow-400', light: '#713f12' }
             : { bg: usePriority ? 'bg-yellow-50' : neutralBg, border: 'border-l-yellow-400', dot: 'bg-yellow-400', light: '#fef9c3' };
     } else {
-        if (hasBg) return { bg: 'bg-slate-300/25', border: 'border-l-slate-400', dot: 'bg-slate-400', light: '#f3f4f6' };
+        // 不重要不紧急：始终用中性底色，与复选框边框/左侧色条/不显示模式保持一致（不按优先级单独上灰底）
+        if (hasBg) return { bg: neutralBg, border: 'border-l-slate-400', dot: 'bg-slate-400', light: '#f3f4f6' };
         return isDark
-            ? { bg: 'bg-gray-700/30', border: 'border-l-gray-400', dot: 'bg-gray-400', light: '#374151' }
-            : { bg: 'bg-gray-50', border: 'border-l-gray-400', dot: 'bg-gray-400', light: '#f3f4f6' };
+            ? { bg: neutralBg, border: 'border-l-gray-400', dot: 'bg-gray-400', light: '#374151' }
+            : { bg: neutralBg, border: 'border-l-gray-400', dot: 'bg-gray-400', light: '#f3f4f6' };
     }
 }
 
