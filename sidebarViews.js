@@ -405,7 +405,7 @@ function doMerge(draggedId, targetId) {
     };
     editingListId = newFolder.id;
     saveData();
-    renderLists();
+    renderLists(true); // 正处于编辑态（editingListId 已设置），须强制重建以立即显示清单集与命名输入框
     setTimeout(() => { const inp = document.getElementById('new-list-name'); if (inp) inp.focus(); }, 50);
 }
 
@@ -442,7 +442,7 @@ function doReorderToGap(draggedId, parentId, index) {
     lists.splice(insertAt, 0, dragged);
     normalizeListsOrder();
     saveData();
-    renderLists();
+    renderLists(true); // drop 属显式操作，强制重建确保即时反馈（编辑态守卫会拦截非强制渲染）
 }
 
 // 取消新建清单集的命名时，回退到合并前状态
