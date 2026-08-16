@@ -923,9 +923,9 @@ function renderMobileBottomNav() {
 
 function updateMobileBottomNav() {
     if (!isMobileView()) return;
-    // 检查是否需要重建（按钮数量或顺序变化）
+    // 检查是否需要重建（按钮数量或顺序变化）；「更多」按钮（mobile-nav-more-btn）常驻，不计入比较
     const order = getViewOrder().filter(v => v.enabled);
-    const existingBtns = document.querySelectorAll('#mobile-bottom-nav .mobile-nav-item');
+    const existingBtns = document.querySelectorAll('#mobile-bottom-nav .mobile-nav-item:not(#mobile-nav-more-btn)');
     let needsRebuild = existingBtns.length !== order.length;
     if (!needsRebuild) {
         existingBtns.forEach((btn, i) => {

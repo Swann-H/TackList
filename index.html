@@ -2469,7 +2469,7 @@
             
             <!-- 任务标题编辑 -->
             <div class="p-4 border-b border-theme flex items-start gap-3 flex-shrink-0">
-                <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-accent dark:border-white flex items-center justify-center transition hover:border-accent-hover dark:hover:border-accent-secondary flex-shrink-0 mt-1" id="detail-task-complete-btn">
+                <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-accent flex items-center justify-center transition flex-shrink-0 mt-1" id="detail-task-complete-btn">
                     <i class="fas fa-check text-xs hidden"></i>
                 </button>
                 <textarea id="detail-task-title" placeholder="任务标题" rows="1" class="flex-1 text-xl font-medium bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" style="min-height: 32px; max-height: 120px;"></textarea>
@@ -3291,51 +3291,6 @@
                                 </div>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">全局默认</label>
-                                <p class="text-xs text-theme-muted mb-2">以下设置作为各视图的默认值；各视图配置面板中可独立覆盖。</p>
-                                <div class="rounded-lg border border-theme p-3 bg-theme-tertiary space-y-3">
-                                    <div class="flex items-center justify-between">
-                                        <div>
-                                            <label class="text-sm font-medium text-theme-primary">显示已完成任务</label>
-                                            <p class="text-xs text-theme-secondary">默认在各视图中显示已完成的任务</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-show-completed" class="sr-only peer" checked>
-                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                        </label>
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <div>
-                                            <label class="text-sm font-medium text-theme-primary">显示农历</label>
-                                            <p class="text-xs text-theme-secondary">默认在日程/周/月视图中显示农历</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-show-lunar" class="sr-only peer" checked>
-                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                        </label>
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <div>
-                                            <label class="text-sm font-medium text-theme-primary">显示"开始专注"按钮</label>
-                                            <p class="text-xs text-theme-secondary">默认在任务卡片上显示专注按钮</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-show-focus-button" class="sr-only peer" checked>
-                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                        </label>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-theme-secondary mb-1">无日期任务位置</label>
-                                        <p class="text-xs text-theme-secondary mb-1">默认无日期任务的显示位置</p>
-                                        <select id="settings-no-date-position" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                            <option value="last">底部</option>
-                                            <option value="first">顶部</option>
-                                            <option value="none">不显示</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-                            <div>
                                 <label class="block text-sm font-medium text-theme-secondary mb-1">周开始于</label>
                                 <select id="settings-week-start" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
                                     <option value="monday">周一</option>
@@ -3373,7 +3328,7 @@
                                 </label>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">优先级显示方式</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-1">优先级显示方式</label>
                                 <p class="text-xs text-theme-secondary mb-1">选择任务优先级在视图中的呈现方式</p>
                                 <select id="settings-priority-display-mode" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
                                     <option value="checkbox">复选框边框</option>
@@ -3642,7 +3597,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.2</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.3</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3867,7 +3822,7 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">分组依据</label>
+                <label for="kc-groupby" class="block text-sm text-theme-secondary mb-1">分组依据</label>
                 <select id="kc-groupby" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                     <option value="custom">自定义</option>
                     <option value="time">时间</option>
@@ -3878,7 +3833,7 @@
                 </select>
             </div>
             <div id="kc-tagsub-wrap" class="hidden">
-                <label class="block text-sm text-theme-secondary mb-1">标签下二级分组</label>
+                <label for="kc-tagsub" class="block text-sm text-theme-secondary mb-1">标签下二级分组</label>
                 <select id="kc-tagsub" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                     <option value="list">清单</option>
                     <option value="time">时间</option>
@@ -3887,7 +3842,7 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">排序依据</label>
+                <label for="kc-sortby" class="block text-sm text-theme-secondary mb-1">排序依据</label>
                 <select id="kc-sortby" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                     <option value="time">时间</option>
                     <option value="createdTime">创建时间</option>
@@ -3898,37 +3853,44 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">排序方式</label>
-                <div class="flex gap-4">
+                <label id="kc-sortdir-label" class="block text-sm text-theme-secondary mb-1">排序方式</label>
+                <div class="flex gap-4" role="radiogroup" aria-labelledby="kc-sortdir-label">
                     <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="kc-sortdir" id="kc-sortdir-asc" value="asc" onchange="onKanbanConfigChange()"> 升序</label>
                     <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="kc-sortdir" id="kc-sortdir-desc" value="desc" onchange="onKanbanConfigChange()"> 降序</label>
                 </div>
             </div>
+            <div>
+                <label for="kc-nodatepos" class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
+                <select id="kc-nodatepos" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
+                    <option value="last">最末显示</option>
+                    <option value="first">优先显示</option>
+                </select>
+            </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示任务详情</span>
+                <span id="kc-showdetails-label" class="text-sm text-theme-primary">显示任务详情</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="kc-showdetails" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="kc-showdetails" aria-labelledby="kc-showdetails-label" onchange="onKanbanConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <span id="kc-showcompleted-label" class="text-sm text-theme-primary">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="kc-showcompleted" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="kc-showcompleted" aria-labelledby="kc-showcompleted-label" onchange="onKanbanConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                <span id="kc-showfocus-label" class="text-sm text-theme-primary">显示"开始专注"按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="kc-showfocus" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="kc-showfocus" aria-labelledby="kc-showfocus-label" onchange="onKanbanConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">列头仅显示未完成计数</span>
+                <span id="kc-countuncompleted-label" class="text-sm text-theme-primary">列头仅显示未完成计数</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="kc-countuncompleted" onchange="onKanbanConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="kc-countuncompleted" aria-labelledby="kc-countuncompleted-label" onchange="onKanbanConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
@@ -3938,6 +3900,9 @@
                     <i class="fas fa-chevron-right text-theme-muted"></i>
                 </button>
                 <p class="text-xs text-theme-muted mt-2">调整分组顺序、重命名、新增或删除分组</p>
+            </div>
+            <div class="pt-4 border-t border-theme">
+                <button onclick="resetKanbanViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
             </div>
         </div>
     </aside>
@@ -3950,7 +3915,7 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">分组依据</label>
+                <label for="tc-groupby" class="block text-sm text-theme-secondary mb-1">分组依据</label>
                 <select id="tc-groupby" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                     <option value="time">时间</option>
                     <option value="createdTime">创建时间</option>
@@ -3961,7 +3926,7 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">排序依据</label>
+                <label for="tc-sortby" class="block text-sm text-theme-secondary mb-1">排序依据</label>
                 <select id="tc-sortby" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                     <option value="time">时间</option>
                     <option value="createdTime">创建时间</option>
@@ -3972,48 +3937,51 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">排序方式</label>
-                <div class="flex gap-4">
+                <label id="tc-sortdir-label" class="block text-sm text-theme-secondary mb-1">排序方式</label>
+                <div class="flex gap-4" role="radiogroup" aria-labelledby="tc-sortdir-label">
                     <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="tc-sortdir" id="tc-sortdir-asc" value="asc" onchange="onTaskConfigChange()"> 升序</label>
                     <label class="flex items-center gap-1 text-theme-primary cursor-pointer"><input type="radio" name="tc-sortdir" id="tc-sortdir-desc" value="desc" onchange="onTaskConfigChange()"> 降序</label>
                 </div>
             </div>
             <div class="border-t border-theme pt-4 space-y-4">
                 <div class="flex items-center justify-between">
-                    <span class="text-sm text-theme-primary">显示已完成任务</span>
+                    <span id="tc-showcompleted-label" class="text-sm text-theme-primary">显示已完成任务</span>
                     <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="tc-showcompleted" onchange="onTaskConfigChange()" class="sr-only peer">
+                        <input type="checkbox" id="tc-showcompleted" aria-labelledby="tc-showcompleted-label" onchange="onTaskConfigChange()" class="sr-only peer">
                         <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                 </div>
                 <div>
-                    <label class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
+                    <label for="tc-nodatepos" class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
                     <select id="tc-nodatepos" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                         <option value="last">最末显示</option>
                         <option value="first">优先显示</option>
                     </select>
                 </div>
                 <div class="flex items-center justify-between">
-                    <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                    <span id="tc-showfocus-label" class="text-sm text-theme-primary">显示"开始专注"按钮</span>
                     <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="tc-showfocus" onchange="onTaskConfigChange()" class="sr-only peer">
+                        <input type="checkbox" id="tc-showfocus" aria-labelledby="tc-showfocus-label" onchange="onTaskConfigChange()" class="sr-only peer">
                         <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                 </div>
                 <div class="flex items-center justify-between">
-                    <span class="text-sm text-theme-primary">显示任务详情</span>
+                    <span id="tc-showdetails-label" class="text-sm text-theme-primary">显示任务详情</span>
                     <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="tc-showdetails" onchange="onTaskConfigChange()" class="sr-only peer">
+                        <input type="checkbox" id="tc-showdetails" aria-labelledby="tc-showdetails-label" onchange="onTaskConfigChange()" class="sr-only peer">
                         <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                 </div>
                 <div>
-                    <label class="block text-sm text-theme-secondary mb-1">分组默认折叠/展开</label>
+                    <label for="tc-collapse" class="block text-sm text-theme-secondary mb-1">分组默认折叠/展开</label>
                     <select id="tc-collapse" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                         <option value="all-expanded">全部展开</option>
                         <option value="only-completed-collapsed">仅折叠已完成</option>
                         <option value="all-collapsed">全部折叠</option>
                     </select>
+                </div>
+                <div class="pt-2 border-t border-theme">
+                    <button onclick="resetTaskViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
                 </div>
             </div>
         </div>
@@ -4027,25 +3995,28 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <span id="qc-showcompleted-label" class="text-sm text-theme-primary">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="qc-showcompleted" onchange="onQuadrantConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="qc-showcompleted" aria-labelledby="qc-showcompleted-label" onchange="onQuadrantConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                <span id="qc-showfocus-label" class="text-sm text-theme-primary">显示"开始专注"按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="qc-showfocus" onchange="onQuadrantConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="qc-showfocus" aria-labelledby="qc-showfocus-label" onchange="onQuadrantConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示任务详情</span>
+                <span id="qc-showdetails-label" class="text-sm text-theme-primary">显示任务详情</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="qc-showdetails" onchange="onQuadrantConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="qc-showdetails" aria-labelledby="qc-showdetails-label" onchange="onQuadrantConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
+            </div>
+            <div class="pt-4 border-t border-theme">
+                <button onclick="resetQuadrantViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
             </div>
         </div>
     </aside>
@@ -4058,14 +4029,14 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <span id="sc-showcompleted-label" class="text-sm text-theme-primary">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="sc-showcompleted" onchange="onScheduleConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="sc-showcompleted" aria-labelledby="sc-showcompleted-label" onchange="onScheduleConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div>
-                <label class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
+                <label for="sc-nodatepos" class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
                 <select id="sc-nodatepos" onchange="onScheduleConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
                     <option value="last">最末显示（放置于今天最末）</option>
                     <option value="first">优先显示（放置于今天最前）</option>
@@ -4073,18 +4044,21 @@
                 </select>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示农历</span>
+                <span id="sc-showlunar-label" class="text-sm text-theme-primary">显示农历</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="sc-showlunar" onchange="onScheduleConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="sc-showlunar" aria-labelledby="sc-showlunar-label" onchange="onScheduleConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示"开始专注"按钮</span>
+                <span id="sc-showfocus-label" class="text-sm text-theme-primary">显示"开始专注"按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="sc-showfocus" onchange="onScheduleConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="sc-showfocus" aria-labelledby="sc-showfocus-label" onchange="onScheduleConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
+            </div>
+            <div class="pt-4 border-t border-theme">
+                <button onclick="resetScheduleViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
             </div>
         </div>
     </aside>
@@ -4097,18 +4071,21 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <span id="wc-showcompleted-label" class="text-sm text-theme-primary">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="wc-showcompleted" onchange="onWeekConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="wc-showcompleted" aria-labelledby="wc-showcompleted-label" onchange="onWeekConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示农历</span>
+                <span id="wc-showlunar-label" class="text-sm text-theme-primary">显示农历</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="wc-showlunar" onchange="onWeekConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="wc-showlunar" aria-labelledby="wc-showlunar-label" onchange="onWeekConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
+            </div>
+            <div class="pt-4 border-t border-theme">
+                <button onclick="resetWeekViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
             </div>
         </div>
     </aside>
@@ -4121,18 +4098,29 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5">
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示已完成任务</span>
+                <span id="mc-showcompleted-label" class="text-sm text-theme-primary">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="mc-showcompleted" onchange="onMonthConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="mc-showcompleted" aria-labelledby="mc-showcompleted-label" onchange="onMonthConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span class="text-sm text-theme-primary">显示农历</span>
+                <span id="mc-showlunar-label" class="text-sm text-theme-primary">显示农历</span>
                 <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="mc-showlunar" onchange="onMonthConfigChange()" class="sr-only peer">
+                    <input type="checkbox" id="mc-showlunar" aria-labelledby="mc-showlunar-label" onchange="onMonthConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+                <span id="mc-showswapinfo-label" class="text-sm text-theme-primary">显示调休信息</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="mc-showswapinfo" aria-labelledby="mc-showswapinfo-label" onchange="onMonthConfigChange()" class="sr-only peer">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+            </div>
+            <p class="text-xs text-theme-muted -mt-3">管理日期数字左侧的「班/休」标记</p>
+            <div class="pt-4 border-t border-theme">
+                <button onclick="resetMonthViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
             </div>
         </div>
     </aside>
@@ -4193,5 +4181,6 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="mobile.js"></script>
 </body>
 </html>

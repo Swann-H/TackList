@@ -73,7 +73,10 @@ function openScheduleConfig() {
     if (ndEl) ndEl.value = (cfg.noDateTaskPosition === 'first' || cfg.noDateTaskPosition === 'none') ? cfg.noDateTaskPosition : 'last';
     if (slEl) slEl.checked = cfg.showLunar !== false;
     if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
-    openViewConfigPanel('schedule', () => { saveData(); renderView(); });
+    openViewConfigPanel('schedule', (forSwitch) => {
+        saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
+        if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
+    });
 }
 function closeScheduleConfig() {
     closeViewConfigPanel('schedule');
@@ -88,8 +91,16 @@ function onScheduleConfigChange() {
     if (ndEl) cfg.noDateTaskPosition = ['first', 'last', 'none'].includes(ndEl.value) ? ndEl.value : 'last';
     if (slEl) cfg.showLunar = slEl.checked;
     if (sfEl) cfg.showFocusButton = sfEl.checked;
+    renderView(); // 实时预览；保存延迟到面板关闭
+}
+
+// 恢复默认配置（面板内「恢复默认」按钮）
+function resetScheduleViewConfig() {
+    _resetViewConfigToDefault('scheduleConfig', { showCompleted: true, noDateTaskPosition: 'last', showLunar: true, showFocusButton: true });
     saveData();
     renderView();
+    openScheduleConfig(); // 重填面板控件
+    showToast('已恢复日程视图默认配置', 'success');
 }
 
 // 任务视图内任务排序（供各分组桶复用）。completed 始终置底（分组已先行切分，桶内基本同态，保留兼容）。
@@ -500,23 +511,11 @@ function buildTaskListItemHtml(task, useShortTime) {
     `;
 }
 
-// ==================== 任务视图配置面板（右侧滑出，复用看板配置面板的外部点击关闭范式） ====================
-let _taskConfigOpen = false;
-let _taskConfigOutsideBound = false;
-
-function _showTaskConfigPanel(id) { const el = document.getElementById(id); if (el) { el.classList.remove('translate-x-full'); el.classList.add('shadow-2xl'); el.classList.remove('shadow-none'); } }
-function _hideTaskConfigPanel(id) { const el = document.getElementById(id); if (el) { el.classList.add('translate-x-full'); el.classList.remove('shadow-2xl'); el.classList.add('shadow-none'); } }
-
-function onTaskConfigOutside(e) {
-    if (!_taskConfigOpen) return;
-    const cp = document.getElementById('taskConfigPanel');
-    if (cp && cp.contains(e.target)) return;
-    if (e.target.closest && e.target.closest('#task-config-btn')) return; // 点击配置按钮本身不关闭
-    closeTaskConfig();
-}
+// ==================== 任务视图配置面板（统一框架：utils.js _registerViewConfig） ====================
+_registerViewConfig('task', 'taskConfigPanel', 'task-config-btn');
 
 function toggleTaskConfig() {
-    if (_taskConfigOpen) closeTaskConfig();
+    if (_viewConfigPanels.task && _viewConfigPanels.task.open) closeViewConfigPanel('task');
     else openTaskConfig();
 }
 
@@ -536,30 +535,30 @@ function openTaskConfig() {
     if (sdAsc) sdAsc.checked = cfg.sortDir !== 'desc';
     if (sdDesc) sdDesc.checked = cfg.sortDir === 'desc';
     if (sc) sc.checked = cfg.showCompleted !== false;
-    if (ndp) ndp.value = cfg.noDateTaskPosition || 'last';
+    if (ndp) ndp.value = cfg.noDateTaskPosition === 'first' ? 'first' : 'last'; // tc-nodatepos 仅 first|last，'none' 等异常值归一为 last
     if (sf) sf.checked = cfg.showFocusButton !== false;
     if (sd) sd.checked = cfg.showDetails === true;
     if (col) col.value = cfg.groupCollapseStrategy || 'only-completed-collapsed';
-    _showTaskConfigPanel('taskConfigPanel');
-    _taskConfigOpen = true;
-    if (!_taskConfigOutsideBound) {
-        document.addEventListener('click', onTaskConfigOutside, true);
-        _taskConfigOutsideBound = true;
-    }
+    openViewConfigPanel('task', (forSwitch) => {
+        saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
+        if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
+    });
 }
 
 function closeTaskConfig() {
-    _taskConfigOpen = false;
-    _hideTaskConfigPanel('taskConfigPanel');
-    saveData();
-    renderView(); // renderView 内部会按新配置重渲染任务视图并刷新计划按钮显隐
-    if (_taskConfigOutsideBound) {
-        document.removeEventListener('click', onTaskConfigOutside, true);
-        _taskConfigOutsideBound = false;
-    }
+    closeViewConfigPanel('task');
 }
 
-// 控件变更：实时写入配置并刷新任务视图（点击外部即关闭保存）
+// 恢复默认配置（面板内「恢复默认」按钮）
+function resetTaskViewConfig() {
+    _resetViewConfigToDefault('taskViewConfig', { showCompleted: true, noDateTaskPosition: 'last', showFocusButton: true });
+    saveData();
+    renderView(); // renderView 内部会按新配置重渲染任务视图并刷新计划按钮显隐
+    openTaskConfig(); // 重填面板控件
+    showToast('已恢复任务视图默认配置', 'success');
+}
+
+// 控件变更：实时写入配置并预览（延迟保存：关闭面板时统一落盘）
 function onTaskConfigChange() {
     const cfg = getTaskViewConfig();
     const g = document.getElementById('tc-groupby');
@@ -578,7 +577,6 @@ function onTaskConfigChange() {
     if (sf) cfg.showFocusButton = sf.checked;
     if (sd) cfg.showDetails = sd.checked;
     if (col) cfg.groupCollapseStrategy = col.value;
-    saveData();
     renderView();
 }
 

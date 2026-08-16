@@ -670,10 +670,34 @@ function getTaskBarColor(task, fallbackColor) {
 
 // 工具函数
 // filterTasks：单次遍历合并所有条件，避免链式 .filter() 重复扫描与中间数组分配。
+// 取得某文件夹的全部子孙清单 id（递归，含嵌套文件夹），用于按文件夹筛选其下所有任务。
+// 仅纳入未归档清单；嵌套子文件夹本身不持有任务，但其子清单需一并计入。
+function getDescendantListIds(folderId) {
+    const acc = new Set();
+    const stack = [folderId];
+    while (stack.length) {
+        const pid = stack.pop();
+        for (let i = 0; i < lists.length; i++) {
+            const l = lists[i];
+            if (!l.archived && l.parentId === pid) {
+                acc.add(l.id);
+                if (l.isFolder) stack.push(l.id);
+            }
+        }
+    }
+    return acc;
+}
+
 // 各条件被预计算为闭包/集合，循环内一次判断全部通过才入结果数组。
 function filterTasks(taskList, opts) {
     // 预计算各筛选条件（在循环外完成，避免每任务重复计算）
     const hasListFilter = !!currentListId;
+    // 当前清单若为文件夹，则筛选范围扩展到其所有子孙清单（递归）
+    let listFilterSet = null;
+    if (hasListFilter) {
+        const fl = lists.find(l => l.id === currentListId);
+        if (fl && fl.isFolder) listFilterSet = getDescendantListIds(currentListId);
+    }
     const hasTagFilter = currentTagIds && currentTagIds.length > 0;
     const tagSet = hasTagFilter ? new Set(currentTagIds) : null;
 
@@ -769,8 +793,12 @@ function filterTasks(taskList, opts) {
     for (let i = 0; i < taskList.length; i++) {
         const task = taskList[i];
 
-        // 清单筛选
-        if (hasListFilter && task.listId !== currentListId) continue;
+        // 清单筛选：普通清单精确匹配当前 currentListId；文件夹匹配其所有子孙清单集合
+        if (hasListFilter) {
+            if (listFilterSet) {
+                if (!listFilterSet.has(task.listId)) continue;
+            } else if (task.listId !== currentListId) continue;
+        }
 
         // 标签筛选（并集）
         if (hasTagFilter) {
@@ -966,17 +994,23 @@ function setHomeView(id) {
 }
 
 // ---------- 通用「视图配置」右侧滑出面板管理 ----------
-// 象限/日程/周/月四视图复用同一套显隐与「点击外部关闭」逻辑，避免分散实现。
-// _showKanbanPanel / _hideKanbanPanel 为通用显隐（仅切换 translate-x-full），可直接复用。
+// 六个视图（任务/看板/四象限/日程/周/月）+ 看板分组子面板复用同一套显隐与
+// 「点击外部关闭」逻辑，避免分散实现。嵌套面板（看板分组配置覆盖于看板配置
+// 面板之上）按打开顺序只关闭最上层，保持「子面板优先关闭」的交互。
+function _showKanbanPanel(id) { const el = document.getElementById(id); if (el) { el.classList.remove('translate-x-full'); el.classList.add('shadow-2xl'); el.classList.remove('shadow-none'); } }
+function _hideKanbanPanel(id) { const el = document.getElementById(id); if (el) { el.classList.add('translate-x-full'); el.classList.remove('shadow-2xl'); el.classList.add('shadow-none'); } }
 const _viewConfigPanels = {};
+let _viewConfigOpenSeq = 0;
 function _registerViewConfig(key, panelId, btnId) {
-    _viewConfigPanels[key] = { panelId: panelId, btnId: btnId, open: false, onClose: null };
+    _viewConfigPanels[key] = { panelId: panelId, btnId: btnId || null, open: false, onClose: null, seq: 0 };
 }
 let _viewConfigOutsideBound = false;
 function openViewConfigPanel(key, onClose) {
     const st = _viewConfigPanels[key];
     if (!st) return;
+    if (st.open) { st.onClose = onClose || st.onClose; return; } // 已打开：仅更新回调（如恢复默认后重填控件）
     st.open = true;
+    st.seq = ++_viewConfigOpenSeq;
     st.onClose = onClose || null;
     _showKanbanPanel(st.panelId);
     if (!_viewConfigOutsideBound) {
@@ -984,7 +1018,7 @@ function openViewConfigPanel(key, onClose) {
         _viewConfigOutsideBound = true;
     }
 }
-function closeViewConfigPanel(key, skipCb) {
+function closeViewConfigPanel(key, forSwitch) {
     const st = _viewConfigPanels[key];
     if (!st || !st.open) return;
     st.open = false;
@@ -997,18 +1031,22 @@ function closeViewConfigPanel(key, skipCb) {
         document.removeEventListener('click', onViewConfigPanelOutside, true);
         _viewConfigOutsideBound = false;
     }
-    if (!skipCb && cb) cb();
+    // 回调入参 forSwitch：由切换视图（closeAllViewConfigPanels）触发时，回调内应
+    // 保存但跳过 renderView，避免对旧视图冗余渲染（切换方随后会渲染新视图）
+    if (cb) cb(forSwitch);
 }
 function onViewConfigPanelOutside(e) {
+    // 只处理最上层（最近打开）的面板：看板分组子面板打开时，点击外部先关子面板
+    let top = null;
     for (const k in _viewConfigPanels) {
         const st = _viewConfigPanels[k];
-        if (!st.open) continue;
-        const panel = document.getElementById(st.panelId);
-        if (panel && panel.contains(e.target)) continue;
-        if (e.target.closest && e.target.closest('#' + st.btnId)) continue;
-        closeViewConfigPanel(k);
-        break;
+        if (st.open && (!top || st.seq > top.seq)) top = st;
     }
+    if (!top) return;
+    const panel = document.getElementById(top.panelId);
+    if (panel && panel.contains(e.target)) return;
+    if (top.btnId && e.target.closest && e.target.closest('#' + top.btnId)) return;
+    closeViewConfigPanel(top.key);
 }
 
 // 关闭所有已打开的视图配置面板（切换视图时调用）
@@ -1016,8 +1054,15 @@ function closeAllViewConfigPanels() {
     for (const k in _viewConfigPanels) {
         if (_viewConfigPanels[k].open) closeViewConfigPanel(k, true);
     }
-    if (typeof closeKanbanConfig === 'function') closeKanbanConfig(true);
-    if (typeof closeTaskConfig === 'function') closeTaskConfig(true);
+}
+
+// 各视图配置「恢复默认」：以 DEFAULT_SETTINGS 中该视图的默认配置为基础，
+// 补齐原全局默认项（显示已完成/专注按钮/无日期位置/农历）的内置默认值后整体替换
+function _resetViewConfigToDefault(configKey, extraDefaults) {
+    const base = (DEFAULT_SETTINGS[configKey] && typeof DEFAULT_SETTINGS[configKey] === 'object')
+        ? JSON.parse(JSON.stringify(DEFAULT_SETTINGS[configKey])) : {};
+    Object.assign(base, extraDefaults || {});
+    settings[configKey] = base;
 }
 
 function isSameDay(d1, d2) {

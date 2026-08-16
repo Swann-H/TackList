@@ -22,7 +22,7 @@ import socket
 import urllib.parse
 import urllib.request
 import urllib.error
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 
 PORT = 14438
@@ -1070,19 +1070,20 @@ class TodoHandler(BaseHTTPRequestHandler):
                     self.send_error_json("Invalid JSON", 400)
                     return
 
-                # 版本冲突检测：客户端提供的版本号必须匹配当前版本
-                client_version = data.pop('_version', -1)
-                if client_version >= 0 and client_version != _data_version:
-                    # 版本冲突：返回当前服务器数据，让客户端合并后重试
-                    current_data = load_data_from_file()
-                    current_data['_version'] = _data_version
-                    self.send_json_response({"status": "conflict", "currentData": current_data, "serverVersion": _data_version})
+                # 多线程下串行化"版本检查+写入"，避免并发保存互相覆盖
+                with data_lock:
+                    client_version = data.pop('_version', -1)
+                    conflict_data = None
+                    if client_version >= 0 and client_version != _data_version:
+                        # 版本冲突：返回当前服务器数据，让客户端合并后重试
+                        conflict_data = load_data_from_file()
+                        conflict_data['_version'] = _data_version
+                    else:
+                        save_data_to_file(data)
+                        _data_version += 1
+                if conflict_data is not None:
+                    self.send_json_response({"status": "conflict", "currentData": conflict_data, "serverVersion": conflict_data['_version']})
                     return
-
-                # 清理内部字段后保存
-                data.pop('_version', None)
-                save_data_to_file(data)
-                _data_version += 1
 
                 # 同步 settings 中的番茄配置项到服务器内存 pomodoro_state
                 # （导入数据或 saveSettings 写入 data.json 后，服务器内存需同步，
@@ -1150,41 +1151,43 @@ class TodoHandler(BaseHTTPRequestHandler):
                     self.send_error_json("Invalid JSON", 400)
                     return
 
-                # 原子地读取-修改-写回单个任务（与 PUT 串行化在同一文件锁上）
-                lock_fd = acquire_file_lock()
-                try:
-                    if os.path.exists(DATA_FILE):
-                        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                    else:
-                        data = json.loads(json.dumps(DEFAULT_DATA))
-                    for key in DEFAULT_DATA:
-                        if key not in data:
-                            data[key] = DEFAULT_DATA[key]
-                    if not data.get('taskLists'):
-                        data['taskLists'] = DEFAULT_DATA['taskLists']
-                    if not data.get('settings'):
-                        data['settings'] = dict(DEFAULT_DATA['settings'])
-                    elif 'defaultListId' not in data['settings']:
-                        data['settings']['defaultListId'] = 'default'
+                # 原子地读取-修改-写回单个任务（data_lock + 文件锁双重串行化）
+                with data_lock:
+                    lock_fd = acquire_file_lock()
+                    try:
+                        if os.path.exists(DATA_FILE):
+                            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                        else:
+                            data = json.loads(json.dumps(DEFAULT_DATA))
+                        for key in DEFAULT_DATA:
+                            if key not in data:
+                                data[key] = DEFAULT_DATA[key]
+                        if not data.get('taskLists'):
+                            data['taskLists'] = DEFAULT_DATA['taskLists']
+                        if not data.get('settings'):
+                            data['settings'] = dict(DEFAULT_DATA['settings'])
+                        elif 'defaultListId' not in data['settings']:
+                            data['settings']['defaultListId'] = 'default'
 
-                    tasks_list = data.get('tasks', [])
-                    found = False
-                    old_start = ''
-                    for i in range(len(tasks_list)):
-                        if tasks_list[i].get('id') == task_id:
-                            old_start = tasks_list[i].get('startTime', '')
-                            tasks_list[i] = task
-                            found = True
-                            break
-                    if not found:
-                        tasks_list.append(task)
-                    data['tasks'] = tasks_list
+                        tasks_list = data.get('tasks', [])
+                        found = False
+                        old_start = ''
+                        for i in range(len(tasks_list)):
+                            if tasks_list[i].get('id') == task_id:
+                                old_start = tasks_list[i].get('startTime', '')
+                                tasks_list[i] = task
+                                found = True
+                                break
+                        if not found:
+                            tasks_list.append(task)
+                        data['tasks'] = tasks_list
 
-                    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
-                finally:
-                    release_file_lock(lock_fd)
+                        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                    finally:
+                        release_file_lock(lock_fd)
+                    _data_version += 1
 
                 # 任务时间变化时清除通知标记，允许在新时间重新提醒
                 new_start = task.get('startTime', '')
@@ -1192,7 +1195,6 @@ class TodoHandler(BaseHTTPRequestHandler):
                     if new_start != old_start:
                         notified_task_ids.discard(task_id)
 
-                _data_version += 1
                 self.send_json_response({"status": "ok", "version": _data_version})
                 return
 
@@ -2179,7 +2181,8 @@ def main():
     httpd = None
     while True:
         try:
-            httpd = HTTPServer((bind_address, PORT), TodoHandler)
+            # 多线程：首屏并行拉取静态资源/数据时不再阻塞，健康探测也不会超时误判
+            httpd = ThreadingHTTPServer((bind_address, PORT), TodoHandler)
             break
         except OSError:
             PORT += 1

@@ -291,11 +291,8 @@ function openSettingsModal() {
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
     document.getElementById('settings-cmd-remove-time').checked = settings.cmdRemoveTimeText !== false;
     document.getElementById('settings-priority-display-mode').value = getPriorityDisplayMode();
-    // 全局默认（各视图配置未显式设置时回退到此）
-    document.getElementById('settings-show-completed').checked = settings.showCompleted !== false;
-    document.getElementById('settings-show-lunar').checked = settings.showLunar !== false;
-    document.getElementById('settings-show-focus-button').checked = settings.showFocusButton !== false;
-    document.getElementById('settings-no-date-position').value = settings.noDateTaskPosition || 'last';
+    // 注：原「全局默认」（显示已完成/农历/专注按钮/无日期位置）已移至各视图配置面板，
+    // 旧数据由 applySettings 内的迁移逻辑无感升级到各视图配置
     document.getElementById('settings-default-task-date').value = settings.defaultTaskDate || 'today';
     document.getElementById('settings-focus-duration').value = settings.focusDuration || 25;
     document.getElementById('settings-short-break-duration').value = settings.shortBreakDuration || 5;
@@ -670,11 +667,7 @@ function saveSettings(silent) {
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
     settings.cmdRemoveTimeText = document.getElementById('settings-cmd-remove-time').checked;
     settings.priorityDisplayMode = document.getElementById('settings-priority-display-mode').value;
-    // 全局默认（各视图配置未显式设置时回退到此）
-    settings.showCompleted = document.getElementById('settings-show-completed').checked;
-    settings.showLunar = document.getElementById('settings-show-lunar').checked;
-    settings.showFocusButton = document.getElementById('settings-show-focus-button').checked;
-    settings.noDateTaskPosition = document.getElementById('settings-no-date-position').value;
+    // 注：原「全局默认」4 项已移至各视图配置面板，此处不再读写
     settings.defaultTaskDate = document.getElementById('settings-default-task-date').value;
     settings.focusDuration = parseInt(document.getElementById('settings-focus-duration').value);
     settings.shortBreakDuration = parseInt(document.getElementById('settings-short-break-duration').value);
@@ -798,6 +791,14 @@ function applyDisplaySettings() {
     // 侧栏番茄倒计时背景流动效果同样受开关影响，需立即刷新
     if (typeof updateSidebarPomodoroTimer === 'function') {
         updateSidebarPomodoroTimer();
+    }
+    // 任务详情面板打开时，同步刷新完成勾选框配色（跟随优先级显示方式变更）
+    const detailPanel = document.getElementById('task-detail-panel');
+    if (detailPanel && !detailPanel.classList.contains('hidden') && currentDetailTaskId) {
+        const task = tasks.find(t => t.id === currentDetailTaskId);
+        if (task && typeof updateDetailCompleteButton === 'function') {
+            updateDetailCompleteButton(task.completed);
+        }
     }
 }
 

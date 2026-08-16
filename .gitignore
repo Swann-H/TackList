@@ -3,6 +3,7 @@ server.log
 server.pid
 server.port
 .data.lock
+launch.lock
 
 # User data
 data.json

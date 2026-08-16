@@ -7,8 +7,7 @@
 let _kanbanExpanded = {};      // colKey -> true 表示已展开（查看更多）
 let _draggedKanbanCol = null;  // 正在拖拽的自定义分组列 key
 let _kanbanLeafMap = {};       // colKey -> 列元数据（含 type / listId / groupId / tagId / bucket / priorityLevel）
-let _kanbanConfigOpen = false; // 视图配置右侧面板是否打开
-let _kanbanConfigOutsideBound = false; // 面板外部点击监听是否已绑定
+// 视图配置面板的开关状态由 utils.js _viewConfigPanels 统一管理（_registerViewConfig）
 let _kanbanGroupConfigOpen = false;    // 分组配置子面板是否打开
 let _kgCfgDragToken = null;    // 分组配置面板内正在拖拽的分组 token
 let _kanbanNewGroupIds = new Set(); // 刚由「新增分组」创建、尚未命名（正在编辑）的分组 id 集合（失焦/关闭未命名则视为误操作删除）
@@ -57,6 +56,8 @@ function getKanbanConfig() {
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
     if (typeof c.countOnlyUncompleted !== 'boolean') c.countOnlyUncompleted = true;
+    // 无日期任务位置（first=最左侧优先显示，last=最右侧最末显示）
+    if (c.noDateTaskPosition !== 'first' && c.noDateTaskPosition !== 'last') c.noDateTaskPosition = 'last';
     return c;
 }
 
@@ -147,9 +148,9 @@ function priorityLevelOf(task) {
 
 // ---------- 列生成 ----------
 function kanbanTimeColumns(base) {
-    // 无日期分组位置跟随设置 noDateTaskPosition：first=最左侧(优先显示)，last=最右侧(最末显示，默认)
+    // 无日期分组位置跟随看板配置 noDateTaskPosition：first=最左侧(优先显示)，last=最右侧(最末显示，默认)
     // 与任务/日程视图（taskListView.js）保持一致
-    const noDateFirst = ((settings && settings.noDateTaskPosition) || 'last') === 'first';
+    const noDateFirst = getKanbanConfig().noDateTaskPosition === 'first';
     const order = noDateFirst
         ? ['nodate', 'overdue', 'today', 'tomorrow', 'dayAfterTomorrow', 'recent7', 'later']
         : ['overdue', 'today', 'tomorrow', 'dayAfterTomorrow', 'recent7', 'later', 'nodate'];
@@ -1152,26 +1153,14 @@ function doDeleteList(listId, listName, moveToDefault) {
     showToast(`清单"${listName}"已删除${moveToDefault ? '，任务已移至默认清单' : ''}`, 'success');
 }
 
-// ---------- 视图配置面板（右侧滑出） ----------
-function _showKanbanPanel(id) { const el = document.getElementById(id); if (el) { el.classList.remove('translate-x-full'); el.classList.add('shadow-2xl'); el.classList.remove('shadow-none'); } }
-function _hideKanbanPanel(id) { const el = document.getElementById(id); if (el) { el.classList.add('translate-x-full'); el.classList.remove('shadow-2xl'); el.classList.add('shadow-none'); } }
-
-// 点击面板外部区域 → 保存配置并关闭（分组配置子面板打开时优先关闭子面板）
-function onKanbanPanelOutside(e) {
-    if (_kanbanGroupConfigOpen) {
-        const gp = document.getElementById('kanbanGroupConfigPanel');
-        if (gp && !gp.contains(e.target)) closeKanbanGroupConfig();
-        return;
-    }
-    if (!_kanbanConfigOpen) return;
-    const cp = document.getElementById('kanbanConfigPanel');
-    if (cp && cp.contains(e.target)) return;
-    if (e.target.closest && e.target.closest('#kanban-config-btn')) return; // 点击配置按钮本身不关闭
-    closeKanbanConfig();
-}
+// ---------- 视图配置面板（统一框架：utils.js _registerViewConfig） ----------
+// _showKanbanPanel/_hideKanbanPanel 已移至 utils.js 通用显隐
+_registerViewConfig('kanban', 'kanbanConfigPanel', 'kanban-config-btn');
+// 分组配置子面板：无独立开关按钮（由看板配置面板内入口打开），点击外部只关最上层
+_registerViewConfig('kanbanGroup', 'kanbanGroupConfigPanel', null);
 
 function toggleKanbanConfig() {
-    if (_kanbanConfigOpen) closeKanbanConfig();
+    if (_viewConfigPanels.kanban && _viewConfigPanels.kanban.open) closeViewConfigPanel('kanban');
     else openKanbanConfig();
 }
 
@@ -1179,7 +1168,6 @@ function openKanbanConfig() {
     const cfg = getKanbanConfig();
     const g = document.getElementById('kc-groupby');
     const sb = document.getElementById('kc-sortby');
-    const sd = document.getElementById('kc-sortdir');
     const sdAsc = document.getElementById('kc-sortdir-asc');
     const sdDesc = document.getElementById('kc-sortdir-desc');
     const sdEl = document.getElementById('kc-showdetails');
@@ -1187,29 +1175,28 @@ function openKanbanConfig() {
     const scEl = document.getElementById('kc-showcompleted');
     const sfEl = document.getElementById('kc-showfocus');
     const cuEl = document.getElementById('kc-countuncompleted');
+    const ndp = document.getElementById('kc-nodatepos');
     if (g) g.value = cfg.groupBy;
     if (sb) sb.value = cfg.sortBy;
     if (sdAsc) sdAsc.checked = cfg.sortDir !== 'desc';
     if (sdDesc) sdDesc.checked = cfg.sortDir === 'desc';
-    if (sd) sd.value = cfg.sortDir;
     if (sdEl) sdEl.checked = !!cfg.showDetails;
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
     if (cuEl) cuEl.checked = cfg.countOnlyUncompleted !== false;
     if (ts) ts.value = cfg.tagSubGroup || 'list';
+    if (ndp) ndp.value = cfg.noDateTaskPosition === 'first' ? 'first' : 'last';
     updateKanbanTagSubVisibility();
     updateKanbanGroupConfigEntry();
-    _showKanbanPanel('kanbanConfigPanel');
-    _kanbanConfigOpen = true;
-    if (!_kanbanConfigOutsideBound) {
-        document.addEventListener('click', onKanbanPanelOutside, true);
-        _kanbanConfigOutsideBound = true;
-    }
+    openViewConfigPanel('kanban', _onKanbanConfigClosed);
 }
 
 function closeKanbanConfig() {
-    _kanbanConfigOpen = false;
-    _hideKanbanPanel('kanbanConfigPanel');
+    closeViewConfigPanel('kanban');
+}
+
+// 关闭回调：提交行内改名、保存配置并刷新（forSwitch=切换视图场景仅保存不渲染）
+function _onKanbanConfigClosed(forSwitch) {
     if (_kanbanGroupConfigOpen) closeKanbanGroupConfig();
     // 行内改名期间关闭配置面板：先提交行内改名，避免 renderView 被 _kanbanEditingGroupId 跳过
     // commitKanbanColumnRename 内部已调用 renderView，此处通过 skipRender 避免双重渲染
@@ -1218,12 +1205,18 @@ function closeKanbanConfig() {
         const inp = document.querySelector('.kanban-col-title-input');
         if (inp) { inp.blur(); skipRender = true; } else { _kanbanEditingGroupId = null; }
     }
+    saveData(); // 延迟保存：配置变更实时预览，关闭面板时统一落盘
+    if (!forSwitch && !skipRender) renderView();
+}
+
+// 恢复默认配置（面板内「恢复默认」按钮）
+function resetKanbanViewConfig() {
+    _resetViewConfigToDefault('kanbanConfig', { showCompleted: true, showFocusButton: true, noDateTaskPosition: 'last' });
+    _kanbanExpanded = {}; // 分组依据等重置后，旧的列展开状态可能失配
     saveData();
-    if (!skipRender) renderView();
-    if (_kanbanConfigOutsideBound) {
-        document.removeEventListener('click', onKanbanPanelOutside, true);
-        _kanbanConfigOutsideBound = false;
-    }
+    renderView();
+    openKanbanConfig(); // 重填面板控件
+    showToast('已恢复看板默认配置', 'success');
 }
 
 function updateKanbanTagSubVisibility() {
@@ -1239,7 +1232,7 @@ function updateKanbanGroupConfigEntry() {
     if (entry) entry.classList.toggle('hidden', !(cfg.groupBy === 'custom' && ctx.mode === 'groups'));
 }
 
-// 控件变更：实时写入配置并刷新看板（点击外部即关闭保存）
+// 控件变更：实时写入配置并预览（延迟保存：关闭面板时统一落盘）
 function onKanbanConfigChange() {
     const cfg = getKanbanConfig();
     const prevGroupBy = cfg.groupBy;
@@ -1251,6 +1244,7 @@ function onKanbanConfigChange() {
     const scEl = document.getElementById('kc-showcompleted');
     const sfEl = document.getElementById('kc-showfocus');
     const cuEl = document.getElementById('kc-countuncompleted');
+    const ndp = document.getElementById('kc-nodatepos');
     if (g) cfg.groupBy = g.value;
     if (sb) cfg.sortBy = sb.value;
     if (sdDesc) cfg.sortDir = sdDesc.checked ? 'desc' : 'asc';
@@ -1259,26 +1253,30 @@ function onKanbanConfigChange() {
     if (sfEl) cfg.showFocusButton = sfEl.checked;
     if (cuEl) cfg.countOnlyUncompleted = cuEl.checked;
     if (ts) cfg.tagSubGroup = ts.value;
+    if (ndp) cfg.noDateTaskPosition = ndp.value === 'first' ? 'first' : 'last';
     // 切换分组依据时重置「查看更多」展开状态，避免旧 colKey 在会话内累积
     if (cfg.groupBy !== prevGroupBy) _kanbanExpanded = {};
     updateKanbanTagSubVisibility();
     updateKanbanGroupConfigEntry();
-    saveData();
     renderView();
 }
 
-// ---------- 分组配置子面板（覆盖于视图配置面板上） ----------
+// ---------- 分组配置子面板（覆盖于视图配置面板上，统一框架管理点击外部关闭） ----------
 function openKanbanGroupConfig() {
     const cfg = getKanbanConfig();
     const ctx = kanbanListContext();
     if (!(cfg.groupBy === 'custom' && ctx.mode === 'groups')) return;
     _kanbanGroupConfigOpen = true;
     renderKanbanGroupConfigPanel();
-    _showKanbanPanel('kanbanGroupConfigPanel');
+    openViewConfigPanel('kanbanGroup', _onKanbanGroupConfigClosed);
 }
 
 function closeKanbanGroupConfig() {
-    // 关闭配置面板时，先把仍在编辑中的「新增分组」提交已填名称或标记删除，再兜底清理所有空名分组
+    closeViewConfigPanel('kanbanGroup');
+}
+
+// 关闭回调：提交未命名的「新增分组」、清理空名分组并保存
+function _onKanbanGroupConfigClosed() {
     const ctx = kanbanListContext();
     const list = ctx && ctx.selectedList;
     const pending = Array.from(_kanbanNewGroupIds);
@@ -1298,7 +1296,6 @@ function closeKanbanGroupConfig() {
     }
     _kanbanGroupConfigOpen = false;
     kanbanGroupDeleteConfirming = null; // 关闭分组配置面板时重置删除二次确认状态，避免残留
-    _hideKanbanPanel('kanbanGroupConfigPanel');
 }
 
 function renderKanbanGroupConfigPanel() {

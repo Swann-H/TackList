@@ -1756,17 +1756,27 @@ function setupTitleAutoResize() {
 
 function updateDetailCompleteButton(completed) {
     const btn = document.getElementById('detail-task-complete-btn');
+    if (!btn) return;
     const icon = btn.querySelector('i');
-    
+
+    // 移除上一次动态写入的边框/底色类（含优先级配色、完成态灰色与主题色回退），避免切换后残留
+    if (Array.isArray(btn._detailBorderClasses) && btn._detailBorderClasses.length) {
+        btn.classList.remove(...btn._detailBorderClasses);
+    }
+    btn._detailBorderClasses = null;
+
     if (completed) {
-        btn.classList.add('bg-gray-400', 'border-gray-400');
-        btn.classList.remove('border-accent', 'dark:border-white');
+        btn._detailBorderClasses = ['bg-gray-400', 'border-gray-400'];
+        btn.classList.add(...btn._detailBorderClasses);
         icon.classList.remove('hidden');
         icon.classList.add('text-white');
         icon.classList.remove('text-gray-500');
     } else {
-        btn.classList.remove('bg-gray-400', 'border-gray-400');
-        btn.classList.add('border-accent', 'dark:border-white');
+        // 未完成态与任务视图勾选框配色同步：'checkbox' 优先级模式按任务优先级着色，其他模式回退主题色
+        const task = tasks.find(t => t.id === currentDetailTaskId);
+        btn._detailBorderClasses = (task ? getTaskCheckboxClass(task) : 'border-accent hover:border-accent-hover')
+            .split(/\s+/).filter(Boolean);
+        btn.classList.add(...btn._detailBorderClasses);
         icon.classList.add('hidden');
         icon.classList.remove('text-white');
     }

@@ -319,7 +319,10 @@ function openQuadrantConfig() {
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
     if (sdEl) sdEl.checked = cfg.showDetails !== false;
-    openViewConfigPanel('quadrant', () => { saveData(); renderView(); });
+    openViewConfigPanel('quadrant', (forSwitch) => {
+        saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
+        if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
+    });
 }
 function closeQuadrantConfig() {
     closeViewConfigPanel('quadrant');
@@ -332,6 +335,14 @@ function onQuadrantConfigChange() {
     if (scEl) cfg.showCompleted = scEl.checked;
     if (sfEl) cfg.showFocusButton = sfEl.checked;
     if (sdEl) cfg.showDetails = sdEl.checked;
+    renderView(); // 实时预览；保存延迟到面板关闭
+}
+
+// 恢复默认配置（面板内「恢复默认」按钮）
+function resetQuadrantViewConfig() {
+    _resetViewConfigToDefault('quadrantConfig', { showCompleted: true, showFocusButton: true });
     saveData();
     renderView();
+    openQuadrantConfig(); // 重填面板控件
+    showToast('已恢复四象限视图默认配置', 'success');
 }

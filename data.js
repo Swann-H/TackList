@@ -731,16 +731,16 @@ const DEFAULT_SETTINGS = {
     countdowns: [],
     pinnedCountdowns: [],
     // 看板视图配置：分组依据 / 排序依据 / 排序方式 / 是否展开详情 / 标签二级分组
+    // showCompleted/showFocusButton/noDateTaskPosition 不设默认值（undefined=未显式设置），
+    // 由 applySettings 的迁移逻辑继承旧全局值（设置面板已移除「全局默认」区块）
     kanbanConfig: {
         groupBy: 'custom',      // custom | time | createdTime | tag | priority | none
         sortBy: 'time',         // time | createdTime | modifiedTime | title | tag | priority
         sortDir: 'asc',         // asc | desc
         showDetails: false,     // 显示任务详情（备注/子任务）
         tagSubGroup: 'list',    // list | time | createdTime | priority（仅 groupBy=tag 时生效）
-        showCompleted: true,    // 显示已完成任务（迁移自全局设置「显示已完成任务」，作用于全部视图）
-        showFocusButton: true,  // 显示"开始专注"按钮（迁移自全局设置「显示"开始专注"按钮」）
         countOnlyUncompleted: true, // 列头计数仅显示未完成数（默认 true，与原行为一致）；false 显示总数
-        // 注：看板「无日期任务位置」沿用全局设置 settings.noDateTaskPosition
+        // noDateTaskPosition: first|last（无日期列位置，迁移自全局设置后由看板配置面板独立管理）
     },
     // 任务视图配置：分组依据 / 排序依据 / 排序方式 + 迁移自全局的可分离项
     // 默认值与任务视图原有行为一致：按时间状态桶分组（已过期/今天/明天/后天/最近7天/更远/无日期），组内按时间升序。
@@ -748,33 +748,19 @@ const DEFAULT_SETTINGS = {
         groupBy: 'time',        // time | createdTime | tag | priority | list | none
         sortBy: 'time',         // time | createdTime | modifiedTime | title | tag | priority
         sortDir: 'asc',         // asc | desc
-        showCompleted: true,    // 显示已完成任务（迁移自全局设置）
-        noDateTaskPosition: 'last', // 无日期任务显示位置 first|last（迁移自全局设置）
-        showFocusButton: true,  // 显示"开始专注"按钮（迁移自全局设置，作用于任务/四象限/日程）
         showDetails: false,     // 显示任务详情（备注/子任务）
         groupCollapseStrategy: 'only-completed-collapsed' // all-expanded | only-completed-collapsed | all-collapsed
     },
-    // 日程视图配置（迁移自全局的可分离项）
-    scheduleConfig: {
-        showCompleted: true,
-        noDateTaskPosition: 'last',
-        showLunar: true,
-        showFocusButton: true
-    },
-    // 周视图配置（迁移自全局的可分离项）
-    weekConfig: {
-        showCompleted: true,
-        showLunar: true
-    },
-    // 月视图配置（迁移自全局的可分离项）
+    // 日程视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
+    scheduleConfig: {},
+    // 周视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
+    weekConfig: {},
+    // 月视图配置（showCompleted/showLunar 迁移自全局的可分离项，不设默认值=未显式设置）
     monthConfig: {
-        showCompleted: true,
-        showLunar: true
+        showSwapInfo: true      // 显示调休信息（日期数字左侧的「班/休」标记，新增配置项，默认显示）
     },
-    // 四象限视图配置（迁移自全局的可分离项）
+    // 四象限视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
     quadrantConfig: {
-        showCompleted: true,
-        showFocusButton: true,
         showDetails: true       // 显示任务详情（备注/子任务，原始终显示，现可开关）
     }
 };
@@ -840,6 +826,45 @@ function applySettings(parsed) {
     if (settings.defaultView !== settings.defaultHomeView) {
         settings.defaultView = settings.defaultHomeView; // 兼容旧读取方（如彩蛋刷新）
     }
+    // 迁移：旧全局视图偏好 → 各视图配置（设置面板已移除「全局默认」，导入/加载旧数据无感升级）
+    // 幂等：仅当视图配置字段未显式设置（undefined）时写入旧全局值，不覆盖用户已改过的视图级配置
+    (function migrateLegacyViewPrefs() {
+        var legacy = {
+            showCompleted: settings.showCompleted !== false,
+            showLunar: settings.showLunar !== false,
+            showFocusButton: settings.showFocusButton !== false,
+            noDateTaskPosition: settings.noDateTaskPosition || 'last'
+        };
+        var targets = [
+            [settings.taskViewConfig, ['showCompleted', 'showFocusButton']],
+            [settings.scheduleConfig, ['showCompleted', 'showLunar', 'showFocusButton']],
+            [settings.weekConfig, ['showCompleted', 'showLunar']],
+            [settings.monthConfig, ['showCompleted', 'showLunar']],
+            [settings.quadrantConfig, ['showCompleted', 'showFocusButton']],
+            [settings.kanbanConfig, ['showCompleted', 'showFocusButton']]
+        ];
+        targets.forEach(function (t) {
+            var cfg = t[0];
+            if (!cfg || typeof cfg !== 'object') return;
+            t[1].forEach(function (k) {
+                if (cfg[k] === undefined) cfg[k] = legacy[k];
+            });
+        });
+        // 无日期任务位置：日程视图支持 first|last|none，原样继承；
+        // 任务/看板视图仅支持 first|last（无日期任务是普通分组/列，无「不显示」语义），'none' 归一为 'last'
+        if (settings.scheduleConfig && typeof settings.scheduleConfig === 'object' &&
+            settings.scheduleConfig.noDateTaskPosition === undefined) {
+            settings.scheduleConfig.noDateTaskPosition = legacy.noDateTaskPosition;
+        }
+        if (settings.taskViewConfig && typeof settings.taskViewConfig === 'object' &&
+            settings.taskViewConfig.noDateTaskPosition === undefined) {
+            settings.taskViewConfig.noDateTaskPosition = legacy.noDateTaskPosition === 'first' ? 'first' : 'last';
+        }
+        if (settings.kanbanConfig && typeof settings.kanbanConfig === 'object' &&
+            settings.kanbanConfig.noDateTaskPosition === undefined) {
+            settings.kanbanConfig.noDateTaskPosition = legacy.noDateTaskPosition === 'first' ? 'first' : 'last';
+        }
+    })();
     pomodoroState.focusDuration = settings.focusDuration;
     pomodoroState.shortBreakDuration = settings.shortBreakDuration || 5;
     pomodoroState.longBreakDuration = settings.longBreakDuration || 15;

@@ -181,7 +181,9 @@ function renderListNode(node, depth, container, uncompletedMap) {
             ${nameHtml}
             ${folderUncompleted(uncompletedMap, node.id) > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${folderUncompleted(uncompletedMap, node.id)}</span>` : '<span class="sidebar-count w-5"></span>'}
         `;
-        row.onclick = () => toggleFolder(node.id);
+        // 单击清单集整行 = 筛选其内部所有清单的任务（复用 selectList，与普通清单行为一致）；
+        // 展开/收起仅由前面的文件夹图标触发（见上方 <i> 的 onclick，已 stopPropagation）。
+        row.onclick = () => selectList(node.id);
     } else {
         const uncompletedCount = uncompletedMap[node.id] || 0;
         const nameHtml = editingListId === node.id && node.id !== 'default'

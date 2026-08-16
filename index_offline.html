@@ -3216,51 +3216,6 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">全局默认</label>
-                                <p class="text-xs text-theme-muted mb-2">以下设置作为各视图的默认值；各视图配置面板中可独立覆盖。</p>
-                                <div class="rounded-lg border border-theme p-3 bg-theme-tertiary space-y-3">
-                                    <div class="flex items-center justify-between">
-                                        <div>
-                                            <label class="text-sm font-medium text-theme-primary">显示已完成任务</label>
-                                            <p class="text-xs text-theme-secondary">默认在各视图中显示已完成的任务</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-show-completed" class="sr-only peer" checked>
-                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                        </label>
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <div>
-                                            <label class="text-sm font-medium text-theme-primary">显示农历</label>
-                                            <p class="text-xs text-theme-secondary">默认在日程/周/月视图中显示农历</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-show-lunar" class="sr-only peer" checked>
-                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                        </label>
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <div>
-                                            <label class="text-sm font-medium text-theme-primary">显示"开始专注"按钮</label>
-                                            <p class="text-xs text-theme-secondary">默认在任务卡片上显示专注按钮</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="settings-show-focus-button" class="sr-only peer" checked>
-                                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-                                        </label>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-theme-secondary mb-1">无日期任务位置</label>
-                                        <p class="text-xs text-theme-secondary mb-1">默认无日期任务的显示位置</p>
-                                        <select id="settings-no-date-position" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                            <option value="last">底部</option>
-                                            <option value="first">顶部</option>
-                                            <option value="none">不显示</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-                            <div>
                                 <label class="block text-sm font-medium text-theme-secondary mb-1">周开始于</label>
                                 <select id="settings-week-start" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
                                     <option value="monday">周一</option>
@@ -3298,7 +3253,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </label>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-theme-secondary mb-1">优先级显示方式</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-1">优先级显示方式</label>
                                 <p class="text-xs text-theme-secondary mb-1">选择任务优先级在视图中的呈现方式</p>
                                 <select id="settings-priority-display-mode" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
                                     <option value="checkbox">复选框边框</option>
@@ -3551,7 +3506,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     </div>
 
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.2</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.3</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">

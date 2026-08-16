@@ -28,6 +28,8 @@ function getMonthConfig() {
     // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    // 显示调休信息：月视图日期数字左侧的「班/休」标记（新配置项，默认显示）
+    if (typeof c.showSwapInfo !== 'boolean') c.showSwapInfo = true;
     return c;
 }
 
@@ -43,7 +45,10 @@ function openWeekConfig() {
     const slEl = document.getElementById('wc-showlunar');
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (slEl) slEl.checked = cfg.showLunar !== false;
-    openViewConfigPanel('week', () => { saveData(); renderView(); });
+    openViewConfigPanel('week', (forSwitch) => {
+        saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
+        if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
+    });
 }
 function closeWeekConfig() { closeViewConfigPanel('week'); }
 function onWeekConfigChange() {
@@ -52,8 +57,16 @@ function onWeekConfigChange() {
     const slEl = document.getElementById('wc-showlunar');
     if (scEl) cfg.showCompleted = scEl.checked;
     if (slEl) cfg.showLunar = slEl.checked;
+    renderView(); // 实时预览；保存延迟到面板关闭
+}
+
+// 恢复默认配置（面板内「恢复默认」按钮）
+function resetWeekViewConfig() {
+    _resetViewConfigToDefault('weekConfig', { showCompleted: true, showLunar: true });
     saveData();
     renderView();
+    openWeekConfig(); // 重填面板控件
+    showToast('已恢复周视图默认配置', 'success');
 }
 
 // 月视图配置面板（右侧滑出）
@@ -66,19 +79,34 @@ function openMonthConfig() {
     const cfg = getMonthConfig();
     const scEl = document.getElementById('mc-showcompleted');
     const slEl = document.getElementById('mc-showlunar');
+    const ssEl = document.getElementById('mc-showswapinfo');
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (slEl) slEl.checked = cfg.showLunar !== false;
-    openViewConfigPanel('month', () => { saveData(); renderView(); });
+    if (ssEl) ssEl.checked = cfg.showSwapInfo !== false;
+    openViewConfigPanel('month', (forSwitch) => {
+        saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
+        if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
+    });
 }
 function closeMonthConfig() { closeViewConfigPanel('month'); }
 function onMonthConfigChange() {
     const cfg = getMonthConfig();
     const scEl = document.getElementById('mc-showcompleted');
     const slEl = document.getElementById('mc-showlunar');
+    const ssEl = document.getElementById('mc-showswapinfo');
     if (scEl) cfg.showCompleted = scEl.checked;
     if (slEl) cfg.showLunar = slEl.checked;
+    if (ssEl) cfg.showSwapInfo = ssEl.checked;
+    renderView(); // 实时预览；保存延迟到面板关闭
+}
+
+// 恢复默认配置（面板内「恢复默认」按钮）
+function resetMonthViewConfig() {
+    _resetViewConfigToDefault('monthConfig', { showCompleted: true, showLunar: true });
     saveData();
     renderView();
+    openMonthConfig(); // 重填面板控件
+    showToast('已恢复月视图默认配置', 'success');
 }
 
 function renderWeekView(container) {
@@ -614,7 +642,8 @@ function renderMonthView(container) {
                         }
                     }
 
-                    if (holidayInfo) {
+                    // 「班/休」标记受月视图配置 showSwapInfo 控制（默认显示）
+                    if (holidayInfo && getMonthConfig().showSwapInfo !== false) {
                         if (holidayInfo.type === 'work') {
                             holidayBadge = `<span class="text-[10px] text-red-500 font-bold leading-none" title="${holidayInfo.name}">班</span>`;
                         } else {
