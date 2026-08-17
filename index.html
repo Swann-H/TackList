@@ -2171,12 +2171,12 @@
                         <i class="fas fa-bars"></i>
                     </button>
                     <div class="flex gap-2 bg-theme-secondary rounded-lg p-1" id="view-tabs">
-                        <button onclick="switchView('task')" id="view-btn-task" data-view="task" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">任务</button>
-                        <button onclick="switchView('schedule')" id="view-btn-schedule" data-view="schedule" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">日程</button>
-                        <button onclick="switchView('week')" id="view-btn-week" data-view="week" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">周</button>
-                        <button onclick="switchView('month')" id="view-btn-month" data-view="month" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">月</button>
-                        <button onclick="switchView('quadrant')" id="view-btn-quadrant" data-view="quadrant" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">四象限</button>
-                        <button onclick="switchView('kanban')" id="view-btn-kanban" data-view="kanban" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">看板</button>
+                        <button onclick="userSwitchView('task')" id="view-btn-task" data-view="task" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">任务</button>
+                        <button onclick="userSwitchView('schedule')" id="view-btn-schedule" data-view="schedule" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">日程</button>
+                        <button onclick="userSwitchView('week')" id="view-btn-week" data-view="week" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">周</button>
+                        <button onclick="userSwitchView('month')" id="view-btn-month" data-view="month" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">月</button>
+                        <button onclick="userSwitchView('quadrant')" id="view-btn-quadrant" data-view="quadrant" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">四象限</button>
+                        <button onclick="userSwitchView('kanban')" id="view-btn-kanban" data-view="kanban" class="px-4 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary">看板</button>
                     </div>
                 </div>
 
@@ -2238,23 +2238,23 @@
                 <!-- 移动端底部视图切换导航栏（仅移动端显示） -->
                 <nav id="mobile-bottom-nav" class="hidden fixed bottom-0 left-0 right-0 z-30 bg-theme-secondary/90 backdrop-blur-lg border-t border-theme safe-area-bottom">
                     <div class="flex items-center justify-around h-14 max-w-lg mx-auto" id="mobile-nav-main">
-                        <button onclick="switchView('task')" data-mnav="task" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary active:text-accent">
+                        <button onclick="userSwitchView('task')" data-mnav="task" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary active:text-accent">
                             <i class="fas fa-list-check text-lg"></i>
                             <span class="text-[10px] mt-0.5">任务</span>
                         </button>
-                        <button onclick="switchView('schedule')" data-mnav="schedule" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                        <button onclick="userSwitchView('schedule')" data-mnav="schedule" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
                             <i class="fas fa-calendar-day text-lg"></i>
                             <span class="text-[10px] mt-0.5">日程</span>
                         </button>
-                        <button onclick="switchView('week')" data-mnav="week" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                        <button onclick="userSwitchView('week')" data-mnav="week" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
                             <i class="fas fa-calendar-week text-lg"></i>
                             <span class="text-[10px] mt-0.5">周</span>
                         </button>
-                        <button onclick="switchView('month')" data-mnav="month" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                        <button onclick="userSwitchView('month')" data-mnav="month" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
                             <i class="fas fa-calendar text-lg"></i>
                             <span class="text-[10px] mt-0.5">月</span>
                         </button>
-                        <button onclick="switchView('quadrant')" data-mnav="quadrant" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
+                        <button onclick="userSwitchView('quadrant')" data-mnav="quadrant" class="mobile-nav-item flex flex-col items-center justify-center w-12 h-full text-theme-secondary">
                             <i class="fas fa-th-large text-lg"></i>
                             <span class="text-[10px] mt-0.5">象限</span>
                         </button>
@@ -3597,7 +3597,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.3</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.4</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3922,6 +3922,7 @@
                     <option value="list">清单</option>
                     <option value="tag">标签</option>
                     <option value="priority">优先级</option>
+                    <option value="custom">自定义</option>
                     <option value="none">无</option>
                 </select>
             </div>
@@ -3979,6 +3980,13 @@
                         <option value="only-completed-collapsed">仅折叠已完成</option>
                         <option value="all-collapsed">全部折叠</option>
                     </select>
+                </div>
+                <div id="tc-groupconfig-entry" class="hidden border-t border-theme pt-4">
+                    <button onclick="openKanbanGroupConfig()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-theme-tertiary hover:bg-theme text-theme-primary transition">
+                        <span class="text-sm font-medium">分组配置</span>
+                        <i class="fas fa-chevron-right text-theme-muted"></i>
+                    </button>
+                    <p class="text-xs text-theme-muted mt-2">调整分组顺序、重命名、新增或删除分组</p>
                 </div>
                 <div class="pt-2 border-t border-theme">
                     <button onclick="resetTaskViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
@@ -4038,8 +4046,8 @@
             <div>
                 <label for="sc-nodatepos" class="block text-sm text-theme-secondary mb-1">无日期任务显示位置</label>
                 <select id="sc-nodatepos" onchange="onScheduleConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme">
-                    <option value="last">最末显示（放置于今天最末）</option>
-                    <option value="first">优先显示（放置于今天最前）</option>
+                    <option value="last">最末显示</option>
+                    <option value="first">优先显示</option>
                     <option value="none">不显示</option>
                 </select>
             </div>
@@ -4112,13 +4120,12 @@
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1">
-                <span id="mc-showswapinfo-label" class="text-sm text-theme-primary">显示调休信息</span>
+                <span id="mc-showswapinfo-label" class="text-sm text-theme-primary">显示调休</span>
                 <label class="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" id="mc-showswapinfo" aria-labelledby="mc-showswapinfo-label" onchange="onMonthConfigChange()" class="sr-only peer">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
                 </label>
             </div>
-            <p class="text-xs text-theme-muted -mt-3">管理日期数字左侧的「班/休」标记</p>
             <div class="pt-4 border-t border-theme">
                 <button onclick="resetMonthViewConfig()" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm"><i class="fas fa-rotate-left mr-1"></i>恢复默认配置</button>
             </div>

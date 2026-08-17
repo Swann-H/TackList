@@ -745,7 +745,7 @@ const DEFAULT_SETTINGS = {
     // 任务视图配置：分组依据 / 排序依据 / 排序方式 + 迁移自全局的可分离项
     // 默认值与任务视图原有行为一致：按时间状态桶分组（已过期/今天/明天/后天/最近7天/更远/无日期），组内按时间升序。
     taskViewConfig: {
-        groupBy: 'time',        // time | createdTime | tag | priority | list | none
+        groupBy: 'time',        // time | createdTime | tag | priority | list | custom | none
         sortBy: 'time',         // time | createdTime | modifiedTime | title | tag | priority
         sortDir: 'asc',         // asc | desc
         showDetails: false,     // 显示任务详情（备注/子任务）
@@ -1002,7 +1002,21 @@ async function loadData() {
     }
     
     if (!_initialLoadDone) {
+        // 每次启动（新标签）显示设置中的默认视图；清单/特殊项的偏好视图仅会话内切换时生效
         currentView = getHomeView();
+        // 恢复上次筛选状态（刷新后回到上次查看的清单/标签/过滤器）
+        const fs = _loadFilterState();
+        if (fs) {
+            // 验证清单是否仍存在（已删除则回退到"所有任务"）
+            if (fs.currentListId && fs.currentListId !== '__archived__' && !getList(fs.currentListId)) {
+                currentListId = null;
+            } else {
+                currentListId = fs.currentListId || null;
+            }
+            currentFilter = fs.currentFilter || null;
+            currentTagIds = fs.currentTagIds || [];
+            currentFilterId = fs.currentFilterId || null;
+        }
     }
     _initialLoadDone = true;
     // 数据加载完成后重建专注时长缓存与搜索索引（覆盖上方所有恢复分支）

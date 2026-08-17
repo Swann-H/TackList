@@ -525,7 +525,7 @@ function openEditTaskModal(taskId) {
     const list = lists.find(l => l.id === task.listId);
     document.getElementById('list-btn-text').textContent = list?.name || '选择清单';
     
-    const timeDisplay = task.startTime ? formatDateTime(task.startTime) : '设置时间';
+    const timeDisplay = task.startTime ? formatTaskTimeLabel(task) : '设置时间';
     document.getElementById('time-btn-text').textContent = timeDisplay;
     
     const priorityText = (task.important ? '重要' : '') + (task.important && task.urgent ? ' / ' : '') + (task.urgent ? '紧急' : '');
@@ -2224,7 +2224,7 @@ function renderPlanPanel() {
             const listColor = list ? list.color : '#9ca3af';
             const listName = list ? list.name : '';
             const quadColors = getQuadrantColorClass(task, { forceBg: true });
-            const timeDisplay = task.startTime ? formatTaskListTime(task) : '';
+            const timeDisplay = task.startTime ? formatTaskListTime(task, { withAllDayTag: false }) : '';
 
             html += `
                 <div class="plan-task-item flex items-center gap-2 py-2 px-2.5 rounded-r-lg ${quadColors.bg} hover:brightness-95 transition cursor-pointer group mb-1"
@@ -2296,14 +2296,14 @@ function updateDetailTimeBtnText() {
     
     if (dateValue) {
         const date = new Date(dateValue);
-        const dateStr = `${date.getMonth() + 1}月${date.getDate()}日`;
+        const dateStr = fmtMD(date);
         if (isAllDay) {
             const isRange = !document.getElementById('detail-end-time-container').classList.contains('hidden');
             if (isRange) {
                 const endDateValue = document.getElementById('detail-task-end-date').value;
                 if (endDateValue && endDateValue !== dateValue) {
                     const endDate = new Date(endDateValue);
-                    btnText.textContent = dateStr + ' - ' + `${endDate.getMonth() + 1}月${endDate.getDate()}日` + ' (全天)';
+                    btnText.textContent = fmtMDRange(date, endDate) + ' (全天)';
                 } else {
                     btnText.textContent = dateStr + ' (全天)';
                 }
@@ -2322,7 +2322,7 @@ function updateDetailTimeBtnText() {
                     if (sameDay) {
                         endStr = endTimeValue || '';
                     } else {
-                        endStr = `${endDate.getMonth() + 1}月${endDate.getDate()}日`;
+                        endStr = fmtMD(endDate);
                         if (endTimeValue) {
                             endStr += ' ' + endTimeValue;
                         }
@@ -3809,15 +3809,21 @@ function filterAllTasks() {
     currentFilter = null;
     currentTagIds = [];
     currentFilterId = null;
-    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
+    // 视图偏好：「全部任务」有偏好视图时切换到该视图
+    const prefView = _getSpecialViewPrefView('allTasks');
+    if (prefView && currentView !== prefView) {
+        switchView(prefView); // 内部已调用 renderView/renderLists/updateSidebarHighlight
+    } else if (!prefView && VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');
     } else {
+        // 偏好视图已是当前视图，或无偏好视图但在任务筛选视图中：仅刷新当前视图
         renderView();
         renderLists();
-        if (typeof renderTags === 'function') renderTags();
-        if (typeof renderFilters === 'function') renderFilters();
         if (typeof updateSidebarHighlight === 'function') updateSidebarHighlight();
     }
+    _saveFilterState();
+    if (typeof renderTags === 'function') renderTags();
+    if (typeof renderFilters === 'function') renderFilters();
 }
 
 // ==================== 任务详情标签编辑 ====================

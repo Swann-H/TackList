@@ -2056,13 +2056,14 @@ class TodoHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(content)))
             self.send_cors_headers()
-            # 差异化缓存策略：HTML 禁缓存（确保改动即时生效），静态资源长缓存
-            if ext == '.html':
+            # 差异化缓存策略：HTML/JS/CSS 禁缓存（本地应用迭代频繁，确保改动即时生效），
+            # 字体/图片等低频变动资源长缓存
+            if ext in ('.html', '.js', '.css'):
                 self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
                 self.send_header('Pragma', 'no-cache')
                 self.send_header('Expires', '0')
             else:
-                # CSS/JS/字体/图片等静态资源缓存 1 天
+                # 字体/图片等静态资源缓存 1 天
                 self.send_header('Cache-Control', 'public, max-age=86400')
             self.end_headers()
             self.wfile.write(content)

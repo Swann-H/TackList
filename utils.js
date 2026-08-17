@@ -993,6 +993,107 @@ function setHomeView(id) {
     settings.defaultView = id; // 兼容旧读取方
 }
 
+// ---------- per-list 视图偏好 ----------
+// 清单级视图偏好：每个清单可独立记录「偏好视图」和「各视图内配置覆盖」。
+// 存储于 list.viewPrefs = { view: 'kanban', task: {...}, kanban: {...}, ... }
+// 读取链：list.viewPrefs[viewName] → settings.xxxConfig（全局默认）
+
+// 获取当前选中清单的 per-list 视图配置覆盖（null = 无清单或无覆盖）
+function _getCurrentListViewPrefs(viewName) {
+    if (!currentListId || currentListId === '__archived__') return null;
+    const list = getList(currentListId);
+    if (!list || !list.viewPrefs || !list.viewPrefs[viewName]) return null;
+    return list.viewPrefs[viewName];
+}
+
+// 确保 per-list 视图配置覆盖对象存在（用户主动修改配置时调用）
+// 返回写入目标对象；null = 无当前清单（调用方应写全局 settings）
+function _ensureListViewPrefs(viewName) {
+    if (!currentListId || currentListId === '__archived__') return null;
+    const list = getList(currentListId);
+    if (!list) return null;
+    if (!list.viewPrefs) list.viewPrefs = {};
+    if (!list.viewPrefs[viewName]) list.viewPrefs[viewName] = {};
+    return list.viewPrefs[viewName];
+}
+
+// 获取当前清单的偏好视图（null = 无偏好，沿用全局默认）
+function _getCurrentListViewPrefView() {
+    if (!currentListId || currentListId === '__archived__') return null;
+    const list = getList(currentListId);
+    if (!list || !list.viewPrefs || !list.viewPrefs.view) return null;
+    const v = list.viewPrefs.view;
+    return VIEW_ORDER_DEFAULT.indexOf(v) !== -1 ? v : null;
+}
+
+// 用户主动切换视图：记录当前上下文（清单/全部任务/最近7天）的偏好视图并切换
+function userSwitchView(view) {
+    if (VIEW_ORDER_DEFAULT.indexOf(view) !== -1) {
+        if (currentListId && currentListId !== '__archived__') {
+            const list = getList(currentListId);
+            if (list) {
+                if (!list.viewPrefs) list.viewPrefs = {};
+                list.viewPrefs.view = view;
+                saveData();
+            }
+        } else if (!currentListId && !currentFilterId && !(currentTagIds && currentTagIds.length)) {
+            // 无清单/标签/过滤器：处于「全部任务」或「最近7天」上下文，记录对应偏好视图
+            _setSpecialViewPrefView(currentFilter === 'recent7days' ? 'recent7days' : 'allTasks', view);
+        }
+    }
+    switchView(view);
+    _saveFilterState();
+}
+
+// ---------- 特殊侧边栏项（全部任务/最近7天）的视图偏好 ----------
+// 仅记录「偏好视图类型」，视图内配置沿用全局设置。
+// 存储于 settings.specialViewPrefs = { allTasks: 'kanban', recent7days: 'month' }
+
+function _getSpecialViewPrefView(key) {
+    const v = settings.specialViewPrefs && settings.specialViewPrefs[key];
+    return (v && VIEW_ORDER_DEFAULT.indexOf(v) !== -1) ? v : null;
+}
+
+function _setSpecialViewPrefView(key, view) {
+    if (VIEW_ORDER_DEFAULT.indexOf(view) === -1) return;
+    if (!settings.specialViewPrefs) settings.specialViewPrefs = {};
+    settings.specialViewPrefs[key] = view;
+    saveData();
+}
+
+// 重置当前清单的 per-list 视图配置覆盖（删除覆盖，回退全局）
+// 返回 true = 已删除 per-list 覆盖；false = 无 per-list 覆盖（调用方应重置全局）
+function _resetCurrentListViewPrefs(viewName) {
+    if (!currentListId || currentListId === '__archived__') return false;
+    const list = getList(currentListId);
+    if (!list || !list.viewPrefs || !list.viewPrefs[viewName]) return false;
+    delete list.viewPrefs[viewName];
+    // 清理空 viewPrefs（保留 view 字段：偏好视图不因重置视图内配置而丢失）
+    const hasOther = Object.keys(list.viewPrefs).some(k => k !== 'view' && list.viewPrefs[k] !== undefined);
+    if (!hasOther && !list.viewPrefs.view) delete list.viewPrefs;
+    return true;
+}
+
+// ---------- 筛选状态持久化（刷新后恢复上次选中的清单/标签/过滤器）----------
+// 注意：视图不随筛选状态恢复——每次启动（新标签）显示设置中的默认视图
+const FILTER_STATE_KEY = 'tacklist_filter_state';
+function _saveFilterState() {
+    try {
+        localStorage.setItem(FILTER_STATE_KEY, JSON.stringify({
+            currentListId: currentListId,
+            currentFilter: currentFilter,
+            currentTagIds: currentTagIds,
+            currentFilterId: currentFilterId
+        }));
+    } catch (e) { /* 忽略 quota 错误 */ }
+}
+function _loadFilterState() {
+    try {
+        const s = localStorage.getItem(FILTER_STATE_KEY);
+        return s ? JSON.parse(s) : null;
+    } catch (e) { return null; }
+}
+
 // ---------- 通用「视图配置」右侧滑出面板管理 ----------
 // 六个视图（任务/看板/四象限/日程/周/月）+ 看板分组子面板复用同一套显隐与
 // 「点击外部关闭」逻辑，避免分散实现。嵌套面板（看板分组配置覆盖于看板配置
@@ -1002,7 +1103,8 @@ function _hideKanbanPanel(id) { const el = document.getElementById(id); if (el) 
 const _viewConfigPanels = {};
 let _viewConfigOpenSeq = 0;
 function _registerViewConfig(key, panelId, btnId) {
-    _viewConfigPanels[key] = { panelId: panelId, btnId: btnId || null, open: false, onClose: null, seq: 0 };
+    // key 字段供 onViewConfigPanelOutside 反查（closeViewConfigPanel(top.key)），缺失会导致点击外部无法关闭
+    _viewConfigPanels[key] = { key: key, panelId: panelId, btnId: btnId || null, open: false, onClose: null, seq: 0 };
 }
 let _viewConfigOutsideBound = false;
 function openViewConfigPanel(key, onClose) {
@@ -1014,6 +1116,9 @@ function openViewConfigPanel(key, onClose) {
     st.onClose = onClose || null;
     _showKanbanPanel(st.panelId);
     if (!_viewConfigOutsideBound) {
+        // 同时监听 mousedown 与 click：看板卡片/列标题等 draggable 元素被按下拖动时，
+        // 浏览器可能以拖拽取代点击（不派发 click），mousedown 先于拖拽触发可兜住该场景
+        document.addEventListener('mousedown', onViewConfigPanelOutside, true);
         document.addEventListener('click', onViewConfigPanelOutside, true);
         _viewConfigOutsideBound = true;
     }
@@ -1028,6 +1133,7 @@ function closeViewConfigPanel(key, forSwitch) {
     let anyOpen = false;
     for (const k in _viewConfigPanels) { if (_viewConfigPanels[k].open) { anyOpen = true; break; } }
     if (!anyOpen && _viewConfigOutsideBound) {
+        document.removeEventListener('mousedown', onViewConfigPanelOutside, true);
         document.removeEventListener('click', onViewConfigPanelOutside, true);
         _viewConfigOutsideBound = false;
     }
@@ -1107,6 +1213,66 @@ function formatDateTime(date) {
     return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
 }
 
+// ---- 任务时间统一显示（与任务详情栏一致，非今年自动加年份） ----
+// 年份前缀：任务时间所在年份 != 今年时返回 "YYYY年"，否则空串
+function _mdYearPrefix(d) {
+    const cur = new Date().getFullYear();
+    return d.getFullYear() !== cur ? `${d.getFullYear()}年` : '';
+}
+// 单日标签："M月D日" 或 "YYYY年M月D日"（非今年带年份）
+function fmtMD(date) {
+    const d = new Date(date);
+    return `${_mdYearPrefix(d)}${d.getMonth() + 1}月${d.getDate()}日`;
+}
+// 跨天日期范围串（跨年时两端都带年份，避免歧义）
+function fmtMDRange(start, end) {
+    const s = new Date(start), e = new Date(end);
+    const cur = new Date().getFullYear();
+    const crossYear = s.getFullYear() !== e.getFullYear();
+    const sShow = crossYear || s.getFullYear() !== cur;
+    const eShow = crossYear || e.getFullYear() !== cur;
+    const sStr = sShow ? `${s.getFullYear()}年${s.getMonth() + 1}月${s.getDate()}日` : `${s.getMonth() + 1}月${s.getDate()}日`;
+    const eStr = eShow ? `${e.getFullYear()}年${e.getMonth() + 1}月${e.getDate()}日` : `${e.getMonth() + 1}月${e.getDate()}日`;
+    return `${sStr} - ${eStr}`;
+}
+// 相对"今天"的日期标签：今天/昨天/明天/后天，超出范围则用 fmtMD（非今年自动带年份）。
+// 以"当前时间"为基准计算，供日程视图跨天任务以相对词表述结束/开始日。
+function relativeDayLabelForNow(date) {
+    const d = new Date(date);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - todayStart) / 86400000);
+    if (diffDays === 0) return '今天';
+    if (diffDays === -1) return '昨天';
+    if (diffDays === 1) return '明天';
+    if (diffDays === 2) return '后天';
+    return fmtMD(d);
+}
+// 任务时间统一显示（与任务详情栏一致）：
+// 全天(跨天) → "M月D日 - M月D日 (全天)"；全天(单天) → 相对词或 "M月D日 (全天)"；
+// 带时间(跨天) → "M月D日 HH:MM - M月D日 HH:MM"；带时间(同天) → "M月D日 HH:MM - HH:MM"；单时间点 → "M月D日 HH:MM"。
+// 日期非今年时自动加年份。
+function formatTaskTimeLabel(task, withAllDayTag = true) {
+    if (!task.startTime) return '';
+    const start = new Date(task.startTime);
+    if (task.isAllDay) {
+        if (task.endTime && isMultiDayTask(task)) {
+            return fmtMDRange(start, new Date(task.endTime)) + (withAllDayTag ? ' (全天)' : '');
+        }
+        return getAllDayLabel(task, withAllDayTag);
+    }
+    const sTime = formatTime(start);
+    if (task.endTime) {
+        const end = new Date(task.endTime);
+        if (isMultiDayTask(task)) {
+            // 跨天带时间 → "M月D日 HH:MM - M月D日 HH:MM"（与任务详情栏一致，非今年自动带年份）
+            return `${fmtMD(start)} ${sTime} - ${fmtMD(end)} ${formatTime(end)}`;
+        }
+        return `${fmtMD(start)} ${sTime} - ${formatTime(end)}`;
+    }
+    return `${fmtMD(start)} ${sTime}`;
+}
+
 function formatTime(date) {
     const d = new Date(date);
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
@@ -1116,7 +1282,7 @@ function formatTime(date) {
 function formatTaskTimeForToast(task) {
     if (!task.startTime) return '';
     const start = new Date(task.startTime);
-    const dateStr = `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日`;
+    const dateStr = `${_mdYearPrefix(start)}${start.getMonth() + 1}月${start.getDate()}日`;
     if (task.isAllDay) return dateStr;
     const timeStr = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
     if (task.endTime) {
@@ -1374,7 +1540,7 @@ const BUILTIN_PALETTES = {
             accent: '#10B981', accentHover: '#059669',
             accentSecondary: '#34D399', accentBg: '#ecfdf5', accentBgStrong: '#d1fae5',
             accentTextDark: '#059669', accentLight: '#34D399',
-            bgPrimary: '#f0fdf9', bgPrimaryRgb: '240,253,249',
+            bgPrimary: '#f8faf9', bgPrimaryRgb: '248,250,249',
             bgSecondary: '#ffffff', bgSecondaryRgb: '255,255,255',
             bgTertiary: '#dcfce7', bgTertiaryRgb: '220,252,231',
             textPrimary: '#06341e', textSecondary: '#4b5563', textMuted: '#6b7280',
@@ -1384,7 +1550,7 @@ const BUILTIN_PALETTES = {
             accent: '#10B981', accentHover: '#059669',
             accentSecondary: '#34D399', accentBg: 'rgba(16,185,129,0.15)', accentBgStrong: 'rgba(16,185,129,0.25)',
             accentTextDark: '#6ee7b7', accentLight: '#6ee7b7',
-            bgPrimary: '#0f1a17', bgPrimaryRgb: '15,26,23',
+            bgPrimary: '#0f1411', bgPrimaryRgb: '15,20,17',
             bgSecondary: '#182722', bgSecondaryRgb: '24,39,34',
             bgTertiary: '#23322c', bgTertiaryRgb: '35,50,44',
             textPrimary: '#ecfdf5', textSecondary: '#a7f3d0', textMuted: '#6ee7b7',
@@ -1396,7 +1562,7 @@ const BUILTIN_PALETTES = {
             accent: '#F59E0B', accentHover: '#D97706',
             accentSecondary: '#FBBF24', accentBg: '#FEF3C7', accentBgStrong: '#FDE68A',
             accentTextDark: '#B45309', accentLight: '#FBBF24',
-            bgPrimary: '#FFFBEB', bgPrimaryRgb: '255,251,235',
+            bgPrimary: '#faf9f5', bgPrimaryRgb: '250,249,245',
             bgSecondary: '#ffffff', bgSecondaryRgb: '255,255,255',
             bgTertiary: '#FEF3C7', bgTertiaryRgb: '254,243,199',
             textPrimary: '#451A03', textSecondary: '#57534E', textMuted: '#92400E',
@@ -1406,7 +1572,7 @@ const BUILTIN_PALETTES = {
             accent: '#FBBF24', accentHover: '#FCD34D',
             accentSecondary: '#F59E0B', accentBg: 'rgba(245,158,11,0.15)', accentBgStrong: 'rgba(245,158,11,0.25)',
             accentTextDark: '#FCD34D', accentLight: '#FCD34D',
-            bgPrimary: '#1A1407', bgPrimaryRgb: '26,20,7',
+            bgPrimary: '#14110a', bgPrimaryRgb: '20,17,10',
             bgSecondary: '#261D0A', bgSecondaryRgb: '38,29,10',
             bgTertiary: '#322510', bgTertiaryRgb: '50,37,16',
             textPrimary: '#FEF3C7', textSecondary: '#FCD34D', textMuted: '#FBBF24',

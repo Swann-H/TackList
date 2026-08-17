@@ -10,6 +10,9 @@ function getQuadrantConfig() {
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
     if (typeof c.showDetails !== 'boolean') c.showDetails = true;
+    // per-list 回退链
+    const listPrefs = _getCurrentListViewPrefs('quadrant');
+    if (listPrefs) return Object.assign({}, c, listPrefs);
     return c;
 }
 _registerViewConfig('quadrant', 'quadrantConfigPanel', 'quadrant-config-btn');
@@ -115,21 +118,7 @@ function renderQuadrantView(container) {
                                     <div class="text-center py-6 text-theme-muted text-sm border-2 border-dashed border-theme rounded-lg">暂无任务（拖拽任务到此处）</div>
                                 ` : q.tasks.map(task => {
                                     const list = lists.find(l => l.id === task.listId);
-                                    let timeDisplay = '';
-                                    if (task.startTime) {
-                                        if (isMultiDayTask(task)) {
-                                            const start = new Date(task.startTime);
-                                            const end = new Date(task.endTime);
-                                            timeDisplay = `${start.getMonth()+1}月${start.getDate()}日 ${formatTime(start)} - ${end.getMonth()+1}月${end.getDate()}日 ${formatTime(end)}`;
-                                        } else if (task.isAllDay) {
-                                            const start = new Date(task.startTime);
-                                            timeDisplay = `${start.getMonth()+1}月${start.getDate()}日`;
-                                        } else if (task.endTime) {
-                                            timeDisplay = `${formatTime(new Date(task.startTime))} - ${formatTime(new Date(task.endTime))}`;
-                                        } else {
-                                            timeDisplay = formatDateTime(task.startTime);
-                                        }
-                                    }
+                                    const timeDisplay = formatTaskTimeLabel(task, false);
                                     const listColor = list ? list.color : '#9ca3af';
                                     const focusMinutes = getTaskFocusMinutes(task.id);
                                     // 第二象限任务停留天数标记
@@ -328,21 +317,28 @@ function closeQuadrantConfig() {
     closeViewConfigPanel('quadrant');
 }
 function onQuadrantConfigChange() {
-    const cfg = getQuadrantConfig();
+    const target = _ensureListViewPrefs('quadrant') || settings.quadrantConfig;
     const scEl = document.getElementById('qc-showcompleted');
     const sfEl = document.getElementById('qc-showfocus');
     const sdEl = document.getElementById('qc-showdetails');
-    if (scEl) cfg.showCompleted = scEl.checked;
-    if (sfEl) cfg.showFocusButton = sfEl.checked;
-    if (sdEl) cfg.showDetails = sdEl.checked;
+    if (scEl) target.showCompleted = scEl.checked;
+    if (sfEl) target.showFocusButton = sfEl.checked;
+    if (sdEl) target.showDetails = sdEl.checked;
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
 // 恢复默认配置（面板内「恢复默认」按钮）
 function resetQuadrantViewConfig() {
-    _resetViewConfigToDefault('quadrantConfig', { showCompleted: true, showFocusButton: true });
-    saveData();
-    renderView();
-    openQuadrantConfig(); // 重填面板控件
-    showToast('已恢复四象限视图默认配置', 'success');
+    if (_resetCurrentListViewPrefs('quadrant')) {
+        saveData();
+        renderView();
+        openQuadrantConfig();
+        showToast('已恢复该清单的四象限视图配置（继承全局）', 'success');
+    } else {
+        _resetViewConfigToDefault('quadrantConfig', { showCompleted: true, showFocusButton: true });
+        saveData();
+        renderView();
+        openQuadrantConfig();
+        showToast('已恢复四象限视图默认配置', 'success');
+    }
 }

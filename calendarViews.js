@@ -18,6 +18,9 @@ function getWeekConfig() {
     // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    // per-list 回退链
+    const listPrefs = _getCurrentListViewPrefs('week');
+    if (listPrefs) return Object.assign({}, c, listPrefs);
     return c;
 }
 function getMonthConfig() {
@@ -30,6 +33,9 @@ function getMonthConfig() {
     if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
     // 显示调休信息：月视图日期数字左侧的「班/休」标记（新配置项，默认显示）
     if (typeof c.showSwapInfo !== 'boolean') c.showSwapInfo = true;
+    // per-list 回退链
+    const listPrefs = _getCurrentListViewPrefs('month');
+    if (listPrefs) return Object.assign({}, c, listPrefs);
     return c;
 }
 
@@ -52,21 +58,28 @@ function openWeekConfig() {
 }
 function closeWeekConfig() { closeViewConfigPanel('week'); }
 function onWeekConfigChange() {
-    const cfg = getWeekConfig();
+    const target = _ensureListViewPrefs('week') || settings.weekConfig;
     const scEl = document.getElementById('wc-showcompleted');
     const slEl = document.getElementById('wc-showlunar');
-    if (scEl) cfg.showCompleted = scEl.checked;
-    if (slEl) cfg.showLunar = slEl.checked;
+    if (scEl) target.showCompleted = scEl.checked;
+    if (slEl) target.showLunar = slEl.checked;
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
 // 恢复默认配置（面板内「恢复默认」按钮）
 function resetWeekViewConfig() {
-    _resetViewConfigToDefault('weekConfig', { showCompleted: true, showLunar: true });
-    saveData();
-    renderView();
-    openWeekConfig(); // 重填面板控件
-    showToast('已恢复周视图默认配置', 'success');
+    if (_resetCurrentListViewPrefs('week')) {
+        saveData();
+        renderView();
+        openWeekConfig();
+        showToast('已恢复该清单的周视图配置（继承全局）', 'success');
+    } else {
+        _resetViewConfigToDefault('weekConfig', { showCompleted: true, showLunar: true });
+        saveData();
+        renderView();
+        openWeekConfig();
+        showToast('已恢复周视图默认配置', 'success');
+    }
 }
 
 // 月视图配置面板（右侧滑出）
@@ -90,23 +103,30 @@ function openMonthConfig() {
 }
 function closeMonthConfig() { closeViewConfigPanel('month'); }
 function onMonthConfigChange() {
-    const cfg = getMonthConfig();
+    const target = _ensureListViewPrefs('month') || settings.monthConfig;
     const scEl = document.getElementById('mc-showcompleted');
     const slEl = document.getElementById('mc-showlunar');
     const ssEl = document.getElementById('mc-showswapinfo');
-    if (scEl) cfg.showCompleted = scEl.checked;
-    if (slEl) cfg.showLunar = slEl.checked;
-    if (ssEl) cfg.showSwapInfo = ssEl.checked;
+    if (scEl) target.showCompleted = scEl.checked;
+    if (slEl) target.showLunar = slEl.checked;
+    if (ssEl) target.showSwapInfo = ssEl.checked;
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
 // 恢复默认配置（面板内「恢复默认」按钮）
 function resetMonthViewConfig() {
-    _resetViewConfigToDefault('monthConfig', { showCompleted: true, showLunar: true });
-    saveData();
-    renderView();
-    openMonthConfig(); // 重填面板控件
-    showToast('已恢复月视图默认配置', 'success');
+    if (_resetCurrentListViewPrefs('month')) {
+        saveData();
+        renderView();
+        openMonthConfig();
+        showToast('已恢复该清单的月视图配置（继承全局）', 'success');
+    } else {
+        _resetViewConfigToDefault('monthConfig', { showCompleted: true, showLunar: true });
+        saveData();
+        renderView();
+        openMonthConfig();
+        showToast('已恢复月视图默认配置', 'success');
+    }
 }
 
 function renderWeekView(container) {
@@ -1032,7 +1052,7 @@ function renderMonthViewMobile(container) {
             <div class="flex items-center justify-between px-4 py-3 flex-shrink-0 border-b border-theme/30">
                 <h2 class="text-xl font-bold text-theme-primary">${month + 1}月</h2>
                 <div class="flex items-center gap-2">
-                    <button onclick="switchView('week')" class="w-9 h-9 rounded-lg flex items-center justify-center text-theme-secondary hover:bg-theme-tertiary transition" title="周视图">
+                    <button onclick="userSwitchView('week')" class="w-9 h-9 rounded-lg flex items-center justify-center text-theme-secondary hover:bg-theme-tertiary transition" title="周视图">
                         <i class="fas fa-calendar-week"></i>
                     </button>
                     <button onclick="toggleMobileMoreMenu(event)" class="w-9 h-9 rounded-lg flex items-center justify-center text-theme-secondary hover:bg-theme-tertiary transition">

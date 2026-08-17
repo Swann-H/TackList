@@ -515,7 +515,10 @@ function deleteListInput() {
             // 清单集：子清单回退顶层（不删除其中的任务）
             lists.forEach(l => { if (l.parentId === listId) l.parentId = null; });
             lists = lists.filter(l => l.id !== listId);
-            if (currentListId === listId) currentListId = null;
+            if (currentListId === listId) {
+                currentListId = null;
+                _saveFilterState();
+            }
             listDeleteConfirming = null;
             editingListId = null;
             normalizeListsOrder();
@@ -762,6 +765,7 @@ function archiveList(listId) {
     // 如果当前正在查看此清单，清除筛选
     if (currentListId === listId) {
         currentListId = null;
+        _saveFilterState();
     }
 
     editingListId = null;
@@ -845,14 +849,20 @@ function selectList(listId) {
     }
     currentListId = listId;
     currentFilter = null;
-    // 非任务筛选视图下点击清单，切换到默认任务视图并按清单筛选
-    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
-        switchView('task'); // 内部已调用 renderView/renderLists/updateSidebarHighlight
+    // per-list 视图偏好：清单有偏好视图时切换到该视图
+    const prefView = _getCurrentListViewPrefView();
+    if (prefView && currentView !== prefView) {
+        switchView(prefView); // 内部已调用 renderView/renderLists/updateSidebarHighlight
+    } else if (!prefView && VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
+        // 无偏好视图且当前不在任务筛选视图中，切换到默认任务视图
+        switchView('task');
     } else {
+        // 偏好视图已是当前视图，或无偏好视图但在任务筛选视图中：仅刷新当前视图
         renderView();
         renderLists();
         updateSidebarHighlight();
     }
+    _saveFilterState();
     renderTags();
 }
 
@@ -892,15 +902,21 @@ function filterNext7Days() {
     currentFilter = 'recent7days';
     currentTagIds = [];
     currentFilterId = null;
-    if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
+    // 视图偏好：「最近7天」有偏好视图时切换到该视图
+    const prefView = _getSpecialViewPrefView('recent7days');
+    if (prefView && currentView !== prefView) {
+        switchView(prefView); // 内部已调用 renderView/renderLists/updateSidebarHighlight
+    } else if (!prefView && VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');
     } else {
+        // 偏好视图已是当前视图，或无偏好视图但在任务筛选视图中：仅刷新当前视图
         renderView();
         renderLists();
-        renderTags();
-        renderFilters();
         updateSidebarHighlight();
     }
+    _saveFilterState();
+    renderTags();
+    renderFilters();
 }
 
 function updateSidebarHighlight() {
@@ -956,7 +972,8 @@ function updateSidebarHighlight() {
         if (cdBox) cdBox.classList.add('cd-active');
     } else if (currentView === 'holiday') {
         // 独立管理视图：不与侧边栏任何导航项（含“所有任务”）联动高亮
-    } else if ((currentView === 'task' || currentView === 'kanban') && currentListId) {
+    } else if (currentListId && VIEW_ORDER_DEFAULT.indexOf(currentView) !== -1) {
+        // 六个任务筛选视图（任务/日程/周/月/四象限/看板）中选中清单时，跨视图保持清单高亮
         if (currentListId === '__archived__') {
             const btn = document.getElementById('sidebar-archived-btn');
             if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
@@ -1149,6 +1166,7 @@ function toggleTagFilter(tagId) {
         currentFilter = null;
         currentFilterId = null;
     }
+    _saveFilterState();
 
     // 确保在支持任务筛选的视图中
     if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
@@ -1166,6 +1184,7 @@ function toggleTagFilter(tagId) {
 function clearTagFilter() {
     currentTagIds = [];
     currentFilterId = null;
+    _saveFilterState();
     renderView();
     renderLists();
     renderTags();
@@ -1478,6 +1497,7 @@ function applyFilter(filterId) {
         currentFilter = null;
         currentTagIds = [];
     }
+    _saveFilterState();
 
     if (VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
         switchView('task');

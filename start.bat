@@ -6,7 +6,7 @@ set APP_DIR=%~dp0
 set ACTION=%1
 if "%ACTION%"=="" set ACTION=start
 
-:: 所有启动/防误杀/健康检查逻辑在 launcher.py 中处理
+:: All start/guard/health-check logic is handled in launcher.py
 set PYTHON_CMD=
 where python >nul 2>&1 && set PYTHON_CMD=python
 if not defined PYTHON_CMD where python3 >nul 2>&1 && set PYTHON_CMD=python3

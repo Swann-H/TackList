@@ -58,6 +58,9 @@ function getKanbanConfig() {
     if (typeof c.countOnlyUncompleted !== 'boolean') c.countOnlyUncompleted = true;
     // 无日期任务位置（first=最左侧优先显示，last=最右侧最末显示）
     if (c.noDateTaskPosition !== 'first' && c.noDateTaskPosition !== 'last') c.noDateTaskPosition = 'last';
+    // per-list 回退链
+    const listPrefs = _getCurrentListViewPrefs('kanban');
+    if (listPrefs) return Object.assign({}, c, listPrefs);
     return c;
 }
 
@@ -304,21 +307,7 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
     const showFocus = (typeof showFocusButton === 'boolean') ? showFocusButton : (getKanbanConfig().showFocusButton !== false);
     const list = getList(task.listId);
     const listColor = list ? list.color : '#9ca3af';
-    let timeDisplay = '';
-    if (task.startTime) {
-        if (isMultiDayTask(task)) {
-            const start = new Date(task.startTime);
-            const end = new Date(task.endTime);
-            timeDisplay = `${start.getMonth() + 1}月${start.getDate()}日 ${formatTime(start)} - ${end.getMonth() + 1}月${end.getDate()}日 ${formatTime(end)}`;
-        } else if (task.isAllDay) {
-            const start = new Date(task.startTime);
-            timeDisplay = `${start.getMonth() + 1}月${start.getDate()}日`;
-        } else if (task.endTime) {
-            timeDisplay = `${formatTime(new Date(task.startTime))} - ${formatTime(new Date(task.endTime))}`;
-        } else {
-            timeDisplay = formatDateTime(task.startTime);
-        }
-    }
+    const timeDisplay = formatTaskTimeLabel(task, false);
     const focusMinutes = getTaskFocusMinutes(task.id);
     const isOverdue = isTaskOverdue(task);
     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
@@ -353,7 +342,7 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
                 <div class="flex items-start gap-2">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-1.5 flex-wrap text-xs text-theme-muted mb-1.5">${meta}</div>
-                        <div class="text-sm font-medium leading-snug break-words ${task.completed ? 'line-through text-theme-muted' : 'text-theme-primary'}">${escapeHtml(task.title || '新任务')}</div>
+                        <div class="text-sm font-medium leading-snug break-words ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">${escapeHtml(task.title || '新任务')}</div>
                         ${details ? `<div class="mt-1.5">${details}</div>` : ''}
                         ${tagHtml ? `<div class="mt-1.5">${tagHtml}</div>` : ''}
                     </div>
@@ -1146,7 +1135,10 @@ function doDeleteList(listId, listName, moveToDefault) {
         }
     }
     lists = lists.filter(l => l.id !== listId);
-    if (currentListId === listId) currentListId = null;
+    if (currentListId === listId) {
+        currentListId = null;
+        _saveFilterState();
+    }
     saveData();
     renderView();
     if (typeof renderLists === 'function') renderLists();
@@ -1211,12 +1203,20 @@ function _onKanbanConfigClosed(forSwitch) {
 
 // 恢复默认配置（面板内「恢复默认」按钮）
 function resetKanbanViewConfig() {
-    _resetViewConfigToDefault('kanbanConfig', { showCompleted: true, showFocusButton: true, noDateTaskPosition: 'last' });
-    _kanbanExpanded = {}; // 分组依据等重置后，旧的列展开状态可能失配
-    saveData();
-    renderView();
-    openKanbanConfig(); // 重填面板控件
-    showToast('已恢复看板默认配置', 'success');
+    if (_resetCurrentListViewPrefs('kanban')) {
+        _kanbanExpanded = {};
+        saveData();
+        renderView();
+        openKanbanConfig();
+        showToast('已恢复该清单的看板配置（继承全局）', 'success');
+    } else {
+        _resetViewConfigToDefault('kanbanConfig', { showCompleted: true, showFocusButton: true, noDateTaskPosition: 'last' });
+        _kanbanExpanded = {};
+        saveData();
+        renderView();
+        openKanbanConfig();
+        showToast('已恢复看板默认配置', 'success');
+    }
 }
 
 function updateKanbanTagSubVisibility() {
@@ -1234,8 +1234,9 @@ function updateKanbanGroupConfigEntry() {
 
 // 控件变更：实时写入配置并预览（延迟保存：关闭面板时统一落盘）
 function onKanbanConfigChange() {
-    const cfg = getKanbanConfig();
+    const cfg = getKanbanConfig(); // 读取合并后的当前值
     const prevGroupBy = cfg.groupBy;
+    const target = _ensureListViewPrefs('kanban') || settings.kanbanConfig;
     const g = document.getElementById('kc-groupby');
     const sb = document.getElementById('kc-sortby');
     const sdDesc = document.getElementById('kc-sortdir-desc');
@@ -1245,27 +1246,31 @@ function onKanbanConfigChange() {
     const sfEl = document.getElementById('kc-showfocus');
     const cuEl = document.getElementById('kc-countuncompleted');
     const ndp = document.getElementById('kc-nodatepos');
-    if (g) cfg.groupBy = g.value;
-    if (sb) cfg.sortBy = sb.value;
-    if (sdDesc) cfg.sortDir = sdDesc.checked ? 'desc' : 'asc';
-    if (sdEl) cfg.showDetails = sdEl.checked;
-    if (scEl) cfg.showCompleted = scEl.checked;
-    if (sfEl) cfg.showFocusButton = sfEl.checked;
-    if (cuEl) cfg.countOnlyUncompleted = cuEl.checked;
-    if (ts) cfg.tagSubGroup = ts.value;
-    if (ndp) cfg.noDateTaskPosition = ndp.value === 'first' ? 'first' : 'last';
+    if (g) target.groupBy = g.value;
+    if (sb) target.sortBy = sb.value;
+    if (sdDesc) target.sortDir = sdDesc.checked ? 'desc' : 'asc';
+    if (sdEl) target.showDetails = sdEl.checked;
+    if (scEl) target.showCompleted = scEl.checked;
+    if (sfEl) target.showFocusButton = sfEl.checked;
+    if (cuEl) target.countOnlyUncompleted = cuEl.checked;
+    if (ts) target.tagSubGroup = ts.value;
+    if (ndp) target.noDateTaskPosition = ndp.value === 'first' ? 'first' : 'last';
     // 切换分组依据时重置「查看更多」展开状态，避免旧 colKey 在会话内累积
-    if (cfg.groupBy !== prevGroupBy) _kanbanExpanded = {};
+    if (target.groupBy !== prevGroupBy) _kanbanExpanded = {};
     updateKanbanTagSubVisibility();
     updateKanbanGroupConfigEntry();
     renderView();
 }
 
 // ---------- 分组配置子面板（覆盖于视图配置面板上，统一框架管理点击外部关闭） ----------
+// 看板与任务视图共用：分组依据（custom）来源按当前视图取对应配置，清单上下文同基于侧边栏选中
 function openKanbanGroupConfig() {
-    const cfg = getKanbanConfig();
     const ctx = kanbanListContext();
-    if (!(cfg.groupBy === 'custom' && ctx.mode === 'groups')) return;
+    if (ctx.mode !== 'groups') return;
+    const groupByCustom = currentView === 'task'
+        ? getTaskViewConfig().groupBy === 'custom'
+        : getKanbanConfig().groupBy === 'custom';
+    if (!groupByCustom) return;
     _kanbanGroupConfigOpen = true;
     renderKanbanGroupConfigPanel();
     openViewConfigPanel('kanbanGroup', _onKanbanGroupConfigClosed);
