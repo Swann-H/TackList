@@ -108,9 +108,10 @@ function renderSubtaskListDisplay(task, colorMode = 'theme') {
     const maxShow = 3;
     const showItems = validSubtasks.slice(0, maxShow);
 
+    // 颜色规则（全视图统一）：未完成跟随主题色（textMuted 带主题色相），已完成用中性灰（textSecondary）作区分
     const colors = colorMode === 'dark'
         ? { completed: 'text-slate-500', uncompleted: 'text-slate-300', muted: 'text-slate-500' }
-        : { completed: 'text-theme-muted', uncompleted: 'text-theme-secondary', muted: 'text-theme-muted' };
+        : { completed: 'text-theme-secondary', uncompleted: 'text-theme-muted', muted: 'text-theme-muted' };
 
     let html = '<div class="text-xs mt-1 space-y-0.5">';
     showItems.forEach(st => {

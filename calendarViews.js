@@ -838,7 +838,7 @@ function openMonthDayPopover(dateStr) {
                     <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                         ${escapeHtml(task.title || '新任务')}
                     </div>
-                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-1">${escapeHtml(task.notes)}</div>` : '')}
+                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '')}
                 </div>
             </div>
         `;

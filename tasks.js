@@ -424,7 +424,11 @@ function openAddTaskModal(presetDate = null) {
             const notesEl = document.getElementById('detail-task-notes');
             const currentTitle = titleEl ? titleEl.value : (task.title || '');
             const currentNotes = notesEl ? notesEl.value : (task.notes || '');
-            if ((!currentTitle || !currentTitle.trim()) && (!currentNotes || !currentNotes.trim())) {
+            // 子任务模式：描述或任一子任务文本有内容时，不算空任务
+            const hasSubtaskContent = task.mode === 'subtasks'
+                && (!!((task.description || '').trim())
+                    || (task.subtasks || []).some(st => st.text && st.text.trim()));
+            if ((!currentTitle || !currentTitle.trim()) && (!currentNotes || !currentNotes.trim()) && !hasSubtaskContent) {
                 tasks.splice(taskIndex, 1);
                 saveData();
                 document.getElementById('task-detail-panel').classList.add('hidden');
@@ -464,6 +468,7 @@ function openAddTaskModal(presetDate = null) {
         completed: false,
         createdAt: new Date().toISOString(),
         mode: 'text',
+        description: '',
         subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0 }],
         progress: 0
     };
@@ -872,13 +877,17 @@ function openTaskDetailPanel(taskId, readOnly = false) {
     
     // 初始化任务模式
     currentTaskMode = task.mode || 'text';
+    const descInput = document.getElementById('detail-task-description');
+    descInput.value = task.description || '';
     if (currentTaskMode === 'subtasks') {
         document.getElementById('detail-task-notes').classList.add('hidden');
+        descInput.classList.remove('hidden');
         document.getElementById('subtasks-container').classList.remove('hidden');
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
         document.getElementById('toggle-mode-btn').title = '文本模式';
     } else {
         document.getElementById('detail-task-notes').classList.remove('hidden');
+        descInput.classList.add('hidden');
         document.getElementById('subtasks-container').classList.add('hidden');
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul"></i>';
         document.getElementById('toggle-mode-btn').title = '切换任务模式';
@@ -915,10 +924,16 @@ function openTaskDetailPanel(taskId, readOnly = false) {
     
     // 添加标题自动调整高度
     setupTitleAutoResize();
-    
+
+    // 添加子任务模式描述框的输入监听（高度自适应 + 实时写入任务对象）
+    setupDetailDescriptionInput();
+
     // 在面板显示后再调整标题高度（延迟确保DOM已渲染）
     setTimeout(() => {
         autoResizeTextarea(titleInput);
+        if (currentTaskMode === 'subtasks') {
+            autoResizeDetailDescription(document.getElementById('detail-task-description'));
+        }
     }, 50);
     
     const detailPanel = document.getElementById('task-detail-panel');
@@ -942,6 +957,7 @@ function openTaskDetailPanel(taskId, readOnly = false) {
 function applyDetailReadOnly(readOnly) {
     const titleInput = document.getElementById('detail-task-title');
     const notesInput = document.getElementById('detail-task-notes');
+    const descInput = document.getElementById('detail-task-description');
     const completeBtn = document.getElementById('detail-task-complete-btn');
     const toggleModeBtn = document.getElementById('toggle-mode-btn');
     const timeMenuBtn = document.querySelector('[onclick*="toggleDetailTimeMenu"]');
@@ -952,6 +968,7 @@ function applyDetailReadOnly(readOnly) {
     if (readOnly) {
         if (titleInput) titleInput.readOnly = true;
         if (notesInput) notesInput.readOnly = true;
+        if (descInput) descInput.readOnly = true;
         if (completeBtn) completeBtn.style.display = 'none';
         if (toggleModeBtn) toggleModeBtn.style.display = 'none';
         if (timeMenuBtn) timeMenuBtn.style.display = 'none';
@@ -960,6 +977,7 @@ function applyDetailReadOnly(readOnly) {
     } else {
         if (titleInput) titleInput.readOnly = false;
         if (notesInput) notesInput.readOnly = false;
+        if (descInput) descInput.readOnly = false;
         if (completeBtn) completeBtn.style.display = '';
         if (toggleModeBtn) toggleModeBtn.style.display = '';
         if (timeMenuBtn) timeMenuBtn.style.display = '';
@@ -1144,9 +1162,12 @@ function toggleTaskMode(event) {
         const notesValue = document.getElementById('detail-task-notes').value;
         task.notes = notesValue;
         currentTaskMode = 'subtasks';
-        const notes = notesValue || '';
-        if (notes.trim()) {
-            const lines = notes.split('\n');
+        // 按第一个空行拆分：空行前为任务详情描述（独立字段，不转为子任务），空行后按行拆为子任务
+        const { description, body } = splitNotesIntoDescriptionAndBody(notesValue);
+        task.description = description;
+        document.getElementById('detail-task-description').value = description;
+        if (body.trim()) {
+            const lines = body.split('\n');
             // 总是用当前文本重新生成子任务
             task.subtasks = lines.map((line, i) => ({ id: generateId(), text: line, completed: false, originalOrder: i }));
         }
@@ -1155,6 +1176,8 @@ function toggleTaskMode(event) {
         }
         // 先切换显示，再渲染子任务（确保scrollHeight正确计算）
         document.getElementById('detail-task-notes').classList.add('hidden');
+        document.getElementById('detail-task-description').classList.remove('hidden');
+        autoResizeDetailDescription(document.getElementById('detail-task-description'));
         document.getElementById('subtasks-container').classList.remove('hidden');
         renderSubtasks();
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
@@ -1172,9 +1195,14 @@ function toggleTaskMode(event) {
             if (a.completed && !b.completed) return 1;
             return (a.originalOrder || 0) - (b.originalOrder || 0);
         });
-        task.notes = sortedForText.map(st => st.text).join('\n');
+        // 描述置于文本最顶端，与子任务转来的文本以一行空行分隔
+        const descValue = document.getElementById('detail-task-description').value;
+        task.description = descValue;
+        const joined = sortedForText.map(st => st.text).join('\n');
+        task.notes = descValue.trim() ? descValue + '\n\n' + joined : joined;
         document.getElementById('detail-task-notes').value = task.notes || '';
         document.getElementById('detail-task-notes').classList.remove('hidden');
+        document.getElementById('detail-task-description').classList.add('hidden');
         document.getElementById('subtasks-container').classList.add('hidden');
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul"></i>';
         document.getElementById('toggle-mode-btn').title = '切换任务模式';
@@ -1251,14 +1279,27 @@ function scheduleSubtaskHighlight(el, kind, side) {
     });
 }
 
-function renderSubtasks() {
-    const container = document.getElementById('subtasks-container');
-    if (!container) return;
-    
+// 已有子任务文本时，隐藏描述框的"任务详情描述"默认提示字样，只保留输入框
+function updateDetailDescriptionPlaceholder() {
+    const descInput = document.getElementById('detail-task-description');
+    if (!descInput) return;
     const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
     if (taskIndex === -1) return;
     const task = tasks[taskIndex];
-    
+    const hasSubtaskText = (task.subtasks || []).some(st => st.text && st.text.trim());
+    descInput.placeholder = hasSubtaskText ? '' : '任务详情描述';
+}
+
+function renderSubtasks() {
+    const container = document.getElementById('subtasks-container');
+    if (!container) return;
+
+    const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
+    if (taskIndex === -1) return;
+    const task = tasks[taskIndex];
+
+    updateDetailDescriptionPlaceholder();
+
     container.innerHTML = '';
     const subtasks = task.subtasks || [{ id: generateId(), text: '', completed: false, originalOrder: 0 }];
     
@@ -1330,10 +1371,10 @@ function renderSubtasks() {
         }
         
         const checkbox = document.createElement('button');
-        checkbox.className = 'w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition border-accent dark:border-white hover:border-accent-hover dark:hover:border-accent-secondary';
+        checkbox.className = 'w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition border-accent hover:border-accent-hover';
         if (subtask.completed) {
             checkbox.classList.add('bg-gray-400', 'border-gray-400');
-            checkbox.classList.remove('border-accent', 'dark:border-white');
+            checkbox.classList.remove('border-accent');
             checkbox.innerHTML = '<i class="fas fa-check text-[8px] text-white"></i>';
         }
         checkbox.onclick = () => toggleSubtaskComplete(subtask.id, !subtask.completed);
@@ -1348,7 +1389,7 @@ function renderSubtasks() {
         }
         input.placeholder = '输入子任务...';
         input.onkeydown = (e) => handleSubtaskKeydown(e, subtask.id);
-        input.oninput = () => { autoResizeTextarea(input); saveSubtasksToTask(); };
+        input.oninput = () => { autoResizeTextarea(input); saveSubtasksToTask(); updateDetailDescriptionPlaceholder(); };
         
         const dragBtn = document.createElement('button');
         dragBtn.className = 'text-theme-muted hover:text-theme-primary transition flex-shrink-0 p-1 invisible group-hover:visible cursor-grab active:cursor-grabbing';
@@ -1523,6 +1564,28 @@ function handleSubtaskKeydown(event, subtaskId) {
                 const newInput = document.querySelector(`#subtasks-container textarea[data-subtask-id="${newSubtask.id}"]`);
                 if (newInput) newInput.focus();
             }, 10);
+        }
+    } else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && input.selectionStart === input.selectionEnd) {
+        // 上下键在子任务间切换：光标位于首行按↑（或末行按↓）时切换到上/下一个子任务，
+        // 光标置于其文本末尾；多行子任务内部仍正常在行间移动光标
+        const currentLine = input.value.substring(0, input.selectionStart).split('\n').length;
+        const totalLines = input.value.split('\n').length;
+        const atFirstLine = event.key === 'ArrowUp' && currentLine === 1;
+        const atLastLine = event.key === 'ArrowDown' && currentLine === totalLines;
+        if (atFirstLine || atLastLine) {
+            const container = document.getElementById('subtasks-container');
+            const inputs = container.querySelectorAll('textarea[data-subtask-id]');
+            let currentDomIndex = -1;
+            inputs.forEach((inp, i) => { if (inp.dataset.subtaskId === subtaskId) currentDomIndex = i; });
+            const targetIndex = atFirstLine ? currentDomIndex - 1 : currentDomIndex + 1;
+            if (targetIndex >= 0 && targetIndex < inputs.length) {
+                event.preventDefault();
+                event.stopPropagation();
+                const targetInput = inputs[targetIndex];
+                targetInput.focus();
+                const pos = targetInput.value.length;
+                targetInput.setSelectionRange(pos, pos);
+            }
         }
     } else if (event.key === 'Backspace' && input.selectionStart === 0 && input.selectionEnd === 0 && task.subtasks.length > 1) {
         event.preventDefault();
@@ -1742,15 +1805,47 @@ function autoResizeTextarea(textarea) {
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
 }
 
+// 子任务模式下"任务详情描述"输入框的高度自适应（上限高于标题）
+function autoResizeDetailDescription(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+}
+
+// 将文本按第一个空行拆分：空行前为任务详情描述，空行后为子任务文本
+function splitNotesIntoDescriptionAndBody(notes) {
+    const text = notes || '';
+    const sepIdx = text.indexOf('\n\n');
+    if (sepIdx === -1) {
+        return { description: '', body: text };
+    }
+    return { description: text.substring(0, sepIdx), body: text.substring(sepIdx + 2) };
+}
+
 function setupTitleAutoResize() {
     const titleInput = document.getElementById('detail-task-title');
-    
+
     // 移除旧的监听器
     titleInput.oninput = null;
-    
+
     // 添加新的监听器
     titleInput.oninput = function() {
         autoResizeTextarea(this);
+    };
+}
+
+// 子任务模式下"任务详情描述"输入框：高度自适应，并实时同步到任务对象
+function setupDetailDescriptionInput() {
+    const descInput = document.getElementById('detail-task-description');
+
+    // 移除旧的监听器
+    descInput.oninput = null;
+
+    descInput.oninput = function() {
+        autoResizeDetailDescription(this);
+        const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
+        if (taskIndex !== -1) {
+            tasks[taskIndex].description = this.value;
+        }
     };
 }
 
@@ -1888,7 +1983,13 @@ function closeTaskDetailPanel() {
             const titleFromPanel = document.getElementById('detail-task-title').value;
             if (!titleFromPanel || !titleFromPanel.trim()) {
                 const notesFromPanel = document.getElementById('detail-task-notes');
-                const hasNotes = notesFromPanel && notesFromPanel.value && notesFromPanel.value.trim();
+                let hasNotes = !!(notesFromPanel && notesFromPanel.value && notesFromPanel.value.trim());
+                // 子任务模式：描述或任一子任务文本有内容时，不算空任务
+                if (!hasNotes && currentTaskMode === 'subtasks') {
+                    const descValue = document.getElementById('detail-task-description').value;
+                    hasNotes = !!(descValue && descValue.trim())
+                        || (tasks[taskIndex].subtasks || []).some(st => st.text && st.text.trim());
+                }
                 if (!hasNotes) {
                     tasks.splice(taskIndex, 1);
                     saveDataImmediate();
@@ -1978,7 +2079,7 @@ function populateDetailGroupSelect() {
     }
     row.classList.remove('hidden');
     const color = (list && list.color) || '#6b7280';
-    const opts = [{ id: '', name: '未分组' }].concat(groups.map(g => ({ id: g.id, name: g.name || '未命名分组' })));
+    const opts = [{ id: '', name: '默认' }].concat(groups.map(g => ({ id: g.id, name: g.name || '未命名分组' })));
     opts.forEach(opt => {
         const isSel = opt.id === detailSelectedGroupId;
         const btn = document.createElement('button');
@@ -2026,6 +2127,8 @@ function saveTaskDetail() {
     if (currentTaskMode === 'text') {
         task.notes = document.getElementById('detail-task-notes').value;
     } else {
+        // 子任务模式：描述为独立字段，notes 仍保存子任务文本拼接（供视图显示与搜索）
+        task.description = document.getElementById('detail-task-description').value;
         if (task.subtasks && task.subtasks.length > 0) {
             const sorted = [...task.subtasks].sort((a, b) => {
                 if (!a.completed && b.completed) return -1;
@@ -2263,6 +2366,8 @@ function clearTaskTime() {
     const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
     if (taskIndex === -1) return;
     const task = tasks[taskIndex];
+    // 重新渲染面板前，先同步面板中尚未保存的输入（标题、备注等），避免被任务对象的旧值覆盖
+    syncDetailPanelInputsToTask(task);
     delete task.startTime;
     delete task.endTime;
     task.isAllDay = false;
@@ -2270,6 +2375,26 @@ function clearTaskTime() {
     saveData();
     openTaskDetailPanel(task.id);
     renderView();
+}
+
+// 将详情面板中尚未保存的输入同步到任务对象（不处理时间字段，由调用方自行处理）
+function syncDetailPanelInputsToTask(task) {
+    if (!task) return;
+    const titleValue = document.getElementById('detail-task-title').value;
+    if (titleValue && titleValue.trim()) {
+        task.title = titleValue;
+    }
+    task.mode = currentTaskMode;
+    if (currentTaskMode === 'text') {
+        task.notes = document.getElementById('detail-task-notes').value;
+    } else {
+        // 子任务模式：同步描述框内容，避免 openTaskDetailPanel 重渲染时被旧值覆盖
+        task.description = document.getElementById('detail-task-description').value;
+    }
+    task.listId = detailSelectedListId;
+    task.groupId = detailSelectedGroupId || null;
+    task.important = detailImportantState;
+    task.urgent = detailUrgentState;
 }
 
 function toggleDetailTimeMenu() {
@@ -2777,6 +2902,8 @@ function saveTaskDetailWithoutClose() {
     if (currentTaskMode === 'text') {
         task.notes = document.getElementById('detail-task-notes').value;
     } else {
+        // 子任务模式：描述为独立字段，notes 仍保存子任务文本拼接（供视图显示与搜索）
+        task.description = document.getElementById('detail-task-description').value;
         if (task.subtasks && task.subtasks.length > 0) {
             const sorted = [...task.subtasks].sort((a, b) => {
                 if (!a.completed && b.completed) return -1;

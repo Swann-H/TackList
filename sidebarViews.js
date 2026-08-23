@@ -744,7 +744,7 @@ function renderArchivedTaskCard(task) {
                     ${task.important ? '<i class="fas fa-star text-yellow-500 text-sm ml-1"></i>' : ''}
                     ${task.urgent ? '<i class="fas fa-fire text-red-500 text-sm ml-1"></i>' : ''}
                 </div>
-                ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs text-theme-secondary mt-1">${task.notes}</div>` : '')}
+                ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${task.notes}</div>` : '')}
             </div>
         </div>
     `;

@@ -2433,6 +2433,8 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
 
             <div class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col">
                 <textarea id="detail-task-notes" placeholder="任务详情描述" class="w-full flex-1 bg-transparent border-none outline-none resize-none text-theme-primary min-h-[120px]"></textarea>
+                <!-- 子任务模式下的任务详情描述（置于子任务列表上方） -->
+                <textarea id="detail-task-description" placeholder="任务详情描述" rows="1" class="hidden w-full bg-transparent border-none outline-none resize-none text-theme-primary overflow-y-auto" style="min-height: 36px; max-height: 200px;"></textarea>
                 <div id="subtasks-container" class="hidden space-y-2"></div>
             </div>
 
@@ -3517,7 +3519,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     </div>
 
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.4</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.5</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">
@@ -3749,7 +3751,6 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     <option value="createdTime">创建时间</option>
                     <option value="tag">标签</option>
                     <option value="priority">优先级</option>
-                    <option value="none">无</option>
                 </select>
             </div>
             <div id="kc-tagsub-wrap" class="hidden">

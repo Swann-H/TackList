@@ -185,7 +185,7 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
                 if (token === 'ungrouped') {
                     const arr = incomplete.filter(t => !t.groupId || !groupById[t.groupId]);
                     groups.push({
-                        key: 'cgrp:__ungrouped__', dataGroup: 'cgrp-ungrouped', label: '未分组',
+                        key: 'cgrp:__ungrouped__', dataGroup: 'cgrp-ungrouped', label: '默认',
                         tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
                     });
                 } else if (groupById[token]) {
@@ -564,7 +564,7 @@ function buildTaskListItemHtml(task, useShortTime) {
         const subtaskHtml = renderSubtaskListDisplay(task);
         taskDetailsLine = subtaskHtml
             ? subtaskHtml
-            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-0.5 truncate">${escapeHtml(task.notes)}</div>` : '');
+            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '');
     }
 
     return `
@@ -577,8 +577,8 @@ function buildTaskListItemHtml(task, useShortTime) {
                 ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
             </button>
             <div class="flex-1 min-w-0 flex flex-col">
-                <span class="text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
-                ${taskDetailsLine ? `<div class="mt-0.5">${taskDetailsLine}</div>` : ''}
+                <span class="${tvcShowDetails ? 'font-medium' : 'text-sm'} ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
+                ${taskDetailsLine ? `<div>${taskDetailsLine}</div>` : ''}
             </div>
             ${renderFocusButton(task.id, getTaskViewConfig().showFocusButton)}
             <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
@@ -1143,7 +1143,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
                                                     <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                                                         ${task.title || '新任务'}
                                                     </div>
-                                                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-muted' : 'text-theme-secondary'} mt-1">${task.notes}</div>` : '')}
+                                                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${task.notes}</div>` : '')}
                                                 </div>
                                             </div>
                                         `;

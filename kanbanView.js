@@ -14,7 +14,7 @@ let _kanbanNewGroupIds = new Set(); // 刚由「新增分组」创建、尚未�
 let _kanbanEditingGroupId = null; // 当前正在进行行内改名（input 编辑中）的分组 id；编辑期间禁用该列拖拽并阻止看板整板重渲染销毁输入框
 
 const KANBAN_GROUP_BY_LABEL = {
-    custom: '自定义', time: '时间', createdTime: '创建时间', tag: '标签', priority: '优先级', none: '无'
+    custom: '自定义', time: '时间', createdTime: '创建时间', tag: '标签', priority: '优先级'
 };
 const KANBAN_TIME_TITLE = { nodate: '无日期', overdue: '已过期', today: '今天', tomorrow: '明天', dayAfterTomorrow: '后天', recent7: '最近7天', later: '更远' };
 const KANBAN_CREATED_TITLE = { today: '今天', past7: '过去7天', past30: '过去30天', earlier: '更早' };
@@ -48,6 +48,7 @@ function getKanbanConfig() {
     }
     const c = settings.kanbanConfig;
     if (!c.groupBy) c.groupBy = 'custom';
+    if (c.groupBy === 'none') c.groupBy = 'custom'; // 「无」选项已移除：旧配置迁移回默认（单列全任务可由清单模式+筛选替代）
     if (!c.sortBy) c.sortBy = 'time';
     if (!c.sortDir) c.sortDir = 'asc';
     if (typeof c.showDetails !== 'boolean') c.showDetails = false;
@@ -60,7 +61,11 @@ function getKanbanConfig() {
     if (c.noDateTaskPosition !== 'first' && c.noDateTaskPosition !== 'last') c.noDateTaskPosition = 'last';
     // per-list 回退链
     const listPrefs = _getCurrentListViewPrefs('kanban');
-    if (listPrefs) return Object.assign({}, c, listPrefs);
+    if (listPrefs) {
+        const merged = Object.assign({}, c, listPrefs);
+        if (merged.groupBy === 'none') merged.groupBy = 'custom'; // 清单级旧偏好同步迁移
+        return merged;
+    }
     return c;
 }
 
@@ -241,7 +246,7 @@ function computeKanbanColumns() {
         const ungroupedTasks = base.filter(t => !t.groupId || !groupById[t.groupId]);
         order.forEach(token => {
             if (token === 'ungrouped') {
-                columns.push({ key: `ungrp:${list.id}`, title: '未分组', type: 'ungrouped', listId: list.id, tasks: ungroupedTasks });
+                columns.push({ key: `ungrp:${list.id}`, title: '默认', type: 'ungrouped', listId: list.id, tasks: ungroupedTasks });
             } else if (groupById[token]) {
                 const g = groupById[token];
                 columns.push({ key: `grp:${list.id}:${g.id}`, title: g.name, type: 'customGroup', listId: list.id, groupId: g.id, tasks: base.filter(t => t.groupId === g.id) });
@@ -249,7 +254,7 @@ function computeKanbanColumns() {
         });
         // 兜底：确保未分组列始终存在（作为拖拽落点）
         if (!order.includes('ungrouped')) {
-            columns.push({ key: `ungrp:${list.id}`, title: '未分组', type: 'ungrouped', listId: list.id, tasks: ungroupedTasks });
+            columns.push({ key: `ungrp:${list.id}`, title: '默认', type: 'ungrouped', listId: list.id, tasks: ungroupedTasks });
         }
     } else if (cfg.groupBy === 'custom') {
         lists.filter(l => !l.archived && !l.isFolder && ctx.listSet.has(l.id)).forEach(l => {
@@ -265,6 +270,18 @@ function computeKanbanColumns() {
         columns = kanbanTagColumns(base, cfg);
     } else {
         columns = [{ key: 'all', title: '全部任务', type: 'all', tasks: base }];
+    }
+
+    // 非「自定义分组（单清单）」模式：按用户拖拽保存的列顺序重排（columnOrder[groupBy]）。
+    // 未保存过的新列（如新建标签）保持默认相对顺序追加在后（sort 稳定保证）。
+    if (!(cfg.groupBy === 'custom' && ctx.mode === 'groups') &&
+        cfg.columnOrder && Array.isArray(cfg.columnOrder[cfg.groupBy])) {
+        const idxMap = new Map(cfg.columnOrder[cfg.groupBy].map((k, i) => [k, i]));
+        columns.sort((a, b) => {
+            const ia = idxMap.has(a.key) ? idxMap.get(a.key) : Number.MAX_SAFE_INTEGER;
+            const ib = idxMap.has(b.key) ? idxMap.get(b.key) : Number.MAX_SAFE_INTEGER;
+            return ia - ib;
+        });
     }
 
     columns.forEach(col => { col.tasks = sortKanbanTasks(col.tasks, cfg); });
@@ -317,7 +334,7 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
         const subtaskHtml = renderSubtaskListDisplay(task);
         details = subtaskHtml
             ? subtaskHtml
-            : (task.notes ? `<div class="text-xs text-theme-muted mt-1 whitespace-pre-wrap break-words">${escapeHtml(task.notes)}</div>` : '');
+            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1 whitespace-pre-wrap break-words">${escapeHtml(task.notes)}</div>` : '');
     }
     const listBadge = (showList && list)
         ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color:${listColor}"></span>${escapeHtml(list.name)}</span>`
@@ -390,16 +407,16 @@ function renderKanbanColumn(col, cfg, showList) {
 
     const isCustomMode = col.type === 'customGroup' || col.type === 'ungrouped';
     const showMenu = cfg.groupBy === 'custom';   // 改进6：仅自定义分组保留「…」更多菜单
-    const draggableAttrs = isCustomMode
-        ? `draggable="true" ondragstart="handleKanbanColumnDragStart(event, '${col.key}')" ondragend="handleKanbanColumnDragEnd(event)"`
-        : '';
+    // 所有分组依据的列均支持拖拽排序：自定义分组模式持久化到 list.customColumnOrder，
+    // 其余模式持久化到看板配置 columnOrder[groupBy]（见 handleKanbanColumnDrop）
+    const draggableAttrs = `draggable="true" ondragstart="handleKanbanColumnDragStart(event, '${col.key}')" ondragend="handleKanbanColumnDragEnd(event)"`;
     const dot = (col.color) ? `<span class="w-2.5 h-2.5 rounded-full" style="background-color: ${col.color}"></span>` : '';
 
     // 改进5：整行（标题 + 计数，除「+」「…」按钮）作为拖拽手柄，按住任一位置即可拖拽
     // 改进6：去掉拖拽图标（grip），保留按住标题栏任一位置（除按钮外）可拖拽
     // 改进5：customGroup 列标题支持双击改名（双击事件留在标题元素上）
     const titleHandle = `
-        <div class="flex items-center gap-2 min-w-0 ${isCustomMode ? 'cursor-move' : ''}"
+        <div class="flex items-center gap-2 min-w-0 cursor-move"
              ${isCustomMode && col.type === 'customGroup' ? `ondblclick="startKanbanColumnRename(event, '${col.key}')"` : ''}>
             ${dot}
             <span class="kanban-col-title font-semibold text-theme-primary truncate" ${col.color ? `style="color:${col.color}"` : ''}>${escapeHtml(col.title)}</span>
@@ -419,7 +436,7 @@ function renderKanbanColumn(col, cfg, showList) {
     if (col.children && col.children.length) {
         bodyHtml += col.children.map(ch => renderKanbanSubColumn(ch, cfg, showList)).join('');
     } else if (visibleTasks.length === 0) {
-        bodyHtml += `<div class="text-center py-6 text-theme-muted text-sm border-2 border-dashed border-theme rounded-lg">暂无任务</div>`;
+        bodyHtml += `<div class="text-center py-6 mb-2.5 text-theme-muted text-sm border-2 border-dashed border-theme rounded-lg">暂无任务</div>`;
     } else {
         bodyHtml += visibleTasks.map(t => renderKanbanCard(t, showDetails, showList)).join('');
         if (remaining > 0) {
@@ -430,7 +447,7 @@ function renderKanbanColumn(col, cfg, showList) {
 
     return `
         <div class="flex flex-col w-72 flex-shrink-0 bg-theme-secondary rounded-xl shadow-theme border border-theme max-h-full" data-col-key="${col.key}"
-             ${isCustomMode ? `ondragover="kanbanColumnDragOverProxy(event)" ondrop="kanbanColumnDropProxy(event, '${col.key}')"` : ''}>
+             ondragover="kanbanColumnDragOverProxy(event)" ondrop="kanbanColumnDropProxy(event, '${col.key}')">
             <div class="p-3 pb-2 flex-shrink-0 kanban-col-header">
                 ${headerHtml}
             </div>
@@ -591,7 +608,7 @@ function renderKanbanView(container) {
 
     container.innerHTML = `
         <div class="h-full flex flex-col">
-            <div class="flex-1 min-h-0 flex gap-4 overflow-x-auto pb-2 pt-1" id="kanban-board">
+            <div class="flex-1 min-h-0 flex items-start gap-4 overflow-x-auto pb-2 pt-1" id="kanban-board">
                 ${boardHtml}
                 ${addGroupHtml}
             </div>
@@ -710,14 +727,14 @@ function handleKanbanDrop(e, colKey) {
     e.stopPropagation(); // 阻止 drop 冒泡到列容器的 kanbanColumnDropProxy，避免子列与主列双次处理
 }
 
-// ---------- 列拖拽排序（自定义分组 + 未分组） ----------
+// ---------- 列拖拽排序（所有分组依据的列通用） ----------
 function handleKanbanColumnDragStart(e, colKey) {
-    const leaf = _kanbanLeafMap[colKey];
-    if (!leaf || (leaf.type !== 'customGroup' && leaf.type !== 'ungrouped')) return;
+    if (!_kanbanLeafMap[colKey]) return;
     _draggedKanbanCol = colKey;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', colKey);
-    e.target.classList.add('dragging');
+    // 用 currentTarget：dragstart 的 target 可能是标题内部子元素，避免把 .dragging 加错元素
+    e.currentTarget.classList.add('dragging');
 }
 
 function handleKanbanColumnDragOver(e) {
@@ -743,23 +760,42 @@ function handleKanbanColumnDrop(e, targetColKey) {
     if (!_draggedKanbanCol || _draggedKanbanCol === targetColKey) { _draggedKanbanCol = null; return; }
     const src = _kanbanLeafMap[_draggedKanbanCol];
     const tgt = _kanbanLeafMap[targetColKey];
-    const reorderable = src && tgt && src.listId === tgt.listId &&
-        (src.type === 'customGroup' || src.type === 'ungrouped') &&
-        (tgt.type === 'customGroup' || tgt.type === 'ungrouped');
-    if (reorderable) {
-        const list = getList(src.listId);
-        if (list) {
-            const order = getKanbanColumnOrder(list).slice();
-            const srcToken = colKeyToOrderToken(_draggedKanbanCol, list.id);
-            const tgtToken = colKeyToOrderToken(targetColKey, list.id);
-            const from = order.indexOf(srcToken);
-            const to = order.indexOf(tgtToken);
+    if (src && tgt) {
+        // 自定义分组（单清单）模式：顺序持久化到 list.customColumnOrder
+        if ((src.type === 'customGroup' || src.type === 'ungrouped') &&
+            (tgt.type === 'customGroup' || tgt.type === 'ungrouped') && src.listId === tgt.listId) {
+            const list = getList(src.listId);
+            if (list) {
+                const order = getKanbanColumnOrder(list).slice();
+                const srcToken = colKeyToOrderToken(_draggedKanbanCol, list.id);
+                const tgtToken = colKeyToOrderToken(targetColKey, list.id);
+                const from = order.indexOf(srcToken);
+                const to = order.indexOf(tgtToken);
+                if (from > -1 && to > -1 && from !== to) {
+                    order.splice(from, 1);
+                    order.splice(to, 0, srcToken);
+                    setKanbanColumnOrder(list, order);
+                    renderView();
+                }
+            }
+        } else {
+            // 其余分组依据（时间/创建时间/标签/优先级/清单等）：从 DOM 读取当前列序，
+            // 交换后写入看板配置 columnOrder[groupBy]（per-list 偏好优先）
+            const board = document.getElementById('kanban-board');
+            const keys = board
+                ? [...board.children].filter(el => el.hasAttribute('data-col-key')).map(el => el.getAttribute('data-col-key'))
+                : [];
+            const from = keys.indexOf(_draggedKanbanCol);
+            const to = keys.indexOf(targetColKey);
             if (from > -1 && to > -1 && from !== to) {
-                order.splice(from, 1);
-                order.splice(to, 0, srcToken);
-                setKanbanColumnOrder(list, order);
+                keys.splice(from, 1);
+                keys.splice(to, 0, _draggedKanbanCol);
+                const cfg = getKanbanConfig();
+                const target = _ensureListViewPrefs('kanban') || settings.kanbanConfig;
+                if (!target.columnOrder || typeof target.columnOrder !== 'object') target.columnOrder = {};
+                target.columnOrder[cfg.groupBy] = keys;
+                saveData();
                 renderView();
-                // 改进6：分组顺序更新不再弹 toast
             }
         }
     }
@@ -1314,7 +1350,7 @@ function renderKanbanGroupConfigPanel() {
     let html = '';
     order.forEach(token => {
         const isUngrouped = token === 'ungrouped';
-        const name = isUngrouped ? '未分组' : (groupById[token] ? groupById[token].name : '');
+        const name = isUngrouped ? '默认' : (groupById[token] ? groupById[token].name : '');
         if (!isUngrouped && !groupById[token]) return; // 跳过已删除的分组 token
         html += `
             <div class="flex items-center gap-2 p-2 rounded-lg bg-theme-tertiary border border-theme" draggable="true"

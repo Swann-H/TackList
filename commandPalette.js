@@ -165,7 +165,7 @@ function rebuildSearchIndex() {
         _searchIndex.push({
             task: t,
             title: (t.title || '').toLowerCase(),
-            notes: (t.notes || '').toLowerCase()
+            notes: ((t.notes || '') + ' ' + (t.description || '')).toLowerCase()
         });
     }
     _searchIndexReady = true;

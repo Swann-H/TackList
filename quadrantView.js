@@ -132,7 +132,7 @@ function renderQuadrantView(container) {
                                              ondragover="handleTaskDragOver(event)"
                                              ondrop="handleTaskDrop(event, '${task.id}', '${key}')">
                                             <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                                                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-accent dark:border-white hover:border-accent-hover dark:hover:border-accent-secondary'}">
+                                                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-accent hover:border-accent-hover'}">
                                                     ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
                                                 </button>
                                                 ${renderFocusButton(task.id, quadrantCfg.showFocusButton !== false)}
@@ -149,7 +149,7 @@ function renderQuadrantView(container) {
                                                 <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'}">
                                                     ${task.title || '新任务'}
                                                 </div>
-                                                ${(quadrantCfg.showDetails !== false) ? (renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs text-theme-muted mt-1">${task.notes}</div>` : '')) : ''}
+                                                ${(quadrantCfg.showDetails !== false) ? (renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${task.notes}</div>` : '')) : ''}
                                             </div>
                                         </div>
                                     `;
