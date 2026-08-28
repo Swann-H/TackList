@@ -1568,28 +1568,16 @@
         }
         @keyframes fxPanelIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
         @keyframes fxPanelOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
-        /* 视图切换：方向性滑动过渡（切换到右侧视图时内容整体向左流动：旧视图左移淡出，新视图自右接续滑入，反之亦然）
-           首选路径：View Transitions API —— :root[data-fx-vt-dir] 由 JS 仅在过渡期间挂载，
-           ① 声明过渡方向（next/prev 对应关键帧）；② 让 root 退出快照捕获，
-           视图容器之外的骨架（侧边栏/视图标签指示条/详情面板）保持实时渲染，避免与滑动过渡双重动画 */
-        :root[data-fx-vt-dir] { view-transition-name: none; }
-        /* 过渡窗口裁剪到视图容器原位：旧视图滑出/新视图滑入时不会溢出到侧边栏上方 */
-        :root[data-fx-vt-dir]::view-transition-group(view-container) { overflow: hidden; }
-        :root[data-fx-vt-dir]::view-transition-old(view-container),
-        :root[data-fx-vt-dir]::view-transition-new(view-container) { mix-blend-mode: normal; }
-        :root[data-fx-vt-dir="next"]::view-transition-old(view-container) { animation: fxVtOutLeft 0.24s cubic-bezier(0.4, 0, 0.2, 1) both; }
-        :root[data-fx-vt-dir="next"]::view-transition-new(view-container) { animation: fxVtInRight 0.24s cubic-bezier(0.4, 0, 0.2, 1) both; }
-        :root[data-fx-vt-dir="prev"]::view-transition-old(view-container) { animation: fxVtOutRight 0.24s cubic-bezier(0.4, 0, 0.2, 1) both; }
-        :root[data-fx-vt-dir="prev"]::view-transition-new(view-container) { animation: fxVtInLeft 0.24s cubic-bezier(0.4, 0, 0.2, 1) both; }
-        @keyframes fxVtOutLeft { 0% { transform: translateX(0); opacity: 1; } 40% { opacity: 1; } 100% { transform: translateX(-100%); opacity: 0; } }
-        @keyframes fxVtOutRight { 0% { transform: translateX(0); opacity: 1; } 40% { opacity: 1; } 100% { transform: translateX(100%); opacity: 0; } }
-        @keyframes fxVtInRight { 0% { transform: translateX(100%); opacity: 0; } 70% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
-        @keyframes fxVtInLeft { 0% { transform: translateX(-100%); opacity: 0; } 70% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
-        /* 视图切换降级路径（不支持 View Transitions 的浏览器）：新视图方向性微位移 + 淡入，无幽灵层克隆 */
-        body.fx-smooth .fx-enter-soft-left { animation: fxEnterSoftLeft 0.18s ease-out; }
-        body.fx-smooth .fx-enter-soft-right { animation: fxEnterSoftRight 0.18s ease-out; }
-        @keyframes fxEnterSoftLeft { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
-        @keyframes fxEnterSoftRight { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+        /* 视图切换：方向性滑动过渡（切换到右侧视图时内容整体向左流动：旧视图左移淡出，新视图自右接续滑入，反之亦然） */
+        body.fx-smooth .fx-view-ghost { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; animation-duration: 0.22s; animation-timing-function: ease; animation-fill-mode: forwards; }
+        body.fx-smooth .fx-ghost-out-right { animation-name: fxGhostOutRight; }
+        body.fx-smooth .fx-ghost-out-left { animation-name: fxGhostOutLeft; }
+        @keyframes fxGhostOutRight { 0% { transform: translateX(0); opacity: 1; } 40% { opacity: 1; } 100% { transform: translateX(100%); opacity: 0; } }
+        @keyframes fxGhostOutLeft { 0% { transform: translateX(0); opacity: 1; } 40% { opacity: 1; } 100% { transform: translateX(-100%); opacity: 0; } }
+        body.fx-smooth .fx-enter-from-left { animation: fxEnterFromLeft 0.22s ease; }
+        body.fx-smooth .fx-enter-from-right { animation: fxEnterFromRight 0.22s ease; }
+        @keyframes fxEnterFromLeft { 0% { transform: translateX(-100%); opacity: 0; } 70% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes fxEnterFromRight { 0% { transform: translateX(100%); opacity: 0; } 70% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
         /* 视图切换按钮：高亮指示条从旧按钮平滑滑动到新按钮 */
         body.fx-smooth #view-tabs { position: relative; }
         body.fx-smooth #view-tabs > button { position: relative; z-index: 1; }
@@ -1609,10 +1597,11 @@
             transition: height 0.3s ease, margin 0.3s ease, padding 0.3s ease;
         }
         @keyframes fxTaskWipe { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
-        /* 系统级减弱动态效果时禁用全部 fx 动画（视图切换过渡在 JS 侧同步跳过） */
+        /* 系统级减弱动态效果时禁用全部 fx 动画 */
         @media (prefers-reduced-motion: reduce) {
-            body.fx-smooth .fx-enter-soft-left,
-            body.fx-smooth .fx-enter-soft-right,
+            body.fx-smooth .fx-view-ghost,
+            body.fx-smooth .fx-enter-from-left,
+            body.fx-smooth .fx-enter-from-right,
             body.fx-smooth .fx-collapse,
             body.fx-smooth .fx-task-done { animation: none !important; transition: none !important; }
             body.fx-smooth #task-detail-panel.panel-fade-in,

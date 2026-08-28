@@ -7,62 +7,42 @@
 //   - summaryView.js     : 摘要视图（统计/图表/动画）
 // 公共工具函数（isTaskOverdue/isTaskOverdueToday/renderFocusButton/OVERDUE_TEXT_CLASS）已移至 utils.js
 
-// 平滑过渡动画：方向性滑动过渡统一入口
-// 首选路径（View Transitions API）：浏览器先对旧视图截图，DOM 更新放入过渡回调执行，
-//   新旧两态由合成器线程交叉过渡 —— 省去 cloneNode 深克隆与双份全尺寸活 DOM 共存的成本，
-//   旧视图滚动位置等中间状态天然保留在截图中。
-// 降级路径（不支持 VT 的浏览器）：仅对新视图做「方向性微位移 + 淡入」，只动画 transform/opacity。
-// 方向语义与旧实现一致：dir=1（切向右侧/未来）时内容整体向左流动；dir=-1 相反。
-let _fxVtGen = 0;
-
-function _fxTransitionEnabled() {
-    const fxReducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-    return typeof settings !== 'undefined' && settings.smoothAnimations === true && !fxReducedMotion;
-}
-
-// 统一播放入口：dir 为 1/-1（0 或容器缺失时直接渲染），update 为渲染回调（保证恰好执行一次）
-function _fxPlayDirectionalTransition(dir, update) {
-    const container = document.getElementById('view-container');
-    if (!container || (dir !== 1 && dir !== -1)) { update(); return; }
-    if (typeof document.startViewTransition !== 'function') {
-        // 降级路径：新视图方向性微位移淡入（无幽灵层克隆）
-        update();
-        container.classList.remove('fx-enter-soft-left', 'fx-enter-soft-right');
-        void container.offsetWidth; // 强制重排以重新触发动画
-        container.classList.add(dir > 0 ? 'fx-enter-soft-right' : 'fx-enter-soft-left');
-        if (container._fxSoftTimer) clearTimeout(container._fxSoftTimer);
-        container._fxSoftTimer = setTimeout(() => {
-            container.classList.remove('fx-enter-soft-left', 'fx-enter-soft-right');
-            container._fxSoftTimer = null;
-        }, 200);
-        return;
-    }
-    const root = document.documentElement;
-    const gen = ++_fxVtGen;
-    // data-fx-vt-dir 承担两个职责：声明过渡方向（CSS 据此选择关键帧）；
-    // 让 root 退出快照捕获 —— 视图容器之外的骨架（侧边栏/视图标签指示条/详情面板）保持实时渲染，避免双重动画
-    root.setAttribute('data-fx-vt-dir', dir > 0 ? 'next' : 'prev');
-    container.style.viewTransitionName = 'view-container';
-    const vt = document.startViewTransition(update);
-    const cleanup = () => {
-        // 已被更新的过渡接管时跳过清理，由最新的过渡负责收尾
-        if (gen !== _fxVtGen) return;
-        root.removeAttribute('data-fx-vt-dir');
-        container.style.viewTransitionName = '';
-    };
-    // 过渡被新过渡抢占时 finished 会 reject，两个分支都需要清理
-    vt.finished.then(cleanup, cleanup);
-}
-
-// 视图切换方向：0 = 无过渡
-function _fxGetViewSwitchDir(prevView, newView) {
+// 平滑过渡动画：视图切换方向性滑动过渡
+// 切换到右侧/左侧的视图时，内容整体向左/右流动：旧视图向左/右滑出淡出，新视图自右/左接续滑入
+function _playViewSwitchTransition(fxCtx, prevView, newView) {
     const order = (typeof getViewOrder === 'function'
         ? getViewOrder().map(v => v.id)
         : VIEW_ORDER_DEFAULT.slice()).concat(['summary', 'countdown', 'holiday']);
     const fromIdx = order.indexOf(prevView);
     const toIdx = order.indexOf(newView);
-    if (fromIdx === -1 || toIdx === -1) return 0;
-    return toIdx > fromIdx ? 1 : -1;
+    if (fromIdx === -1 || toIdx === -1) return;
+    const dir = toIdx > fromIdx ? 1 : -1;
+    const container = fxCtx.el;
+    // 清理上一次未完成的过渡残留
+    container.querySelectorAll('.fx-view-ghost').forEach(g => g.remove());
+    // 旧视图幽灵层：使用渲染前 cloneNode 的 DOM 快照（单遍克隆，避免 innerHTML 序列化+重新解析的双重开销）
+    const ghost = fxCtx.ghost;
+    ghost.className = 'fx-view-ghost ' + (dir > 0 ? 'fx-ghost-out-left' : 'fx-ghost-out-right');
+    // 剥离幽灵层内所有 id，避免过渡期间 getElementById 命中幽灵层副本
+    ghost.removeAttribute('id');
+    ghost.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    // 同步旧视图滚动位置，避免幽灵层跳回顶部
+    const ghostScrolls = ghost.querySelectorAll('.task-list-view');
+    fxCtx.scrolls.forEach((s, i) => { if (ghostScrolls[i]) ghostScrolls[i].scrollTop = s; });
+    // 过渡期间裁剪溢出并建立幽灵层定位上下文
+    container.style.overflow = 'hidden';
+    container.style.position = 'relative';
+    container.appendChild(ghost);
+    // 新视图自反方向接续滑入
+    container.classList.remove('fx-enter-from-left', 'fx-enter-from-right');
+    void container.offsetWidth; // 强制重排以重新触发动画
+    container.classList.add(dir > 0 ? 'fx-enter-from-right' : 'fx-enter-from-left');
+    setTimeout(() => {
+        ghost.remove();
+        container.style.overflow = '';
+        container.style.position = '';
+        container.classList.remove('fx-enter-from-left', 'fx-enter-from-right');
+    }, 240);
 }
 
 function switchView(view) {
@@ -100,12 +80,22 @@ function switchView(view) {
             ee_flushPendingEffects();
         }
     }
-    // 平滑过渡动画：方向性滑动过渡（首选 View Transitions，降级为微位移淡入）
-    // renderView 放入过渡回调执行：浏览器先截取旧视图快照，再更新 DOM，动画全程由合成器驱动
-    if (prevView !== view && _fxTransitionEnabled()) {
-        _fxPlayDirectionalTransition(_fxGetViewSwitchDir(prevView, view), renderView);
-    } else {
-        renderView();
+    // 平滑过渡动画：渲染前捕获旧视图 DOM 快照（cloneNode 单遍克隆 + 滚动位置），用于方向性滑动过渡
+    let fxCtx = null;
+    const fxReducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (typeof settings !== 'undefined' && settings.smoothAnimations === true && prevView !== view && !fxReducedMotion) {
+        const vc = document.getElementById('view-container');
+        if (vc && vc.firstChild) {
+            fxCtx = {
+                el: vc,
+                ghost: vc.cloneNode(true),
+                scrolls: Array.from(vc.querySelectorAll('.task-list-view')).map(s => s.scrollTop)
+            };
+        }
+    }
+    renderView();
+    if (fxCtx) {
+        _playViewSwitchTransition(fxCtx, prevView, view);
     }
     renderLists();
     updateViewButtons();

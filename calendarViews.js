@@ -576,15 +576,41 @@ function handleWeekGridMouseLeave(event) {
 }
 
 // 平滑过渡动画：月/周视图时间导航的方向性滑动过渡
-// 复用视图切换的统一入口（View Transitions 首选 + 微位移淡入降级）：
-// direction=1（切向未来）时内容整体向左流动；-1 相反
+// 仿照视图切换逻辑：direction=1（切向未来）时旧内容向左滑出、新内容自右侧接续滑入；-1 相反
 function _playCalendarNavTransition(direction, render) {
+    const fxReducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const fxEnabled = typeof settings !== 'undefined' && settings.smoothAnimations === true && !fxReducedMotion;
     const container = document.getElementById('view-container');
-    if (typeof _fxTransitionEnabled !== 'function' || !_fxTransitionEnabled() || !container || !container.firstChild) {
-        render();
-        return;
-    }
-    _fxPlayDirectionalTransition(direction, render);
+    if (!fxEnabled || !container || !container.firstChild) { render(); return; }
+    // 清理上一次未完成的过渡（快速连续切换时避免幽灵层叠加/定时器互踩）
+    if (container._fxNavTimer) { clearTimeout(container._fxNavTimer); container._fxNavTimer = null; }
+    container.querySelectorAll('.fx-view-ghost').forEach(g => g.remove());
+    container.classList.remove('fx-enter-from-left', 'fx-enter-from-right');
+    // 渲染前快照旧内容（cloneNode 单遍克隆）
+    const ghost = container.cloneNode(true);
+    // 同步周视图时间网格滚动位置，避免幽灵层跳回顶部
+    const liveScrolls = container.querySelectorAll('#week-time-grid');
+    const ghostScrolls = ghost.querySelectorAll('#week-time-grid');
+    liveScrolls.forEach((s, i) => { if (ghostScrolls[i]) ghostScrolls[i].scrollTop = s.scrollTop; });
+    // 剥离幽灵层内所有 id，避免过渡期间 getElementById 命中幽灵层副本
+    ghost.removeAttribute('id');
+    ghost.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    render();
+    ghost.className = 'fx-view-ghost ' + (direction > 0 ? 'fx-ghost-out-left' : 'fx-ghost-out-right');
+    // 过渡期间裁剪溢出并建立幽灵层定位上下文
+    container.style.overflow = 'hidden';
+    container.style.position = 'relative';
+    container.appendChild(ghost);
+    container.classList.remove('fx-enter-from-left', 'fx-enter-from-right');
+    void container.offsetWidth; // 强制重排以重新触发动画
+    container.classList.add(direction > 0 ? 'fx-enter-from-right' : 'fx-enter-from-left');
+    container._fxNavTimer = setTimeout(() => {
+        ghost.remove();
+        container.style.overflow = '';
+        container.style.position = '';
+        container.classList.remove('fx-enter-from-left', 'fx-enter-from-right');
+        container._fxNavTimer = null;
+    }, 240);
 }
 
 function navigateWeek(direction) {
