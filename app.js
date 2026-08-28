@@ -303,6 +303,8 @@ function openSettingsModal() {
     document.getElementById('settings-pomodoro-state-bg').checked = settings.pomodoroStateBg !== false;
     document.getElementById('settings-bg-flow-effect').checked = settings.bgFlowEffect === true;
     document.getElementById('settings-advanced-particle').checked = settings.advancedParticleAnimation !== false;
+    document.getElementById('settings-smooth-animations').checked = settings.smoothAnimations === true;
+    document.getElementById('settings-feature-animations').checked = settings.featureAnimations === true;
     document.getElementById('settings-auto-create').checked = settings.autoCreateTask !== false;
     document.getElementById('settings-toast-duration').value = settings.toastDuration || 5;
     document.getElementById('settings-snooze-delay').value = settings.snoozeDelay || 15;
@@ -362,8 +364,8 @@ function openSettingsModal() {
         renderShortcutsSettings();
     }
 
-    document.getElementById('settings-modal').classList.remove('hidden');
-    document.getElementById('settings-modal').classList.add('flex');
+    // 页面切换过渡动画：中性浮现（fx-feature 开启时播放，与番茄专注等页面共用开关）
+    _fxOpenModal('settings-modal');
 
     // 初始化左侧快速导航（仅首次）+ 重置高亮与滚动位置
     if (!_settingsNavObserver) {
@@ -380,8 +382,8 @@ function closeSettingsModal() {
     }
     // 丢弃视图自定义临时状态（未保存的修改不生效）
     discardVCTemp();
-    document.getElementById('settings-modal').classList.add('hidden');
-    document.getElementById('settings-modal').classList.remove('flex');
+    // 页面切换过渡动画：反向收起后再隐藏
+    _fxCloseModal('settings-modal');
 }
 
 // ==================== 设置面板左侧快速导航 ====================
@@ -678,6 +680,8 @@ function saveSettings(silent) {
     settings.pomodoroStateBg = document.getElementById('settings-pomodoro-state-bg').checked;
     settings.bgFlowEffect = document.getElementById('settings-bg-flow-effect').checked;
     settings.advancedParticleAnimation = document.getElementById('settings-advanced-particle').checked;
+    settings.smoothAnimations = document.getElementById('settings-smooth-animations').checked;
+    settings.featureAnimations = document.getElementById('settings-feature-animations').checked;
     settings.autoCreateTask = document.getElementById('settings-auto-create').checked;
     settings.toastDuration = parseInt(document.getElementById('settings-toast-duration').value) || 5;
     settings.snoozeDelay = parseInt(document.getElementById('settings-snooze-delay').value) || 15;
@@ -782,6 +786,12 @@ function applyDisplaySettings() {
     document.body.classList.toggle('bg-flow-strong', settings.bgFlowEffect === true);
     // 番茄专注：高级粒子动画开关（关闭时 body.no-particles 隐藏粒子容器并阻止 JS 创建）
     document.body.classList.toggle('no-particles', settings.advancedParticleAnimation === false);
+    // 平滑过渡动画开关（开启时 body.fx-smooth 激活界面交互过渡动画）
+    document.body.classList.toggle('fx-smooth', settings.smoothAnimations === true);
+    // 场景过渡动效开关（开启时 body.fx-feature 激活番茄专注/正念小事/答案之书/设置弹窗的主题化过渡）
+    document.body.classList.toggle('fx-feature', settings.featureAnimations === true);
+    // 开关切换后刷新视图按钮（激活态高亮在指示条/背景色两种形态间切换）
+    if (typeof updateViewButtons === 'function') updateViewButtons();
 
     // 若番茄页面可见，立即刷新动画以应用新设置
     const pomodoroPage = document.getElementById('pomodoro-page');
@@ -886,7 +896,44 @@ function testNotification() {
 }
 
 function goToToday() {
+    const fxReducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const fxOn = typeof settings !== 'undefined' && settings.smoothAnimations === true && !fxReducedMotion;
+    const prevDate = new Date(currentDate);
     currentDate = new Date();
+    // 平滑过渡动画：按各视图特点接管"今天"定位
+    if (fxOn && currentView === 'schedule' && scheduleMonthOffset === 0) {
+        // 渲染窗口已包含今天：不重渲染，直接平滑滚动到今天卡片（时间轴连续滚动语义）
+        const sc = document.querySelector('.schedule-container');
+        const todayCard = sc ? sc.querySelector('.schedule-day-drop.ring-2') : null;
+        if (todayCard) {
+            const cRect = sc.getBoundingClientRect();
+            const tRect = todayCard.getBoundingClientRect();
+            sc.scrollTo({ top: sc.scrollTop + (tRect.top - cRect.top) - 20, behavior: 'smooth' });
+            return;
+        }
+    }
+    if (fxOn && (currentView === 'month' || currentView === 'week')) {
+        // 月/周视图：与时间导航一致的方向性滑动（今天在当前展示周期之后 → 旧内容左移、新内容自右滑入）
+        let dir = 0;
+        if (currentView === 'month') {
+            const sameMonth = prevDate.getFullYear() === currentDate.getFullYear() && prevDate.getMonth() === currentDate.getMonth();
+            if (!sameMonth) dir = prevDate.getTime() < currentDate.getTime() ? 1 : -1;
+        } else {
+            const off = settings.weekStart === 'monday' ? 1 : 0;
+            const weekStartTs = d => {
+                const x = new Date(d);
+                x.setDate(x.getDate() - x.getDay() + off);
+                if (d.getDay() === 0 && off === 1) x.setDate(x.getDate() - 7);
+                return x.getTime();
+            };
+            const a = weekStartTs(prevDate), b = weekStartTs(currentDate);
+            if (a !== b) dir = a < b ? 1 : -1;
+        }
+        if (dir !== 0) {
+            _playCalendarNavTransition(dir, renderView);
+            return;
+        }
+    }
     if (currentView === 'schedule') {
         scheduleMonthOffset = 0;
         _scheduleAutoScroll = true;

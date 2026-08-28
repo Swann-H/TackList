@@ -724,12 +724,10 @@ function renderArchivedTaskCard(task) {
     const progress = task.progress || 0;
 
     return `
-        <div class="archived-task-item group flex items-start gap-4 mb-3 task-item ${task.completed ? 'opacity-60' : ''}"
+        <div class="archived-task-item task-row group flex items-start gap-4 mb-3 task-item ${task.completed ? 'opacity-55' : ''}"
              onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', true)">
             <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                <div class="w-5 h-5 rounded-full border-2 flex items-center justify-center ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
-                    ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
-                </div>
+                ${renderTaskCheckbox(task)}
             </div>
             <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition" style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                 <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">

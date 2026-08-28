@@ -4,6 +4,9 @@ let _dataVersion = -1; // 数据版本号，-1表示未初始化
 let _initialLoadDone = false; // 是否已完成首次加载
 let _saveDataTimerId = null; // 节流保存定时器
 let _saveInFlight = false; // 保存请求是否正在发送中（含节流等待期和网络传输期）
+let _savePutInFlight = false; // 是否有一个 /api/data PUT 请求在途
+let _savePutQueued = false; // PUT 在途期间又有新保存请求，待其完成后重发
+let _savePutQueuedWaiters = []; // 等待排队重发完成的回调（saveDataImmediate 依赖完成时机）
 let _forceNextRefreshRender = false; // 冲突合并后强制下次刷新重渲染，绕过版本号检测
 
 // ==================== IndexedDB 冗余缓存 ====================
@@ -98,6 +101,14 @@ async function refreshDataFromServer() {
         if (!response.ok) return;
         const data = await response.json();
 
+        // fetch 在途期间若本地又发起保存（节流等待或 PUT 在途），本响应即为过期快照，
+        // 直接应用会用旧 settings 覆盖本地新修改（如刚切换的主题/背景图取色方案）。
+        // 放弃本次刷新，保存完成后会经由 _dataRefreshPending 机制再补一次
+        if (_saveInFlight) {
+            _dataRefreshPending = true;
+            return;
+        }
+
         // 变更检测：服务端版本号未变则跳过全量渲染（消除后台每 30s 一次的卡顿）
         // _forceNextRefreshRender 用于冲突合并后强制刷新
         const serverVersion = data._version;
@@ -130,15 +141,8 @@ async function refreshDataFromServer() {
         if (planPanelOpen) renderPlanPanel();
         // 修复盲区：原实现同步完成后未刷新“已打开的专注任务面板”，
         // 导致面板中显示的推荐任务列表与其他标签页的最新数据不一致。
-        // 这里在缓存已失效的前提下，若面板正开着则立即重新渲染（会用最新 tasks 重新三重排序）。
-        const _pomodoroTaskOverlay = document.getElementById('pomodoro-task-panel-overlay');
-        if (_pomodoroTaskOverlay && !_pomodoroTaskOverlay.classList.contains('hidden') &&
-            typeof renderPomodoroTaskList === 'function') {
-            renderPomodoroTaskList(
-                (taskId) => `selectPomodoroTask(${taskId ? `'${taskId}'` : 'null'})`,
-                (typeof pomodoroState !== 'undefined') ? pomodoroState.currentTaskId : null
-            );
-        }
+        // 这里在缓存已失效的前提下，若面板正开着则用面板当前上下文（回调/选中任务/搜索词）重新渲染。
+        if (typeof refreshPomodoroTaskPanelIfOpen === 'function') refreshPomodoroTaskPanelIfOpen();
     } catch (err) {
         console.error('Refresh data error:', err);
     }
@@ -347,6 +351,16 @@ function saveData() {
 
 function _doSaveData() {
     _saveDataTimerId = null;
+    if (_savePutInFlight) {
+        // 前一次 PUT 尚未返回（背景图为数 MB base64 时，请求耗时可观且服务端
+        // 还需二次读盘做通知比对）。若此时携带尚未更新的 _dataVersion 直接发新
+        // PUT，服务端必然判定版本冲突，冲突合并会以服务端旧 settings 覆盖本地，
+        // 导致刚切换的主题/背景图取色方案被静默回退并持久化。因此排队等待，
+        // 待前一次 PUT 完成后用最新数据与最新版本号重发。
+        _savePutQueued = true;
+        return new Promise(function (resolve) { _savePutQueuedWaiters.push(resolve); });
+    }
+    _savePutInFlight = true;
     const data = {
         taskLists: lists,
         tasks: tasks,
@@ -372,8 +386,9 @@ function _doSaveData() {
             _mergeServerData(serverData);
             // 合并后本地数据已变化，下次刷新需强制重渲染（绕过版本号变更检测）
             _forceNextRefreshRender = true;
-            // 重试保存
-            return _doSaveData();
+            // 排队重试（由下方 finally 统一触发，避免在 in-flight 标记下递归）
+            _savePutQueued = true;
+            return;
         } else if (result.version !== undefined) {
             _dataVersion = result.version;
         }
@@ -386,6 +401,16 @@ function _doSaveData() {
         // 服务端保存失败，仍写入 IndexedDB 作为本地备份
         cacheToIndexedDB(data);
     }).finally(() => {
+        _savePutInFlight = false;
+        if (_savePutQueued) {
+            // 重发排队中的保存：序列化的是本地最新数据，携带最新版本号。
+            // _saveInFlight 保持 true，由最后一轮 PUT 的 finally 负责
+            _savePutQueued = false;
+            const rePut = _doSaveData();
+            _savePutQueuedWaiters.forEach(function (fn) { rePut.then(fn, fn); });
+            _savePutQueuedWaiters = [];
+            return;
+        }
         _saveInFlight = false;
         // 保存完成后，如有被延迟的刷新，立即执行
         if (_dataRefreshPending) {
@@ -463,7 +488,11 @@ function _mergeServerData(serverData) {
     
     tasks = serverTasks;
     lists = serverLists.length > 0 ? serverLists : lists;
-    applySettings(serverData.settings);
+    // settings 保留本地版本，不能用服务端数据覆盖：
+    // 版本冲突返回的服务端快照通常早于本地最近的用户操作（如背景图上传后
+    // 自动切换的深色主题、新提取的取色方案）。若以服务端 settings 整体覆盖，
+    // 这些修改会被静默回退，并在冲突重试保存时被持久化到服务端。
+    // settings 属用户偏好，本地优先；任务/清单/专注记录仍按服务端数据合并。
     quadrantOrder = serverData.quadrantOrder || quadrantOrder;
     // 合并 pomodoroHistory：以服务器数据为基础，但保留本地新增的记录
     // （如手动新增的专注记录，可能尚未被服务器保存，版本冲突时不能丢失）
@@ -500,7 +529,30 @@ function importData(file) {
 
                 applySettings(settings);
                 // 先确保数据写入服务端，再重新初始化（避免 init 的 loadData 读到旧数据）
-                await saveDataImmediate();
+                // /api/import 会把主体写入 data.json，并还原扩展字段：
+                // pomodoroArchive（归档专注历史，按月合并去重写回 pomodoro_archive/）
+                // holidayData（节假日数据，写入 holiday_data.json）
+                try {
+                    const importPayload = Object.assign({}, data, { taskLists: lists, tasks: tasks, settings: settings });
+                    await fetch('/api/import', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(importPayload)
+                    });
+                } catch (err) {
+                    console.error('Import extended data to server error:', err);
+                    // 回退：仍走全量保存，保证主数据不丢（归档/节假日扩展字段在离线模式下无法还原）
+                    await saveDataImmediate();
+                }
+                // 导入的节假日数据同步到本地缓存（loadHolidayData 优先读 localStorage）
+                if (data.holidayData && typeof data.holidayData === 'object' && Object.keys(data.holidayData).length > 0) {
+                    holidayData = data.holidayData;
+                    try {
+                        localStorage.setItem('holidayData', JSON.stringify(data.holidayData));
+                    } catch (err) {
+                        console.error('Cache imported holiday data error:', err);
+                    }
+                }
                 await init();
 
                 if (typeof closeSettingsModal === 'function') {
@@ -709,6 +761,10 @@ const DEFAULT_SETTINGS = {
     showFocusButton: true,
     bgFlowEffect: false,
     advancedParticleAnimation: true,
+    // 平滑过渡动画：开启后任务加载、详情呼出、标记完成等交互播放过渡动画（性能消耗较大）
+    smoothAnimations: false,
+    // 场景过渡动效：番茄专注/正念小事/答案之书/设置弹窗的进入与返回播放主题化过渡（景深推近骨架）
+    featureAnimations: false,
     theme: 'light',
     bgImage: '',
     bgOpacity: 100,
@@ -1179,14 +1235,24 @@ function clearBgImage() {
         _resetBgImageDeleteBtn(btn);
 
         // 保留当前深色/浅色模式（按用户要求：删除背景图时不切换主题）
-        // 仅恢复为内置配色"星夜"（清除背景图取色数据后，vibrant/muted/steady 不再可用）
+        // 背景图取色方案（vibrant/muted/steady，含旧版遗留 'dark' 键）失效后，
+        // 自动切换到与原强调色色相最接近的内置配色（星夜/春野/夕照）；
+        // 内置配色与自定义强调色（custom:xxx）与背景图无关，保持不变
+        const BG_PALETTE_KEYS = ['vibrant', 'muted', 'steady', 'dark'];
         const palette = settings.themePalette;
-        if (palette && palette !== 'none' && !palette.startsWith('builtin:')) {
-            selectThemePalette('builtin:blue');
+        if (palette && BG_PALETTE_KEYS.indexOf(palette) !== -1) {
+            selectThemePalette(findClosestBuiltinPalette(palette));
         }
 
-        // 清除背景图取色数据（已切换到内置配色，不再需要）
+        // 清除背景图取色数据及其编辑记录（customPalettes），
+        // 避免残留旧图颜色污染下一次设置背景图时的取色与预览
         settings.themePaletteColors = null;
+        if (settings.customPalettes) {
+            BG_PALETTE_KEYS.forEach(function (k) { delete settings.customPalettes[k]; });
+            if (Object.keys(settings.customPalettes).length === 0) {
+                settings.customPalettes = null;
+            }
+        }
 
         settings.bgImage = '';
         applyBackgroundImage();

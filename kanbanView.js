@@ -4,7 +4,11 @@
 // 配置：settings.kanbanConfig（DEFAULT_SETTINGS 已含默认值，applySettings 自动合并）
 // 自定义分组：存储在清单对象 list.groups = [{id, name}]；任务用 task.groupId 关联
 
-let _kanbanExpanded = {};      // colKey -> true 表示已展开（查看更多）
+let _kanbanExpanded = {};      // colKey -> number：已展开并渲染的任务数（懒加载累进；无条目 = 折叠态）
+let _kanbanLazyIO = null;      // 列内滚动懒加载 IntersectionObserver（重渲染前 disconnect 防泄漏）
+let _kanbanDefaultCount = 8;   // 折叠态每列默认显示数（渲染后按屏幕高度动态校准，见 calibrateKanbanDefaultCount）
+let _kanbanShowList = true;    // 渲染时的 showList 快照（懒加载追加卡片时复用）
+const KANBAN_LAZY_BATCH = 10;  // 懒加载每批追加的任务数
 let _draggedKanbanCol = null;  // 正在拖拽的自定义分组列 key
 let _kanbanLeafMap = {};       // colKey -> 列元数据（含 type / listId / groupId / tagId / bucket / priorityLevel）
 // 视图配置面板的开关状态由 utils.js _viewConfigPanels 统一管理（_registerViewConfig）
@@ -316,10 +320,14 @@ function sortKanbanTasks(arr, cfg) {
 }
 
 // ---------- 卡片 ----------
-// 看板卡片：完成勾选框置于卡片【外】左侧（整行 items-center 竖向居中），卡片本身无左侧色条、宽度相应收窄。
-// 信息顺序：第1行 元信息(时间/清单/专注/进度) → 第2行 标题 → 第3行 详情(子任务/备注) → 第4行 标签；各行间距统一 mt-1.5。
+// 看板卡片（与日程视图卡片样式统一）：
+// - 左缘 4px 色条（getTaskBarColor：优先级色条模式下显示优先级色，否则清单色），无四周边框，rounded-r-lg 左圆角为 0
+// - 完成勾选框置于卡片内左侧（色条右侧），随卡片内容 items-center 垂直居中；右侧信息列左对齐
+// - hover 统一为 opacity-80（与日程一致）；信息排布保持看板原有顺序：
+//   第1行 元信息(时间/清单/专注/进度) → 第2行 标题 → 第3行 详情(子任务/备注) → 第4行 标签
 // 「显示任务详情」开启时展示子任务列表（renderSubtaskListDisplay，参照日程视图）与备注文本；关闭时二者均不展示。
 // 完成圆环配色跟随「优先级显示方式」（getTaskCheckboxClass）。
+// 外层 kanban-task-row（含 task-row 语义类）保留：完成消失动画通过 closest('.task-row') 定位整行。
 function renderKanbanCard(task, showDetails, showList, showFocusButton) {
     const showFocus = (typeof showFocusButton === 'boolean') ? showFocusButton : (getKanbanConfig().showFocusButton !== false);
     const list = getList(task.listId);
@@ -347,16 +355,15 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
         ${focusMinutes > 0 ? `<span class="flex items-center gap-1 text-red-500/90"><i class="fas fa-stopwatch"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1 text-accent"><i class="fas fa-flag"></i>${task.progress}%</span>` : ''}`;
     return `
-        <div class="flex items-center gap-2 mb-2.5">
-            <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" draggable="false" title="标记完成" class="w-5 h-5 flex-shrink-0 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
-                ${task.completed ? '<i class="fas fa-check text-[10px]"></i>' : ''}
-            </button>
-            <div class="kanban-card group relative ${colors.bg} border border-theme rounded-lg p-2.5 flex-1 min-w-0 cursor-pointer hover:border-accent hover:shadow-sm transition ${task.completed ? 'opacity-60' : ''}"
+        <div class="kanban-task-row task-row flex mb-2.5">
+            <div class="kanban-card group relative ${colors.bg} rounded-r-lg p-2.5 flex-1 min-w-0 cursor-pointer hover:opacity-80 transition flex items-center gap-2.5 ${task.completed ? 'opacity-55' : ''}"
+                 style="border-left: 4px solid ${getTaskBarColor(task, listColor)};"
                  onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
                  draggable="true" data-task-id="${task.id}"
                  ondragstart="handleTaskDragStart(event, '${task.id}')"
                  ondragover="handleTaskDragOver(event)">
-                <div class="flex items-start gap-2">
+                ${renderTaskCheckbox(task, { taskId: task.id, draggable: true, extraClass: 'flex-shrink-0' })}
+                <div class="flex items-start gap-2 flex-1 min-w-0">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-1.5 flex-wrap text-xs text-theme-muted mb-1.5">${meta}</div>
                         <div class="text-sm font-medium leading-snug break-words ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">${escapeHtml(task.title || '新任务')}</div>
@@ -376,11 +383,17 @@ function getKanbanCount(tasks, cfg) {
 }
 function renderKanbanSubColumn(ch, cfg, showList) {
     const showDetails = cfg.showDetails;
-    const expanded = _kanbanExpanded[ch.key];
     const total = ch.tasks.length;
-    const visible = expanded ? total : Math.min(5, total);
+    const visible = getKanbanVisibleCount(ch.key, total);
     const visibleTasks = ch.tasks.slice(0, visible);
     const remaining = total - visible;
+    const expanded = !!_kanbanExpanded[ch.key];
+    // 展开态用哨兵元素配合 IntersectionObserver 懒加载；折叠态保留「+N更多」按钮
+    const footerHtml = remaining > 0
+        ? (expanded
+            ? `<div class="kanban-lazy-sentinel h-px w-full" data-leaf-key="${ch.key}"></div>`
+            : `<button onclick="expandKanbanLeaf('${ch.key}')" class="w-full mt-1 mb-1 py-1 text-xs text-accent hover:text-accent-hover rounded hover:bg-theme-secondary transition">+${remaining}更多</button>`)
+        : '';
     return `
         <div class="mb-2 rounded-lg border border-theme bg-theme-tertiary/40" data-col-key="${ch.key}">
             <div class="flex items-center justify-between px-2 py-1.5">
@@ -390,17 +403,16 @@ function renderKanbanSubColumn(ch, cfg, showList) {
             <div class="px-2 pb-2 kanban-col-body drop-zone" ondragover="handleTaskDragOver(event)" ondrop="handleKanbanDrop(event, '${ch.key}')">
                 ${visibleTasks.length === 0
                     ? `<div class="text-center py-3 text-theme-muted text-xs">空</div>`
-                    : visibleTasks.map(t => renderKanbanCard(t, showDetails, showList)).join('') +
-                      (remaining > 0 ? `<button onclick="toggleKanbanExpand('${ch.key}')" class="w-full mt-1 mb-1 py-1 text-xs text-accent hover:text-accent-hover rounded hover:bg-theme-secondary transition">+${remaining}更多</button>` : '')}
+                    : visibleTasks.map(t => renderKanbanCard(t, showDetails, showList)).join('') + footerHtml}
+                ${expanded ? renderKanbanCollapseBtn(ch.key, '-mx-2', 'calc(100% + 1rem)') : ''}
             </div>
         </div>`;
 }
 
 function renderKanbanColumn(col, cfg, showList) {
     const showDetails = cfg.showDetails;
-    const expanded = _kanbanExpanded[col.key];
     const total = col.tasks.length;
-    const visible = expanded ? total : Math.min(5, total);
+    const visible = getKanbanVisibleCount(col.key, total);
     const visibleTasks = col.tasks.slice(0, visible);
     const remaining = total - visible;
     const count = getKanbanCount(col.tasks, cfg);
@@ -440,7 +452,14 @@ function renderKanbanColumn(col, cfg, showList) {
     } else {
         bodyHtml += visibleTasks.map(t => renderKanbanCard(t, showDetails, showList)).join('');
         if (remaining > 0) {
-            bodyHtml += `<button onclick="toggleKanbanExpand('${col.key}')" class="w-full mt-1 mb-2 py-1.5 text-xs text-accent hover:text-accent-hover rounded-lg hover:bg-theme-tertiary transition">+${remaining}更多</button>`;
+            // 展开态用哨兵元素配合 IntersectionObserver 懒加载；折叠态保留「+N更多」按钮
+            bodyHtml += _kanbanExpanded[col.key]
+                ? `<div class="kanban-lazy-sentinel h-px w-full" data-leaf-key="${col.key}"></div>`
+                : `<button onclick="expandKanbanLeaf('${col.key}')" class="w-full mt-1 mb-2 py-1.5 text-xs text-accent hover:text-accent-hover rounded-lg hover:bg-theme-tertiary transition">+${remaining}更多</button>`;
+        }
+        // 展开态常驻「收起」按钮：sticky 吸附在列可视区底部（无需滚动查找）
+        if (_kanbanExpanded[col.key]) {
+            bodyHtml += renderKanbanCollapseBtn(col.key, '-mx-4', 'calc(100% + 2rem)');
         }
     }
     bodyHtml += `</div>`;
@@ -593,6 +612,7 @@ function renderKanbanView(container) {
 
     // 改进1：去掉「阅读 · 看板」这类标题栏，让看板铺满整屏
     const showList = ctx.mode !== 'groups';          // 单清单(自定义分组)场景下卡片无需重复显示清单名
+    _kanbanShowList = showList;                       // 快照：懒加载追加卡片时复用
     const canAddGroup = cfg.groupBy === 'custom' && ctx.mode === 'groups';
     const boardHtml = columns.length
         ? columns.map(c => renderKanbanColumn(c, cfg, showList)).join('')
@@ -606,6 +626,10 @@ function renderKanbanView(container) {
             <span class="text-sm font-medium">新增分组</span>
         </button>` : '';
 
+    // 清理 _kanbanExpanded 中的陈旧条目（切换清单后旧 colKey 不再有效；含子列 key）
+    const validKeys = new Set(Object.keys(_kanbanLeafMap));
+    Object.keys(_kanbanExpanded).forEach(k => { if (!validKeys.has(k)) delete _kanbanExpanded[k]; });
+
     container.innerHTML = `
         <div class="h-full flex flex-col">
             <div class="flex-1 min-h-0 flex items-start gap-4 overflow-x-auto pb-2 pt-1" id="kanban-board">
@@ -614,9 +638,10 @@ function renderKanbanView(container) {
             </div>
         </div>`;
 
-    // 清理 _kanbanExpanded 中的陈旧条目（切换清单后旧 colKey 不再有效；含子列 key）
-    const validKeys = new Set(Object.keys(_kanbanLeafMap));
-    Object.keys(_kanbanExpanded).forEach(k => { if (!validKeys.has(k)) delete _kanbanExpanded[k]; });
+    // 展开列底部的哨兵元素接近视口时自动追加下一批任务（参考日程视图的懒加载方式）
+    setupKanbanLazyIO(container);
+    // 折叠态默认显示数按屏幕高度动态校准（值变化时重渲染一次，重测收敛后不再触发）
+    requestAnimationFrame(calibrateKanbanDefaultCount);
 }
 
 // ---------- 拖拽落点（任务改派） ----------
@@ -803,11 +828,121 @@ function handleKanbanColumnDrop(e, targetColKey) {
     handleKanbanColumnDragEnd(e);
 }
 
-// ---------- 展开 / 收起 ----------
-function toggleKanbanExpand(colKey) {
-    _kanbanExpanded[colKey] = !_kanbanExpanded[colKey];
+// ---------- 展开 / 收起 / 懒加载 ----------
+// 当前列实际渲染数：展开态取累进值（懒加载逐步增加），折叠态取动态默认数
+function getKanbanVisibleCount(key, total) {
+    const n = _kanbanExpanded[key];
+    return Math.min(typeof n === 'number' && n > 0 ? n : _kanbanDefaultCount, total);
+}
+// 点击「+N更多」：先展开一批（KANBAN_LAZY_BATCH 个）；列内继续滚动时由哨兵 IO 追加下一批
+function expandKanbanLeaf(key) {
+    const leaf = _kanbanLeafMap[key];
+    if (!leaf || !Array.isArray(leaf.tasks)) return;
+    const total = leaf.tasks.length;
+    _kanbanExpanded[key] = Math.min(total, getKanbanVisibleCount(key, total) + KANBAN_LAZY_BATCH);
     renderView();
 }
+// 收起单列：删除展开记录即恢复折叠态（默认显示数 + 「+N更多」按钮）
+function collapseKanbanLeaf(key) {
+    delete _kanbanExpanded[key];
+    renderView();
+}
+// 展开列常驻「收起」按钮：sticky 吸附在列可视区底部，任务不足一屏时停在列内容末尾。
+// 宽度对齐分组整体：负外边距抵消列体水平内边距，宽度用 calc(100% + 边距和) 补偿，
+// 保证左右两侧均与分组边框内沿对齐（仅 w-full + 负外边距 会左溢出、右侧短缺，不对称）；
+// 毛玻璃样式由 .kanban-collapse-btn 提供（index.html / index_offline.html，强度跟随设置 --bg-blur）。
+function renderKanbanCollapseBtn(key, mxClass, widthCalc) {
+    return `<button onclick="collapseKanbanLeaf('${key}')" draggable="false"
+            class="kanban-collapse-btn sticky bottom-0 z-10 block ${mxClass} mt-1 py-1.5 text-xs text-theme-primary font-medium hover:text-accent rounded-lg bg-theme-secondary shadow-theme transition" style="width: ${widthCalc}"><i class="fas fa-angles-up mr-1"></i>收起</button>`;
+}
+// 设置列内懒加载：观察展开列底部的哨兵元素，接近视口时追加下一批
+function setupKanbanLazyIO(container) {
+    if (_kanbanLazyIO) { _kanbanLazyIO.disconnect(); _kanbanLazyIO = null; }
+    const sentinels = container.querySelectorAll('.kanban-lazy-sentinel');
+    if (!sentinels.length) return;
+    if (!('IntersectionObserver' in window)) {
+        // 不支持 IO：降级为一次性全部展开，保证功能可用
+        sentinels.forEach(s => {
+            const lf = _kanbanLeafMap[s.dataset.leafKey];
+            if (lf && Array.isArray(lf.tasks)) _kanbanExpanded[s.dataset.leafKey] = lf.tasks.length;
+        });
+        renderView();
+        return;
+    }
+    _kanbanLazyIO = new IntersectionObserver((entries) => {
+        entries.forEach(en => { if (en.isIntersecting) loadKanbanBatch(en.target); });
+    }, { rootMargin: '150px 0px' });
+    sentinels.forEach(s => _kanbanLazyIO.observe(s));
+}
+// 向哨兵前追加一批任务（局部 DOM 更新，不整板重渲染，保持列内滚动位置）
+function loadKanbanBatch(sentinel) {
+    const key = sentinel.dataset.leafKey;
+    const leaf = _kanbanLeafMap[key];
+    if (!leaf || !Array.isArray(leaf.tasks)) { sentinel.remove(); return; }
+    const total = leaf.tasks.length;
+    const cur = getKanbanVisibleCount(key, total);
+    if (cur >= total) {
+        if (_kanbanLazyIO) _kanbanLazyIO.unobserve(sentinel);
+        sentinel.remove();
+        return;
+    }
+    const next = Math.min(total, cur + KANBAN_LAZY_BATCH);
+    const cfg = getKanbanConfig();
+    const html = leaf.tasks.slice(cur, next).map(t => renderKanbanCard(t, cfg.showDetails, _kanbanShowList)).join('');
+    sentinel.insertAdjacentHTML('beforebegin', html);
+    _kanbanExpanded[key] = next;
+    if (next >= total) {
+        if (_kanbanLazyIO) _kanbanLazyIO.unobserve(sentinel);
+        sentinel.remove();
+        return;
+    }
+    // 追加后哨兵仍在视口附近（列未撑满一屏）：下一帧继续加载，直至撑满或全部显示
+    if (sentinel.getBoundingClientRect().top < window.innerHeight + 150) {
+        requestAnimationFrame(() => { if (sentinel.isConnected) loadKanbanBatch(sentinel); });
+    }
+}
+// 动态校准折叠态默认显示数：按看板高度 / 卡片均高估算，任务多时大致占满一屏（最小5，最大50）
+// 振荡防护：卡片均高取样自当前渲染的前 8 张卡片，样本构成随显示数变化，
+// 最优值可能在两个相邻数之间来回翻转（每列最后一个任务反复增删 → 闪动）。
+// _kanbanCalibPrev 记录上一次被替换的旧值，若新测量值恰为该旧值即判定为来回翻转，保持现值终止；
+// _kanbanCalibRounds 限制连续校准重渲染次数，兜底拦截更长周期的测量循环。
+let _kanbanCalibPrev = null;
+let _kanbanCalibRounds = 0;
+function calibrateKanbanDefaultCount() {
+    if (typeof currentView !== 'undefined' && currentView !== 'kanban') return;
+    const board = document.getElementById('kanban-board');
+    if (!board) return;
+    const cards = board.querySelectorAll('.kanban-task-row');
+    if (!cards.length) return;
+    const sample = Array.from(cards).slice(0, 8);
+    const cardH = sample.reduce((s, el) => s + el.offsetHeight + 10, 0) / sample.length; // +10 为行间距 mb-2.5
+    if (cardH <= 0) return;
+    const header = board.querySelector('.kanban-col-header');
+    const headerH = header ? header.offsetHeight : 48;
+    const avail = board.clientHeight - headerH - 44; // 预留「+N更多」按钮与内边距余量
+    if (avail <= 0) return;
+    const optimal = Math.max(5, Math.min(50, Math.floor(avail / cardH)));
+    if (optimal !== _kanbanDefaultCount) {
+        if (_kanbanCalibPrev === optimal || _kanbanCalibRounds >= 3) {
+            _kanbanCalibPrev = null; // 判定为振荡：保持现值，不再重渲染
+            _kanbanCalibRounds = 0;
+            return;
+        }
+        _kanbanCalibPrev = _kanbanDefaultCount;
+        _kanbanCalibRounds++;
+        _kanbanDefaultCount = optimal;
+        renderView(); // 校准值变化才重渲染一次；重测相同值即收敛，不会循环
+    } else {
+        _kanbanCalibPrev = null; // 已收敛，清除振荡防护状态
+        _kanbanCalibRounds = 0;
+    }
+}
+// 窗口尺寸变化时重新校准默认显示数（防抖，避免拖拽窗口过程中频繁重渲染）
+let _kanbanResizeTimer = null;
+window.addEventListener('resize', () => {
+    clearTimeout(_kanbanResizeTimer);
+    _kanbanResizeTimer = setTimeout(calibrateKanbanDefaultCount, 200);
+});
 
 // ---------- 快速新建 ----------
 function kanbanQuickAdd(colKey) {
@@ -1049,7 +1184,10 @@ function pruneEmptyKanbanGroups(list) {
 // 离开看板视图时调用：先把仍在编辑中的新分组提交名称/标记删除，再清理任意清单里残留的空名分组。
 // 作为「切换视图」场景下「失焦删除」未触发时的兜底（如程序化切视图、未产生 blur 的边界情况）。
 function leaveKanbanView() {
+    if (_kanbanLazyIO) { _kanbanLazyIO.disconnect(); _kanbanLazyIO = null; } // 离开看板：断开懒加载 IO 防泄漏
     _kanbanEditingGroupId = null; // 离开看板：若有未结束的行内改名，复位标志，避免卡死后续重渲染
+    _kanbanCalibPrev = null; // 复位校准振荡防护状态，避免残留值拦截下次进入/缩放后的正常校准
+    _kanbanCalibRounds = 0;
     const ctx = kanbanListContext();
     const list = ctx && ctx.selectedList;
     const pending = Array.from(_kanbanNewGroupIds);
@@ -1235,6 +1373,44 @@ function _onKanbanConfigClosed(forSwitch) {
     }
     saveData(); // 延迟保存：配置变更实时预览，关闭面板时统一落盘
     if (!forSwitch && !skipRender) renderView();
+}
+
+// 恢复分组默认排序（面板内「恢复分组默认排序」按钮，经 utils.js resetViewConfigWithConfirm 二次确认后调用）：
+// 清除当前分组依据下用户拖拽自定义的列顺序，恢复该分组依据的内置默认列序。
+// - 自定义分组（单清单）模式：清除所选清单的 list.customColumnOrder（恢复为 groups 定义顺序 + 末位未分组）
+// - 其余分组依据：清除 columnOrder[groupBy]（per-list 偏好与全局配置均清除，避免残留覆盖）
+function doResetKanbanColumnOrder() {
+    const cfg = getKanbanConfig();
+    const ctx = kanbanListContext();
+    if (cfg.groupBy === 'custom' && ctx.mode === 'groups' && ctx.selectedList) {
+        if (ctx.selectedList.customColumnOrder) {
+            delete ctx.selectedList.customColumnOrder;
+            saveData();
+            renderView();
+            showToast('已恢复分组默认排序', 'success');
+        } else {
+            showToast('当前已是分组默认排序', 'info');
+        }
+        return;
+    }
+    const targets = [];
+    const prefs = _getCurrentListViewPrefs('kanban');
+    if (prefs) targets.push(prefs);
+    targets.push(settings.kanbanConfig);
+    let changed = false;
+    targets.forEach(t => {
+        if (t && t.columnOrder && typeof t.columnOrder === 'object' && t.columnOrder[cfg.groupBy]) {
+            delete t.columnOrder[cfg.groupBy];
+            changed = true;
+        }
+    });
+    if (changed) {
+        saveData();
+        renderView();
+        showToast('已恢复分组默认排序', 'success');
+    } else {
+        showToast('当前已是分组默认排序', 'info');
+    }
 }
 
 // 恢复默认配置（面板内「恢复默认」按钮）

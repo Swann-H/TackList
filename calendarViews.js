@@ -195,13 +195,16 @@ function renderWeekView(container) {
                         const list = lists.find(l => l.id === task.listId);
                         const isOverdue = isTaskOverdue(task);
                         const titleClass = task.completed ? 'opacity-55 text-theme-muted' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
-                        return `<div class="text-xs px-1 py-0.5 rounded-r truncate cursor-pointer ${titleClass}"
+                        return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer ${titleClass} flex items-center gap-1 min-w-0"
                                      style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${list?.color || '#3b82f6'};"
                                      title="${escapeHtml(task.title || '新任务')}"
                                      onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
                                      draggable="true"
                                      ondragstart="handleTaskDragStart(event, '${task.id}')"
-                                     ondragend="handleTaskDragEnd(event)">${task.title || '新任务'}</div>`;
+                                     ondragend="handleTaskDragEnd(event)">
+                                     ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
+                                     <span class="truncate">${task.title || '新任务'}</span>
+                                 </div>`;
                     }).join('')}
                     ${dayAllDay.length > 2 && collapsed ? `<div class="text-xs text-accent cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">+${dayAllDay.length - 2}更多</div>` : ''}
                     ${dayAllDay.length > 2 && !collapsed ? `<div class="text-xs text-accent cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">收起</div>` : ''}
@@ -278,8 +281,11 @@ function renderWeekView(container) {
                                  draggable="true"
                                  ondragstart="handleTaskDragStart(event, '${taskLayout.task.id}')"
                                  ondragend="handleTaskDragEnd(event)">
-                        <div class="text-xs font-medium truncate ${titleClass}" title="${escapeHtml(taskLayout.task.title || '新任务')}">${taskLayout.task.title || '新任务'}</div>
-                        ${heightPx > 30 ? `<div class="text-xs text-theme-muted truncate">${formatTime(taskLayout.task.startTime)}${taskLayout.task.endTime ? ' - ' + formatTime(taskLayout.task.endTime) : ''}</div>` : ''}
+                        <div class="flex items-center gap-1 min-w-0">
+                            ${renderTaskCheckbox(taskLayout.task, { taskId: taskLayout.task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
+                            <div class="text-xs font-medium truncate ${titleClass}" title="${escapeHtml(taskLayout.task.title || '新任务')}">${taskLayout.task.title || '新任务'}</div>
+                        </div>
+                        ${heightPx > 30 ? `<div class="text-xs text-theme-muted truncate pl-5">${formatTime(taskLayout.task.startTime)}${taskLayout.task.endTime ? ' - ' + formatTime(taskLayout.task.endTime) : ''}</div>` : ''}
                     </div>`;
                 }).join('')}
             </div>
@@ -486,7 +492,7 @@ function handleWeekGridClick(event, dateStr) {
             if ((!currentTitle || !currentTitle.trim()) && (!currentNotes || !currentNotes.trim())) {
                 tasks.splice(taskIndex, 1);
                 saveData();
-                document.getElementById('task-detail-panel').classList.add('hidden');
+                hideDetailPanel();
                 currentDetailTaskId = null;
             } else {
                 closeTaskDetailPanel();
@@ -569,9 +575,21 @@ function handleWeekGridMouseLeave(event) {
     }
 }
 
+// 平滑过渡动画：月/周视图时间导航的方向性滑动过渡
+// 复用视图切换的统一入口（View Transitions 首选 + 微位移淡入降级）：
+// direction=1（切向未来）时内容整体向左流动；-1 相反
+function _playCalendarNavTransition(direction, render) {
+    const container = document.getElementById('view-container');
+    if (typeof _fxTransitionEnabled !== 'function' || !_fxTransitionEnabled() || !container || !container.firstChild) {
+        render();
+        return;
+    }
+    _fxPlayDirectionalTransition(direction, render);
+}
+
 function navigateWeek(direction) {
     currentDate.setDate(currentDate.getDate() + direction * 7);
-    renderView();
+    _playCalendarNavTransition(direction, renderView);
 }
 
 // ==================== 月视图 ====================
@@ -695,7 +713,10 @@ function renderMonthView(container) {
                                              onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
                                              class="text-xs p-1 rounded-r cursor-pointer truncate task-item month-task-item ${task.completed ? '' : 'hover:bg-theme-tertiary'} flex items-center justify-between gap-1"
                                              style="background-color: ${list?.color}15; border-left: 2px solid ${list?.color || '#3b82f6'}">
-                                            <span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
+                                            <div class="flex items-center gap-1 min-w-0 flex-1">
+                                                ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
+                                                <span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
+                                            </div>
                                             ${timeStr ? `<span class="flex-shrink-0 text-theme-muted ${task.completed ? 'opacity-55' : ''}">${timeStr}</span>` : ''}
                                         </div>
                                     `;
@@ -820,11 +841,9 @@ function openMonthDayPopover(dateStr) {
         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
 
         return `
-            <div class="schedule-task-item group flex items-start gap-4 mb-3 task-item ${taskIndex > 0 ? 'pt-3' : ''} ${task.completed ? 'opacity-60' : ''}" onclick="event.stopPropagation(); _openTaskDetailFromMonthPopover('${task.id}')">
+            <div class="schedule-task-item task-row group flex items-start gap-4 mb-3 task-item ${taskIndex > 0 ? 'pt-3' : ''} ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); _openTaskDetailFromMonthPopover('${task.id}')">
                 <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                    <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
-                        ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
-                    </button>
+                    ${renderTaskCheckbox(task, { taskId: task.id })}
                     ${renderFocusButton(task.id)}
                 </div>
                 <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${getTaskBarColor(task, list && list.color ? list.color : '#9ca3af')}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
@@ -912,11 +931,8 @@ function openMonthDayPopover(dateStr) {
     }, 0);
 }
 
-// 浮层内点击任务：先保存当前详情（不关闭），再打开新详情，浮层保持打开
+// 浮层内点击任务：直接打开新详情（切换前的保存已由 openTaskDetailPanel 内部统一处理），浮层保持打开
 function _openTaskDetailFromMonthPopover(taskId) {
-    if (currentDetailTaskId && currentDetailTaskId !== taskId) {
-        saveTaskDetailWithoutClose();
-    }
     openTaskDetailPanel(taskId);
 }
 
@@ -1144,5 +1160,5 @@ function navigateMonth(direction) {
     const safeDay = Math.min(origDay, lastDayOfTargetMonth);
     currentDate = new Date(year, targetMonth, safeDay);
     _monthSavedScrollTop = null; // 切换月份时重置滚动位置
-    renderView();
+    _playCalendarNavTransition(direction, renderView);
 }

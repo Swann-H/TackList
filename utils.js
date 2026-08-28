@@ -658,6 +658,33 @@ function getTaskCheckboxClass(task) {
     return 'border-gray-400 dark:border-gray-500 hover:border-gray-500 dark:hover:border-gray-400';
 }
 
+// 统一渲染任务勾选框（各视图共享）
+// opts: {
+//   taskId:     string           - 勾选回调参数（缺省时渲染为静态 div，无点击行为，用于归档列表等只读场景）
+//   iconSize:   'text-xs'|'text-[10px]' - 对勾图标尺寸（默认 text-[10px]，与看板/周月视图统一）
+//   boxClass:   'w-5 h-5'        - 勾选框尺寸类（默认 w-5 h-5；月/周视图等紧凑场景用 w-4 h-4）
+//   draggable:  false            - 看板场景需显式 draggable="false" 防止拖拽冒泡
+//   title:      '标记完成'        - 悬浮提示
+//   extraClass: string           - 附加类（如看板的 flex-shrink-0、番茄页的 mt-1）
+// }
+function renderTaskCheckbox(task, opts = {}) {
+    const {
+        taskId = null,
+        iconSize = 'text-[10px]',
+        boxClass = 'w-5 h-5',
+        draggable = false,
+        title = '标记完成',
+        extraClass = ''
+    } = opts;
+    const colorClass = task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task);
+    const icon = task.completed ? `<i class="fas fa-check ${iconSize}"></i>` : '';
+    // 无 taskId：只读静态展示（div）；有 taskId：可点击按钮
+    if (taskId === null) {
+        return `<div class="${boxClass} rounded-full border-2 flex items-center justify-center ${extraClass} ${colorClass}">${icon}</div>`;
+    }
+    return `<button onclick="event.stopPropagation(); toggleTaskComplete('${taskId}')" draggable="${draggable}" title="${title}" class="${boxClass} rounded-full border-2 flex items-center justify-center ${extraClass} transition ${colorClass}">${icon}</button>`;
+}
+
 // 统一获取左侧色条颜色（hex）
 // 'bar' 模式按优先级着色；其他模式回退 fallbackColor（清单色）
 function getTaskBarColor(task, fallbackColor) {
@@ -1106,6 +1133,36 @@ let _viewConfigOpenSeq = 0;
 function _registerViewConfig(key, panelId, btnId) {
     // key 字段供 onViewConfigPanelOutside 反查（closeViewConfigPanel(top.key)），缺失会导致点击外部无法关闭
     _viewConfigPanels[key] = { key: key, panelId: panelId, btnId: btnId || null, open: false, onClose: null, seq: 0 };
+}
+
+// ---------- 视图配置「恢复默认」类按钮的行内二次确认 ----------
+// 交互参考清单删除：第一次点击→按钮变红「确认…？」；再次点击→执行 actionFn；3s 未确认自动还原。
+// 按钮状态存在自身 dataset 上，各按钮互不影响；还原定时器以 WeakMap 按钮为键管理。
+const _resetConfirmTimers = new WeakMap();
+function resetViewConfigWithConfirm(btn, actionFn, confirmText) {
+    if (typeof actionFn !== 'function') return;
+    if (!btn) { actionFn(); return; } // 找不到按钮（异常场景）：直接执行，保证功能可用
+    if (btn.dataset.confirming !== 'true') {
+        btn.dataset.confirming = 'true';
+        btn.dataset.origHtml = btn.innerHTML;
+        btn.dataset.origClass = btn.className;
+        btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>' + (confirmText || '确认恢复默认配置？');
+        btn.className = 'w-full px-3 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition text-sm';
+        clearTimeout(_resetConfirmTimers.get(btn));
+        _resetConfirmTimers.set(btn, setTimeout(() => _restoreResetConfirmBtn(btn), 3000));
+        return;
+    }
+    _restoreResetConfirmBtn(btn);
+    actionFn();
+}
+function _restoreResetConfirmBtn(btn) {
+    if (!btn) return;
+    clearTimeout(_resetConfirmTimers.get(btn));
+    if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    if (btn.dataset.origClass) btn.className = btn.dataset.origClass;
+    delete btn.dataset.confirming;
+    delete btn.dataset.origHtml;
+    delete btn.dataset.origClass;
 }
 let _viewConfigOutsideBound = false;
 function openViewConfigPanel(key, onClose) {
@@ -1680,6 +1737,42 @@ function resolvePaletteObject(name) {
         return settings.themePaletteColors[name];
     }
     return null;
+}
+
+// 根据当前配色（背景图取色方案）的强调色，查找色相最接近的内置配色方案
+// 用于删除背景图时的自动回退：vibrant/muted/steady 失效后，
+// 切换到与原强调色色相最接近的内置配色（星夜/春野/夕照），尽量保持视觉延续
+function findClosestBuiltinPalette(paletteName) {
+    const FALLBACK = 'builtin:blue';
+    try {
+        const palette = resolvePaletteObject(paletteName);
+        if (!palette) return FALLBACK;
+        const isDark = isDarkThemeActive();
+        const variant = (palette.light && palette.dark)
+            ? (isDark ? palette.dark : palette.light)
+            : palette;
+        if (!variant || !variant.accent) return FALLBACK;
+        const [r, g, b] = _hexToRgb(variant.accent);
+        const [hue, sat] = _rgbToHsl(r, g, b);
+        // 近似无彩色（低饱和）时色相无参考意义，直接回退默认
+        if (sat < 0.12) return FALLBACK;
+        let best = FALLBACK, bestDist = Infinity;
+        Object.keys(BUILTIN_PALETTES).forEach(function (key) {
+            const builtin = BUILTIN_PALETTES[key];
+            const bv = (builtin.light && builtin.dark)
+                ? (isDark ? builtin.dark : builtin.light)
+                : builtin;
+            const [br, bg, bb] = _hexToRgb(bv.accent);
+            const [bh] = _rgbToHsl(br, bg, bb);
+            let dist = Math.abs(hue - bh);
+            if (dist > 180) dist = 360 - dist;
+            if (dist < bestDist) { bestDist = dist; best = 'builtin:' + key; }
+        });
+        return best;
+    } catch (e) {
+        console.error('findClosestBuiltinPalette failed:', e);
+        return FALLBACK;
+    }
 }
 
 // 修复旧版本遗留数据：内置配色被用户编辑后，深色变体(dark)的次级背景

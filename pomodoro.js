@@ -46,7 +46,6 @@ function notifyOtherTabs() {
 
 // ==================== 用户活跃心跳（隐患二：防止幽灵循环） ====================
 let _lastUserActivityAt = Date.now();
-let _heartbeatTimerId = null;
 
 function _throttle(fn, delay) {
     let lastCall = 0;
@@ -69,8 +68,8 @@ function initUserActivityTracking() {
     document.addEventListener('keydown', throttledHandler, { passive: true });
     document.addEventListener('click', throttledHandler, { passive: true });
 
-    // 每30秒向服务器发送一次活跃心跳
-    _heartbeatTimerId = setInterval(() => {
+    // 每30秒向服务器发送一次活跃心跳（interval 需常驻，无需保存 ID）
+    setInterval(() => {
         if (Date.now() - _lastUserActivityAt < 60000) {
             fetch('/api/pomodoro/heartbeat', { method: 'POST' }).catch(() => {});
         }
@@ -156,27 +155,182 @@ function startFlowAnimation() {
     }
 }
 
+// ==================== 场景过渡动效（fx-feature） ====================
+// 方案C（景深推近）骨架 + 方案D主题点缀：
+//   番茄专注 = 光圈扩散（clip-path circle 以按钮中心为圆心）+ 内容推近
+//   正念小事 = 呼吸浮现（慢出曲线）+ 常驻紫色光晕
+//   答案之书 = 入书房开书（常驻暖琥珀光晕 + rotateY 3D 翻入）
+//   设置弹窗 = 中性浮现（遮罩淡入 + 卡片上浮，共用同一开关）
+// 全部走 transform/opacity/clip-path 合成层；主内容后退变暗用独立遮罩层而非 filter
+const FX_FEATURE = { pomoEnter: 420, pomoExit: 380, modalOut: 480 };
+
+function _fxFeatureOn() {
+    return typeof settings !== 'undefined' && settings.featureAnimations === true
+        && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+// 光圈扩散原点：取触发按钮中心视口坐标；按钮不可见（如命令面板触发）时回退屏幕中心
+function _fxBtnOrigin(btnId) {
+    const btn = document.getElementById(btnId);
+    if (btn) {
+        const r = btn.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    return { x: innerWidth / 2, y: innerHeight / 2 };
+}
+
+let _fxPomodoroTimer = null;
+let _fxPomodoroAnimHandler = null; // animationend 监听（进入/退出共用，收尾时统一解除）
+function _fxPomodoroCleanup() {
+    const page = document.getElementById('pomodoro-page');
+    if (page) page.classList.remove('fx-pomo-in', 'fx-pomo-out');
+    const overlay = document.getElementById('fx-feature-overlay');
+    if (overlay) overlay.classList.remove('fx-overlay-on');
+    const main = document.getElementById('main-content');
+    if (main) main.classList.remove('fx-depth-back');
+    if (_fxPomodoroTimer) { clearTimeout(_fxPomodoroTimer); _fxPomodoroTimer = null; }
+    // 解除动画事件监听，避免快速往返时残留监听导致收尾重复触发
+    if (_fxPomodoroAnimHandler) {
+        _fxPomodoroAnimHandler.el.removeEventListener('animationstart', _fxPomodoroAnimHandler.fn);
+        _fxPomodoroAnimHandler.el.removeEventListener('animationend', _fxPomodoroAnimHandler.fn);
+        _fxPomodoroAnimHandler = null;
+    }
+}
+
+// 过渡收尾时机以 CSS 动画真正播完的 animationend 为准（setTimeout 仅作事件丢失兜底）：
+// 添加动画类后还需同步渲染整页（历史记录等重 DOM），动画实际起始帧晚于 setTimeout 计时起点，
+// 若按固定时长移除动画类，会打断尚未播完的 fxPushNear（scale 仍 >1），
+// 末帧内容比真实页面略大，移除瞬间圆环/文字会突然缩小
+function _fxWaitPomodoroAnimDone(page, animNames, duration, finish) {
+    const names = new Set([].concat(animNames));
+    const armFallback = (ms) => {
+        if (_fxPomodoroTimer) clearTimeout(_fxPomodoroTimer);
+        _fxPomodoroTimer = setTimeout(finish, ms);
+    };
+    const handler = {
+        el: page,
+        fn: (e) => {
+            if (!names.has(e.animationName)) return;
+            if (e.type === 'animationstart') {
+                // 动画实际起始帧可能因整页同步渲染而推迟，起始后再校准兜底时刻
+                armFallback(duration + 200);
+                return;
+            }
+            if (_fxPomodoroTimer) { clearTimeout(_fxPomodoroTimer); _fxPomodoroTimer = null; }
+            finish();
+        }
+    };
+    _fxPomodoroAnimHandler = handler;
+    page.addEventListener('animationstart', handler.fn);
+    page.addEventListener('animationend', handler.fn);
+    // 未收到 animationstart 时的最终兜底
+    armFallback(duration + 900);
+}
+
+// 弹窗过渡的定时器与残留类清理（进入/退出动画共用，防止快速往返时叠加）
+const _fxModalTimers = {};
+function _fxModalCleanup(modalId) {
+    if (_fxModalTimers[modalId]) { clearTimeout(_fxModalTimers[modalId]); _fxModalTimers[modalId] = null; }
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.remove('fx-overlay-in', 'fx-card-anim', 'fx-overlay-out', 'fx-card-out');
+}
+
+// 弹窗进入：遮罩淡入 + 卡片主题动画（呼吸浮现/开书），主内容后退变暗
+function _fxOpenModal(modalId) {
+    const modal = document.getElementById(modalId);
+    _fxModalCleanup(modalId);
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    if (!_fxFeatureOn()) return;
+    modal.classList.add('fx-overlay-in', 'fx-card-anim');
+    const main = document.getElementById('main-content');
+    if (main) main.classList.add('fx-depth-back');
+    // 进入动画结束后移除类，避免残留干扰后续退出动画
+    _fxModalTimers[modalId] = setTimeout(() => {
+        _fxModalTimers[modalId] = null;
+        modal.classList.remove('fx-overlay-in', 'fx-card-anim');
+    }, 600);
+}
+
+// 弹窗退出：反向收起（快于进入），动画结束后才真正隐藏
+function _fxCloseModal(modalId, onDone) {
+    const modal = document.getElementById(modalId);
+    if (!_fxFeatureOn()) {
+        _fxModalCleanup(modalId);
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        if (onDone) onDone();
+        return;
+    }
+    _fxModalCleanup(modalId);
+    modal.classList.remove('hidden');
+    modal.classList.add('flex', 'fx-overlay-out', 'fx-card-out');
+    const main = document.getElementById('main-content');
+    if (main) main.classList.remove('fx-depth-back');
+    _fxModalTimers[modalId] = setTimeout(() => {
+        _fxModalTimers[modalId] = null;
+        modal.classList.add('hidden');
+        modal.classList.remove('flex', 'fx-overlay-out', 'fx-card-out');
+        if (onDone) onDone();
+    }, FX_FEATURE.modalOut);
+}
+
 function switchToPomodoroPage() {
     // 关闭任务详情栏（避免在番茄页面上显示）
     if (typeof closeTaskDetailPanel === 'function') closeTaskDetailPanel();
-    document.getElementById('pomodoro-page').classList.remove('hidden');
-    document.getElementById('sidebar-bottom-buttons').classList.add('hidden');
-    document.getElementById('main-content').classList.add('hidden');
-    // 仅在圆环处于初始状态（offset=0，完整圆环）时禁用过渡动画，
-    // 避免从完整圆环动画滑到正确偏移位置；其他情况下保留0.3s平滑过渡
-    const progressEl = document.getElementById('pomodoro-progress');
-    if (progressEl && (progressEl.style.strokeDashoffset === '' || progressEl.style.strokeDashoffset === '0')) {
-        _pomodoroPhaseTransition = true;
-    }
-    renderPomodoroPage();
-    updatePomodoroBackground();
-    // 确保进度环和按钮状态正确更新（修复从侧边栏进入时圆环显示不正确的问题）
-    updatePomodoroDisplay();
+    // 番茄页内容渲染（光圈扩散期间需展示完整页面，故立即渲染、仅暂停内部动画）
+    const showPage = () => {
+        document.getElementById('pomodoro-page').classList.remove('hidden');
+        // 仅在圆环处于初始状态（offset=0，完整圆环）时禁用过渡动画，
+        // 避免从完整圆环动画滑到正确偏移位置；其他情况下保留0.3s平滑过渡
+        const progressEl = document.getElementById('pomodoro-progress');
+        if (progressEl && (progressEl.style.strokeDashoffset === '' || progressEl.style.strokeDashoffset === '0')) {
+            _pomodoroPhaseTransition = true;
+        }
+        renderPomodoroPage();
+        updatePomodoroBackground();
+        // 确保进度环和按钮状态正确更新（修复从侧边栏进入时圆环显示不正确的问题）
+        updatePomodoroDisplay();
+    };
     // 从服务器同步最新状态，确保resting等状态的timeLeft准确
-    syncPomodoroFromServer();
+    // 注意：同步回调内部会调用 startFlowAnimation()，过渡期间调用会打破暂停导致粒子提前播放，
+    // 故 fx-feature 过渡模式下推迟到过渡结束后再同步
+    const syncState = () => syncPomodoroFromServer();
+    if (!_fxFeatureOn()) {
+        document.getElementById('sidebar-bottom-buttons').classList.add('hidden');
+        document.getElementById('main-content').classList.add('hidden');
+        showPage();
+        syncState();
+        return;
+    }
+    // 景深推近：过渡期间主内容保持可见（后退+压暗），光圈从按钮位置扩散铺满后再隐藏主内容
+    _fxPomodoroCleanup();
+    const page = document.getElementById('pomodoro-page');
+    const origin = _fxBtnOrigin('sidebar-pomodoro-btn');
+    page.style.setProperty('--fx-cx', origin.x + 'px');
+    page.style.setProperty('--fx-cy', origin.y + 'px');
+    document.getElementById('fx-feature-overlay').classList.add('fx-overlay-on');
+    document.getElementById('main-content').classList.add('fx-depth-back');
+    page.classList.add('fx-pomo-in');
+    showPage();
+    // 过渡期间暂停粒子等内部动画（Web Animations API），避免与容器动画叠加掉帧
+    stopFlowAnimation();
+    const finishEnter = () => {
+        if (!page.classList.contains('fx-pomo-in')) return; // 快速往返被关闭/打断时跳过
+        _fxPomodoroTimer = null;
+        page.classList.remove('fx-pomo-in');
+        document.getElementById('sidebar-bottom-buttons').classList.add('hidden');
+        document.getElementById('main-content').classList.add('hidden');
+        // 主内容已隐藏，移除遮罩与后退态（无视觉影响）
+        _fxPomodoroCleanup();
+        startFlowAnimation();
+        // 过渡结束后再同步服务器状态（避免同步回调提前恢复粒子动画）
+        syncState();
+    };
+    _fxWaitPomodoroAnimDone(page, ['fxCircleIn', 'fxPushNear'], FX_FEATURE.pomoEnter, finishEnter);
 }
 
-function closePomodoroPage() {
+function _hidePomodoroPage() {
     document.getElementById('pomodoro-page').classList.add('hidden');
     document.getElementById('sidebar-bottom-buttons').classList.remove('hidden');
     document.getElementById('main-content').classList.remove('hidden');
@@ -185,6 +339,33 @@ function closePomodoroPage() {
     if (typeof ee_flushPendingEffects === 'function') {
         ee_flushPendingEffects();
     }
+}
+
+function closePomodoroPage() {
+    if (!_fxFeatureOn()) {
+        _fxPomodoroCleanup();
+        _hidePomodoroPage();
+        return;
+    }
+    // 终止可能未完成的进入动画（快速往返场景）
+    _fxPomodoroCleanup();
+    // 收拢期间同样暂停粒子等内部动画，避免与容器动画叠加掉帧
+    stopFlowAnimation();
+    // 先恢复主内容可见（作为收拢背景并从后退态回弹），再播放光圈收拢回按钮位置
+    document.getElementById('sidebar-bottom-buttons').classList.remove('hidden');
+    document.getElementById('main-content').classList.remove('hidden');
+    const page = document.getElementById('pomodoro-page');
+    page.classList.add('fx-pomo-out');
+    const overlay = document.getElementById('fx-feature-overlay');
+    overlay.classList.add('fx-overlay-on');
+    void overlay.offsetWidth; // 强制重排，让遮罩随后以过渡方式淡出
+    overlay.classList.remove('fx-overlay-on');
+    const finishExit = () => {
+        if (!page.classList.contains('fx-pomo-out')) return;
+        _fxPomodoroCleanup(); // 移除 fx-pomo-out 并解除 animationend 监听
+        _hidePomodoroPage();
+    };
+    _fxWaitPomodoroAnimDone(page, 'fxCircleOut', FX_FEATURE.pomoExit, finishExit);
 }
 
 function updatePomodoroBackground() {
@@ -507,8 +688,11 @@ function addFocusAnimations() {
     const panelRect = leftPanel.getBoundingClientRect();
 
     // 防御：面板尺寸为0时延迟重试（重试前校验阶段，避免阶段已切换时仍创建旧动画）
+    // 同时校验番茄页是否可见，避免后台同步触发时形成每 200ms 一次的无限重试链
     if (panelRect.width === 0 || panelRect.height === 0) {
         setTimeout(() => {
+            const pomodoroPage = document.getElementById('pomodoro-page');
+            if (!pomodoroPage || pomodoroPage.classList.contains('hidden')) return;
             if (pomodoroState.phase === 'focus') addFocusAnimations();
         }, 200);
         return;
@@ -644,37 +828,14 @@ function clearMainViewBackground() {
     }
 }
 
+// 与 updateMainViewBackground / clearMainViewBackground 逻辑一致，
+// 历史上存在两套重复实现，现统一委托，仅保留旧函数名作为兼容入口
 function updateMainContentBackground() {
-    const mainContent = document.getElementById('main-content');
-    if (!mainContent) return;
-
-    // 开关关闭时不应用状态背景色
-    const stateBgEnabled = settings.pomodoroStateBg !== false;
-    if (!stateBgEnabled) {
-        mainContent.classList.remove('view-focus', 'view-break');
-        return;
-    }
-
-    const isRunning = pomodoroState.state === 'focusing' || pomodoroState.state === 'resting';
-    if (!isRunning) {
-        mainContent.classList.remove('view-focus', 'view-break');
-        return;
-    }
-
-    if (pomodoroState.phase === 'focus') {
-        mainContent.classList.remove('view-break');
-        mainContent.classList.add('view-focus');
-    } else {
-        mainContent.classList.remove('view-focus');
-        mainContent.classList.add('view-break');
-    }
+    updateMainViewBackground();
 }
 
 function clearMainContentBackground() {
-    const mainContent = document.getElementById('main-content');
-    if (mainContent) {
-        mainContent.classList.remove('view-focus', 'view-break');
-    }
+    clearMainViewBackground();
 }
 
 function renderPomodoroPage() {
@@ -748,11 +909,12 @@ function renderPomodoroPage() {
                 const endStr = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
                 let taskDesc = record.taskName || '一般专注';
                 if (taskDesc.length > 30) taskDesc = taskDesc.substring(0, 30) + '...';
+                taskDesc = escapeHtml(taskDesc);
 
                 const task = record.taskId ? tasks.find(t => t.id === record.taskId) : null;
                 const list = task ? lists.find(l => l.id === task.listId) : null;
                 const listColor = list ? list.color : '#9ca3af';
-                const listName = list ? list.name : '';
+                const listName = list ? escapeHtml(list.name) : '';
 
                 const duration = record.duration || 25;
                 const recordIdx = pomodoroHistory.indexOf(record);
@@ -797,15 +959,18 @@ function renderPomodoroPage() {
     updatePomodoroTaskButton();
 }
 
+// 任务面板当前渲染上下文（搜索输入、多标签页数据同步刷新时复用同一组参数）
+let _pomodoroTaskPanelContext = null;
+
 function renderPomodoroTaskList(onClickFn, currentTaskId) {
     const taskListContainer = document.getElementById('pomodoro-task-list');
+    _pomodoroTaskPanelContext = { onClickFn, currentTaskId };
 
     // 排序顺序：一般专注 → 已设置时间的未完成任务 → 未设置时间的未完成任务 → 已完成的任务
     // 组内保持原有时间排序（已设置时间组按时间升序；未设置时间组按 createdAt 升序；已完成组按 completedAt 倒序）
     //
-    // 性能优化：缓存三重排序结果。原实现对 5000+ tasks 每次打开面板都做三次 filter+sort，
-    // 单次耗时数十至上百毫秒。这里只在缓存失效（tasks 变化或首次渲染）时执行排序，
-    // 并在未完成组累计已 >= 15 条时跳过 completedTasks 的排序（最终只需前 15 条）。
+    // 性能优化：缓存排序结果。原实现对 5000+ tasks 每次打开面板都做多次 filter+sort，
+    // 单次耗时数十至上百毫秒。这里只在缓存失效（tasks 变化或首次渲染）时执行排序。
     if (!_pomodoroTaskListCache) {
         const getTaskTime = (t) => t.startTime ? new Date(t.startTime).getTime() : (t.dueDate ? new Date(t.dueDate).getTime() : 0);
         const hasTime = (t) => !!(t.startTime || t.dueDate);
@@ -818,21 +983,45 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
                 const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                 return aTime - bTime;
             });
-
-        let allTasks = [...timedIncompleteTasks, ...untimedIncompleteTasks];
-        // 仅当未完成任务不足 15 条时，才需要补充已完成任务到列表末尾
-        if (allTasks.length < 15) {
-            const completedTasks = tasks.filter(t => t.completed)
-                .sort((a, b) => {
-                    const aTime = a.completedAt ? new Date(a.completedAt).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-                    const bTime = b.completedAt ? new Date(b.completedAt).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-                    return bTime - aTime;
-                });
-            allTasks = [...allTasks, ...completedTasks];
-        }
-        _pomodoroTaskListCache = allTasks.slice(0, 15);
+        const completedTasks = tasks.filter(t => t.completed)
+            .sort((a, b) => {
+                const aTime = a.completedAt ? new Date(a.completedAt).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+                const bTime = b.completedAt ? new Date(b.completedAt).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+                return bTime - aTime;
+            });
+        _pomodoroTaskListCache = {
+            incomplete: [...timedIncompleteTasks, ...untimedIncompleteTasks],
+            completed: completedTasks
+        };
     }
-    const allTasks = _pomodoroTaskListCache;
+
+    // 搜索词直接读取输入框，保证多标签页数据同步触发的重渲染不丢失用户输入
+    const searchQuery = (document.getElementById('pomodoro-task-search')?.value || '').trim().toLowerCase();
+    let visibleTasks;
+    let pinnedTaskId = null;
+
+    if (searchQuery) {
+        // 搜索模式：在全部任务（含已完成）中按标题过滤，不受默认 15 条限制
+        visibleTasks = [..._pomodoroTaskListCache.incomplete, ..._pomodoroTaskListCache.completed]
+            .filter(t => (t.title || '').toLowerCase().includes(searchQuery))
+            .slice(0, 50);
+    } else {
+        // 默认展示：未完成前 10 条 + 最近完成任务（至少 5 条；未完成不足 10 条时补足至 15 条）
+        const incompletePart = _pomodoroTaskListCache.incomplete.slice(0, 10);
+        const completedLimit = Math.max(5, 15 - incompletePart.length);
+        const completedPart = _pomodoroTaskListCache.completed.slice(0, completedLimit);
+        visibleTasks = [...incompletePart, ...completedPart];
+
+        // 当前关联任务若不在列表中（如已完成被挤出），置顶固定展示，保证选中态始终可见
+        if (currentTaskId && !visibleTasks.some(t => t.id === currentTaskId)) {
+            const currentTask = tasks.find(t => t.id === currentTaskId);
+            if (currentTask) {
+                pinnedTaskId = currentTaskId;
+                visibleTasks = [currentTask, ...visibleTasks];
+            }
+        }
+    }
+    const allTasks = visibleTasks;
 
     // "一般专注"选项 - 取消关联任务
     const isGeneralFocus = !currentTaskId;
@@ -849,29 +1038,33 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
     `;
 
     if (allTasks.length === 0) {
-        taskListContainer.innerHTML = generalFocusHtml + '<div class="text-center py-4 text-theme-muted">暂无任务</div>';
+        taskListContainer.innerHTML = generalFocusHtml + `<div class="text-center py-4 text-theme-muted">${searchQuery ? '无匹配任务' : '暂无任务'}</div>`;
     } else {
-        const taskListHtml = allTasks.map(task => {
+        const taskListHtml = allTasks.map((task, idx) => {
             const list = task.listId ? lists.find(l => l.id === task.listId) : null;
             const listColor = list ? list.color : '#9ca3af';
             const isCurrent = currentTaskId === task.id;
             const timeDisplay = task.startTime ? formatDateTime(task.startTime) : '未设置时间';
             const focusMinutes = getTaskFocusMinutes(task.id);
+            // 默认视图下，已完成分组前显示"最近完成"分隔标识（置顶任务后紧跟未完成任务的场景除外）
+            const showCompletedDivider = !searchQuery && task.completed && idx > 0 && !allTasks[idx - 1].completed;
+            const dividerHtml = showCompletedDivider
+                ? '<div class="flex items-center gap-2 px-3 pt-3 pb-1 text-xs text-theme-muted"><i class="fas fa-check-double text-xs"></i>最近完成</div>'
+                : '';
 
             return `
+            ${dividerHtml}
             <div onclick="${onClickFn(task.id)}"
                  class="flex items-start gap-3 py-2.5 px-3 rounded-r-lg transition cursor-pointer ${isCurrent ? 'pomodoro-task-selected' : 'hover:brightness-95'} ${task.completed ? 'opacity-55' : ''}"
                  style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
-                <button onclick="event.stopPropagation();" class="mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
-                    ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
-                </button>
+                ${renderTaskCheckbox(task, { extraClass: 'mt-1 flex-shrink-0' })}
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 text-xs text-theme-secondary mb-0.5">
                         <span>${timeDisplay}</span>
-                        ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${list.name}</span>` : ''}
+                        ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${escapeHtml(list.name)}</span>` : ''}
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                     </div>
-                    <div class="text-sm ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} truncate">${task.title || '新任务'}</div>
+                    <div class="text-sm ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} truncate">${pinnedTaskId === task.id ? '<i class="fas fa-thumbtack text-theme-muted text-xs mr-1"></i>' : ''}${escapeHtml(task.title || '新任务')}</div>
                 </div>
             </div>
             `;
@@ -881,8 +1074,49 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
     }
 }
 
+// 搜索框输入时，用面板当前上下文（回调 + 选中任务）重新渲染列表
+function onPomodoroTaskSearchInput() {
+    if (_pomodoroTaskPanelContext) {
+        renderPomodoroTaskList(_pomodoroTaskPanelContext.onClickFn, _pomodoroTaskPanelContext.currentTaskId);
+    }
+}
+
+// 若任务面板正打开，用最新数据与面板当前上下文（含搜索词）重新渲染列表。
+// 供多标签页数据同步后调用，避免面板展示旧数据。
+function refreshPomodoroTaskPanelIfOpen() {
+    const overlay = document.getElementById('pomodoro-task-panel-overlay');
+    if (overlay && !overlay.classList.contains('hidden') && _pomodoroTaskPanelContext) {
+        renderPomodoroTaskList(_pomodoroTaskPanelContext.onClickFn, _pomodoroTaskPanelContext.currentTaskId);
+    }
+}
+
+// 切换搜索框显示/隐藏；隐藏时清空搜索词并恢复默认列表
+function togglePomodoroTaskSearch() {
+    const searchWrap = document.getElementById('pomodoro-task-search-wrap');
+    if (!searchWrap) return;
+    const willShow = searchWrap.classList.contains('hidden');
+    searchWrap.classList.toggle('hidden', !willShow);
+    const searchInput = document.getElementById('pomodoro-task-search');
+    if (willShow) {
+        // 展开搜索框并聚焦，方便直接输入
+        if (searchInput) searchInput.focus();
+    } else if (searchInput && searchInput.value) {
+        searchInput.value = '';
+        onPomodoroTaskSearchInput();
+    }
+}
+
+// 每次打开面板时隐藏搜索框并清空上一次的搜索词
+function clearPomodoroTaskSearch() {
+    const searchWrap = document.getElementById('pomodoro-task-search-wrap');
+    if (searchWrap) searchWrap.classList.add('hidden');
+    const searchInput = document.getElementById('pomodoro-task-search');
+    if (searchInput) searchInput.value = '';
+}
+
 function openPomodoroTaskPanel() {
     document.getElementById('pomodoro-task-panel-title').textContent = '专注任务';
+    clearPomodoroTaskSearch();
     renderPomodoroTaskList(
         (taskId) => `selectPomodoroTask(${taskId ? `'${taskId}'` : 'null'})`,
         pomodoroState.currentTaskId
@@ -942,6 +1176,7 @@ function selectPomodoroTask(taskId) {
     } else if (!isPomodoroRunning() && pomodoroState.state !== 'pause') {
         // 非运行且非暂停：自动开始（当前不会进入此分支，预留扩展）
         setPomodoroPhase('focus');
+        pomodoroState.state = 'focusing';
         startPomodoro();
     }
     // focusing/resting/pause: 仅切换任务关联，不重置计时器
@@ -1008,9 +1243,9 @@ function startPomodoroForTask(taskId) {
         switchToPomodoroPage();
         updatePomodoroDisplay();
     } else {
-        // 暂停状态下切换任务后恢复计时
+        // 暂停状态下切换任务后恢复计时（按阶段推导 state，休息暂停时应恢复为 resting）
         if (pomodoroState.state === 'pause') {
-            pomodoroState.state = 'focusing';
+            pomodoroState.state = pomodoroState.phase === 'focus' ? 'focusing' : 'resting';
             startPomodoro(); // startPomodoro已包含服务端同步
         } else {
             // 专注/休息中切换任务，同步到服务器
@@ -1067,13 +1302,9 @@ function onFocusTaskCompleted(taskId) {
     if (!task) return;
 
     // 计算已专注的秒数
-    let elapsedSeconds = 0;
-    if (currentState === 'focusing') {
-        elapsedSeconds = pomodoroState.totalDuration - pomodoroState.timeLeft;
-    } else {
-        // 暂停状态：totalDuration已重置为0，用原始总时长减去剩余时间
-        elapsedSeconds = (pomodoroState.focusDuration * 60) - pomodoroState.timeLeft;
-    }
+    // 统一使用 focusDuration*60 - timeLeft：totalDuration 在暂停恢复后会被重置为
+    // 剩余时长，用它计算会丢失暂停前已专注的时间
+    const elapsedSeconds = (pomodoroState.focusDuration * 60) - pomodoroState.timeLeft;
 
     // 存储拆分信息（追加到数组，支持多任务切换）
     _completedTaskInfo.push({
@@ -1112,6 +1343,8 @@ function _recordTaskSwitch(taskId) {
     if (!_completedTaskInfo || _completedTaskInfo.length === 0) return;
     if (!taskId) return;
     if (pomodoroState.state !== 'focusing' && pomodoroState.state !== 'pause' && pomodoroState.state !== 'end_settlement') return;
+    // 结算源自休息中断（phase 非 focus）时，专注公式算出的是无意义的垃圾值，不记录
+    if (pomodoroState.state === 'end_settlement' && pomodoroState.phase !== 'focus') return;
 
     const elapsedSeconds = (pomodoroState.focusDuration * 60) - pomodoroState.timeLeft;
     const lastCompleted = _completedTaskInfo[_completedTaskInfo.length - 1];
@@ -1246,6 +1479,13 @@ function handleClickEnd() {
         pomodoroState.currentTaskId = null;
         _endedTaskId = null;
         _completedTaskInfo = [];
+        // 同步到服务器：否则下一次 syncPomodoroFromServer 会用服务器旧值
+        // 把已清除的任务关联和连续番茄数"复活"
+        fetch('/api/pomodoro/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentTaskId: null, taskName: '', continuousTomatoCount: 0 })
+        }).catch(err => console.error('Update pomodoro error:', err));
         updatePomodoroDisplay();
         updatePomodoroBackground();
         updatePomodoroTaskButton();
@@ -1382,27 +1622,6 @@ function doAutoForward() {
     updatePomodoroTaskButton();
 }
 
-// 兼容旧接口：togglePomodoro 仍被侧栏等调用
-function togglePomodoro() {
-    switch (pomodoroState.state) {
-        case 'idle':
-            handleStartFocus();
-            break;
-        case 'focusing':
-            handlePause();
-            break;
-        case 'pause':
-            handleResume();
-            break;
-        case 'resting':
-            handleSkipRest();
-            break;
-        case 'completed':
-            handleClickRest();
-            break;
-    }
-}
-
 // ==================== 核心计时器函数 ====================
 
 function syncPomodoroFromServer() {
@@ -1473,15 +1692,7 @@ function syncPomodoroFromServer() {
                 pomodoroState.totalDuration = pomodoroState.timeLeft;
                 pomodoroState.startedAt = Date.now(); // 本地时间戳，仅用于本地倒计时
 
-                if (pomodoroState.timerId) clearInterval(pomodoroState.timerId);
-                pomodoroState.timerId = setInterval(() => {
-                    const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
-                    pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
-                    updatePomodoroDisplay();
-                    if (pomodoroState.timeLeft <= 0) {
-                        onPomodoroComplete();
-                    }
-                }, 1000);
+                runPomodoroTicker();
 
                 startFlowAnimation();
                 _pomodoroPaused = false;
@@ -1559,6 +1770,26 @@ function syncPomodoroFromServer() {
     });
 }
 
+// 启动/重启本地倒计时。前置条件：调用方已设置 pomodoroState.totalDuration 与 startedAt。
+// 统一 5 处原先各自内联的 setInterval 回调（部分副本已漂移缺失背景刷新），此处为权威实现。
+function runPomodoroTicker() {
+    // 先清除可能残留的旧定时器，防止多个 setInterval 叠加
+    if (pomodoroState.timerId) {
+        clearInterval(pomodoroState.timerId);
+        pomodoroState.timerId = null;
+    }
+
+    pomodoroState.timerId = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
+        pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
+        updatePomodoroDisplay();
+        updateMainContentBackground();
+        if (pomodoroState.timeLeft <= 0) {
+            onPomodoroComplete();
+        }
+    }, 1000);
+}
+
 function startPomodoro() {
     startFlowAnimation();
     _pomodoroCompletionHandled = false;
@@ -1581,21 +1812,7 @@ function startPomodoro() {
 
     updatePomodoroDisplay();
 
-    // 先清除可能残留的旧定时器，防止多个 setInterval 叠加
-    if (pomodoroState.timerId) {
-        clearInterval(pomodoroState.timerId);
-        pomodoroState.timerId = null;
-    }
-
-    pomodoroState.timerId = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
-        pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
-        updatePomodoroDisplay();
-        updateMainContentBackground();
-        if (pomodoroState.timeLeft <= 0) {
-            onPomodoroComplete();
-        }
-    }, 1000);
+    runPomodoroTicker();
 
     const task = tasks.find(t => t.id === pomodoroState.currentTaskId);
     pomodoroState.taskName = task ? task.title : '一般专注';
@@ -1686,21 +1903,7 @@ function resumePomodoro() {
 
     easterEgg_onPomodoroStart();
 
-    // 先清除可能残留的旧定时器，防止多个 setInterval 叠加
-    if (pomodoroState.timerId) {
-        clearInterval(pomodoroState.timerId);
-        pomodoroState.timerId = null;
-    }
-
-    pomodoroState.timerId = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
-        pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
-        updatePomodoroDisplay();
-        updateMainContentBackground();
-        if (pomodoroState.timeLeft <= 0) {
-            onPomodoroComplete();
-        }
-    }, 1000);
+    runPomodoroTicker();
 
     // 设置标志：防止解锁屏幕时并发的 syncPomodoroFromServer 用旧 pause 状态覆盖刚恢复的 focusing 状态
     _pomodoroStartPending = true;
@@ -1802,15 +2005,7 @@ function onPomodoroComplete() {
             pomodoroState.totalDuration = pomodoroState.timeLeft;
             pomodoroState.startedAt = Date.now();
             _pomodoroCompletionHandled = false;
-            if (pomodoroState.timerId) clearInterval(pomodoroState.timerId);
-            pomodoroState.timerId = setInterval(() => {
-                const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
-                pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
-                updatePomodoroDisplay();
-                if (pomodoroState.timeLeft <= 0) {
-                    onPomodoroComplete();
-                }
-            }, 1000);
+            runPomodoroTicker();
             startFlowAnimation();
             _pomodoroPaused = false;
             updatePomodoroBackground();
@@ -1822,15 +2017,7 @@ function onPomodoroComplete() {
             pomodoroState.totalDuration = pomodoroState.timeLeft;
             pomodoroState.startedAt = Date.now();
             _pomodoroCompletionHandled = false;
-            if (pomodoroState.timerId) clearInterval(pomodoroState.timerId);
-            pomodoroState.timerId = setInterval(() => {
-                const elapsed = Math.floor((Date.now() - pomodoroState.startedAt) / 1000);
-                pomodoroState.timeLeft = Math.max(0, pomodoroState.totalDuration - elapsed);
-                updatePomodoroDisplay();
-                if (pomodoroState.timeLeft <= 0) {
-                    onPomodoroComplete();
-                }
-            }, 1000);
+            runPomodoroTicker();
             startFlowAnimation();
             _pomodoroPaused = false;
             updatePomodoroBackground();
@@ -2027,7 +2214,9 @@ function updatePomodoroDisplay() {
             
             // 根据已专注时长决定显示哪些按钮
             const isFromFocus = _previousState === 'pause' && pomodoroState.phase === 'focus';
-            const elapsedSeconds = pomodoroState.totalDuration - pomodoroState.timeLeft;
+            // 与 handleSaveTime 的口径一致：用 focusDuration*60 - timeLeft 计算累计已专注时长，
+            // totalDuration 在暂停恢复后会被重置为剩余时长，导致显示偏小
+            const elapsedSeconds = (pomodoroState.focusDuration * 60) - pomodoroState.timeLeft;
             const elapsedMin = Math.floor(elapsedSeconds / 60);
             const elapsedSec = elapsedSeconds % 60;
             const timeStr = elapsedMin > 0 ? `${elapsedMin}分${elapsedSec > 0 ? elapsedSec + '秒' : '钟'}` : `${elapsedSec}秒`;
@@ -2245,6 +2434,7 @@ function openRelinkTaskPanel(recordIdx) {
     if (!record) return;
 
     document.getElementById('pomodoro-task-panel-title').textContent = '关联到任务';
+    clearPomodoroTaskSearch();
     renderPomodoroTaskList(
         (taskId) => `relinkTask(${recordIdx}, ${taskId ? `'${taskId}'` : 'null'})`,
         record.taskId
@@ -2363,6 +2553,16 @@ function openAddRecordDatePicker(inputEl, pickerId) {
     });
 }
 
+// 新增记录弹窗：点击弹窗内非快速选择面板、非触发输入框的区域时，关闭所有快速选择面板
+// （弹窗卡片 stopPropagation 阻止了事件冒泡到 document，全局关闭逻辑收不到点击，需在卡片上单独处理）
+function handleAddRecordModalClick(e) {
+    // 点击在快速选择面板内部，不关闭
+    if (e.target.closest('.time-picker-dropdown') || e.target.closest('.date-picker-dropdown')) return;
+    // 点击在触发输入框上，由输入框自身的 toggle 逻辑处理
+    if (e.target.closest('input[onclick*="openTimePicker"]') || e.target.closest('input[onclick*="openAddRecordDatePicker"]')) return;
+    closeAllTimePickers();
+}
+
 // ==================== 手动新增专注记录 ====================
 // 记录弹窗中最后填写的字段（'endTime' 或 'pomodoroCount'），决定互算优先级
 let _addRecordLastFilled = null;
@@ -2468,6 +2668,7 @@ function updateAddRecordTaskDisplay() {
 // 打开关联任务的滑入面板（复用现有面板）
 function openPomodoroAddRecordTaskPanel() {
     document.getElementById('pomodoro-task-panel-title').textContent = '关联任务';
+    clearPomodoroTaskSearch();
     renderPomodoroTaskList(
         (taskId) => `selectPomodoroAddRecordTask(${taskId ? `'${taskId}'` : 'null'})`,
         _addRecordTaskId
@@ -2670,17 +2871,18 @@ function openBoringModal() {
     boringState.shownThings = [];
     boringState.swapCount = 0;
     showRandomThing();
-    document.getElementById('boring-modal').classList.remove('hidden');
-    document.getElementById('boring-modal').classList.add('flex');
+    // 功能页过渡动画：呼吸浮现（fx-feature 开启时播放）
+    _fxOpenModal('boring-modal');
 }
 
 function closeBoringModal() {
-    document.getElementById('boring-modal').classList.add('hidden');
-    document.getElementById('boring-modal').classList.remove('flex');
+    // 功能页过渡动画：反向收起后再隐藏
+    _fxCloseModal('boring-modal');
 }
 
 function showRandomThing() {
     const availableThings = mindfulThings.filter(t => !boringState.shownThings.some(s => s.id === t.id));
+    if (availableThings.length === 0) return;
     const thing = availableThings[Math.floor(Math.random() * availableThings.length)];
     boringState.currentThing = thing;
     boringState.shownThings.push(thing);
@@ -2775,14 +2977,10 @@ function acceptBoringThing(thingId) {
     closeBoringModal();
 }
 
-let answerBookState = {
-    isOpen: false,
-    currentAnswer: null
-};
+// 答案之书入场动画期间禁点封面标志（避免与内部翻盖动画抢时序）
+let _answerBookFxBusy = false;
 
 function openAnswerBookModal() {
-    answerBookState.isOpen = false;
-    answerBookState.currentAnswer = null;
     const cover = document.getElementById('answer-book-cover');
     cover.classList.remove('flipping', 'closing');
     cover.style.transform = '';
@@ -2791,16 +2989,23 @@ function openAnswerBookModal() {
     document.getElementById('answer-book-hint').classList.remove('hidden');
     document.getElementById('answer-book-revealed').classList.add('hidden');
     document.getElementById('answer-book-buttons').classList.add('hidden');
-    document.getElementById('answer-book-modal').classList.remove('hidden');
-    document.getElementById('answer-book-modal').classList.add('flex');
+    // 功能页过渡动画：入书房开书（fx-feature 开启时播放）
+    _fxOpenModal('answer-book-modal');
+    // 入场动画期间禁点封面，与内部 800ms 翻盖动画错开时序
+    if (_fxFeatureOn()) {
+        _answerBookFxBusy = true;
+        setTimeout(() => { _answerBookFxBusy = false; }, 460);
+    }
 }
 
 function closeAnswerBookModal() {
-    document.getElementById('answer-book-modal').classList.add('hidden');
-    document.getElementById('answer-book-modal').classList.remove('flex');
+    // 功能页过渡动画：合书收回后再隐藏
+    _fxCloseModal('answer-book-modal');
 }
 
 function flipAnswerBook() {
+    // 入场动画未结束时禁止翻盖（避免与入场 rotateY 动画抢 transform）
+    if (_answerBookFxBusy) return;
     const cover = document.getElementById('answer-book-cover');
     if (cover.classList.contains('flipping') || cover.classList.contains('closing')) return;
     
@@ -2808,8 +3013,7 @@ function flipAnswerBook() {
     cover.style.pointerEvents = 'none';
     
     const answer = bookAnswers[Math.floor(Math.random() * bookAnswers.length)];
-    answerBookState.currentAnswer = answer;
-    
+
     setTimeout(() => {
         cover.style.transform = 'rotateY(-170deg)';
         cover.classList.remove('flipping');
@@ -2823,7 +3027,6 @@ function flipAnswerBook() {
         document.getElementById('answer-book-hint').classList.add('hidden');
         document.getElementById('answer-book-revealed').classList.remove('hidden');
         document.getElementById('answer-book-buttons').classList.remove('hidden');
-        answerBookState.isOpen = true;
     }, 800);
 }
 
@@ -2835,10 +3038,7 @@ function askAgain() {
     document.getElementById('answer-book-hint').classList.remove('hidden');
     document.getElementById('answer-book-revealed').classList.add('hidden');
     document.getElementById('answer-book-buttons').classList.add('hidden');
-    
-    answerBookState.isOpen = false;
-    answerBookState.currentAnswer = null;
-    
+
     setTimeout(() => {
         cover.style.transform = '';
         cover.classList.remove('closing');
@@ -3280,7 +3480,7 @@ function renderStatsTimeline() {
             const clampedEnd = Math.min(startMin + dur, timelineStartMin + timelineSpanMin);
             const leftPct = ((clampedStart - timelineStartMin) / timelineSpanMin) * 100;
             const widthPct = ((clampedEnd - clampedStart) / timelineSpanMin) * 100;
-            html += '<div class="stats-timeline-bar" style="left: ' + leftPct + '%; width: ' + Math.max(widthPct, 0.5) + '%; background: ' + colors[di] + ';" title="' + record.taskName + ' ' + dur + '分钟"></div>';
+            html += '<div class="stats-timeline-bar" style="left: ' + leftPct + '%; width: ' + Math.max(widthPct, 0.5) + '%; background: ' + colors[di] + ';" title="' + escapeHtml(record.taskName || '一般专注') + ' ' + dur + '分钟"></div>';
         });
 
         html += '</div></div>';
@@ -3456,11 +3656,12 @@ function renderStatsRecords() {
             const endStr = endDate.getHours().toString().padStart(2, '0') + ':' + endDate.getMinutes().toString().padStart(2, '0');
             let taskDesc = record.taskName || '一般专注';
             if (taskDesc.length > 30) taskDesc = taskDesc.substring(0, 30) + '...';
+            taskDesc = escapeHtml(taskDesc);
 
             const task = record.taskId ? tasks.find(t => t.id === record.taskId) : null;
             const list = task ? lists.find(l => l.id === task.listId) : null;
             const listColor = list ? list.color : '#9ca3af';
-            const listName = list ? list.name : '';
+            const listName = list ? escapeHtml(list.name) : '';
             const duration = record.duration || 25;
             const recordIdx = pomodoroHistory.indexOf(record);
 

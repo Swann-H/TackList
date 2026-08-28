@@ -127,14 +127,12 @@ function renderQuadrantView(container) {
                                     const isOverdue = isTaskOverdue(task);
                                     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
                                     return `
-                                        <div class="flex items-start gap-3 mb-3 group ${task.completed ? 'opacity-60' : ''} ${isStagnant && key === 'important-not-urgent' ? 'ring-1 ring-amber-400/50 rounded-lg' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" data-task-id="${task.id}"
+                                        <div class="task-row flex items-start gap-3 mb-3 group ${task.completed ? 'opacity-55' : ''} ${isStagnant && key === 'important-not-urgent' ? 'ring-1 ring-amber-400/50 rounded-lg' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" data-task-id="${task.id}"
                                              ondragstart="handleTaskDragStart(event, '${task.id}')"
                                              ondragover="handleTaskDragOver(event)"
                                              ondrop="handleTaskDrop(event, '${task.id}', '${key}')">
                                             <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
-                                                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : 'border-accent hover:border-accent-hover'}">
-                                                    ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
-                                                </button>
+                                                ${renderTaskCheckbox(task, { taskId: task.id })}
                                                 ${renderFocusButton(task.id, quadrantCfg.showFocusButton !== false)}
                                             </div>
                                             <div class="flex-1 bg-theme-tertiary rounded-r-lg p-3 cursor-pointer hover:opacity-80 transition" style="border-left: 4px solid ${listColor}; border-top-left-radius: 0; border-bottom-left-radius: 0;">

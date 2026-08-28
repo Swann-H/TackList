@@ -209,13 +209,11 @@ function renderSearchResults(results, query) {
         const tagCapsules = renderTagCapsules(task, 2, 'right');
 
         return `<div class="px-3 py-1">
-            <div class="task-list-item relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
+            <div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
                  data-list-id="${task.listId || 'default'}"
                  onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
                 <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, listColor)};"></div>
-                <button onclick="event.stopPropagation(); toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition ${task.completed ? 'bg-gray-400 border-gray-400 text-white' : getTaskCheckboxClass(task)}">
-                    ${task.completed ? '<i class="fas fa-check text-xs"></i>' : ''}
-                </button>
+                ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
                 <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
                 ${renderFocusButton(task.id)}
                 <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">

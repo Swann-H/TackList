@@ -254,6 +254,84 @@ def archive_pomodoro_history(history_list):
     # 截断主列表，只保留最近记录
     history_list[:] = history_list[-POMODORO_HISTORY_LIMIT:]
 
+def collect_extended_backup_fields():
+    """收集导出/备份所需的扩展数据：归档专注历史 + 节假日数据。
+
+    返回 dict，可直接合并进导出对象：
+    - pomodoroArchive: { "YYYYMM": [entries...] }（无归档时为 {}）
+    - holidayData: 节假日数据（无文件时为 {}）
+    """
+    result = {'pomodoroArchive': {}, 'holidayData': {}}
+    # 归档专注历史（按月文件）
+    try:
+        if os.path.isdir(ARCHIVE_DIR):
+            for fname in sorted(os.listdir(ARCHIVE_DIR)):
+                if not fname.startswith('pomodoro_archive_') or not fname.endswith('.json'):
+                    continue
+                month_key = fname[len('pomodoro_archive_'):-len('.json')]
+                fp = os.path.join(ARCHIVE_DIR, fname)
+                with open(fp, 'r', encoding='utf-8') as f:
+                    entries = json.load(f)
+                if isinstance(entries, list):
+                    result['pomodoroArchive'][month_key] = entries
+    except Exception as e:
+        print("Collect pomodoro archive error: %s" % str(e))
+    # 节假日数据（剔除 _ 开头的元数据键，与 /api/holiday-data 读取一致）
+    try:
+        holiday_file = os.path.join(DIRECTORY, 'holiday_data.json')
+        if os.path.exists(holiday_file):
+            with open(holiday_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                result['holidayData'] = {k: v for k, v in data.items() if not k.startswith('_')}
+    except Exception as e:
+        print("Collect holiday data error: %s" % str(e))
+    return result
+
+def restore_extended_backup_fields(data):
+    """还原导出/备份中的扩展数据：归档专注历史按月合并去重写回归档目录，节假日数据写回独立文件。
+
+    - pomodoroArchive: 与现有归档文件按 startedAt 去重合并（导入不覆盖、不丢本地已有记录）
+    - holidayData: 整体写入 holiday_data.json（节假日数据以导入文件为准）
+    """
+    # 归档专注历史
+    archive = data.get('pomodoroArchive')
+    if isinstance(archive, dict) and archive:
+        os.makedirs(ARCHIVE_DIR, exist_ok=True)
+        for month_key, entries in archive.items():
+            if not isinstance(entries, list) or not entries:
+                continue
+            # 文件名仅允许 YYYYMM 格式，防路径注入
+            if not isinstance(month_key, str) or not month_key.replace('.', '').isdigit() or '.' in month_key:
+                continue
+            archive_file = os.path.join(ARCHIVE_DIR, 'pomodoro_archive_%s.json' % month_key)
+            existing = []
+            if os.path.exists(archive_file):
+                try:
+                    with open(archive_file, 'r', encoding='utf-8') as f:
+                        existing = json.load(f)
+                except Exception:
+                    existing = []
+            existing_started = set(e.get('startedAt', '') for e in existing)
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get('startedAt', '') not in existing_started:
+                    existing.append(entry)
+                    existing_started.add(entry.get('startedAt', ''))
+            try:
+                with open(archive_file, 'w', encoding='utf-8') as f:
+                    json.dump(existing, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print("Restore pomodoro archive error: %s" % str(e))
+    # 节假日数据
+    holiday = data.get('holidayData')
+    if isinstance(holiday, dict) and holiday:
+        try:
+            holiday_file = os.path.join(DIRECTORY, 'holiday_data.json')
+            with open(holiday_file, 'w', encoding='utf-8') as f:
+                json.dump(holiday, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print("Restore holiday data error: %s" % str(e))
+
 def _save_pomodoro_history_entry(history_entry):
     """保存单条番茄历史记录（去重：startedAt+taskId组合唯一）。"""
     try:
@@ -979,6 +1057,8 @@ class TodoHandler(BaseHTTPRequestHandler):
         if path == '/api/export':
             data = load_data_from_file()
             export_data = dict(data)
+            # 聚合扩展数据：归档专注历史 + 节假日数据（不在 data.json 内，需单独收集）
+            export_data.update(collect_extended_backup_fields())
             export_data['version'] = '4.0'
             export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             body = json.dumps(export_data, ensure_ascii=False, indent=2).encode('utf-8')
@@ -996,6 +1076,8 @@ class TodoHandler(BaseHTTPRequestHandler):
         if path == '/api/backup':
             data = load_data_from_file()
             export_data = dict(data)
+            # 与导出一致：备份同样包含归档专注历史与节假日数据
+            export_data.update(collect_extended_backup_fields())
             export_data['version'] = '4.0'
             export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             if not os.path.exists(BACKUP_DIR):
@@ -1882,6 +1964,28 @@ class TodoHandler(BaseHTTPRequestHandler):
                     self.send_error_json("Invalid JSON", 400)
                     return
                 save_data_to_file(data)
+                self.send_json_response({"status": "ok"})
+                return
+
+            # 完整数据导入：data.json 主体 + 扩展字段（归档专注历史/节假日数据）
+            if path == '/api/import':
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length > 64 * 1024 * 1024:
+                    self.send_error_json("Data too large", 413)
+                    return
+                body = self.rfile.read(content_length)
+                try:
+                    data = json.loads(body.decode('utf-8'))
+                except Exception:
+                    self.send_error_json("Invalid JSON", 400)
+                    return
+                if not isinstance(data, dict) or 'tasks' not in data:
+                    self.send_error_json("Invalid data format", 400)
+                    return
+                # 剥离扩展字段后写入 data.json；扩展字段单独还原到各自文件/目录
+                main_data = {k: v for k, v in data.items() if k not in ('pomodoroArchive', 'holidayData')}
+                save_data_to_file(main_data)
+                restore_extended_backup_fields(data)
                 self.send_json_response({"status": "ok"})
                 return
 
