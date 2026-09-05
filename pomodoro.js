@@ -87,15 +87,24 @@ document.addEventListener('keydown', function(e) {
     
     // 如果焦点在输入框中，不拦截
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-    
+
+    // Esc = 关闭番茄专注页（等同单击返回按钮）。
+    // 子面板/弹窗打开时先让位：Esc 优先关闭最上层子面板，避免整页被连带头走
+    if (e.key === 'Escape') {
+        const taskPanel = document.getElementById('pomodoro-task-panel');
+        if (taskPanel && !taskPanel.classList.contains('translate-x-full')) return;
+        const subLayers = ['pomodoro-add-record-modal', 'pomodoro-stats-page', 'settings-modal'];
+        for (const id of subLayers) {
+            const el = document.getElementById(id);
+            if (el && !el.classList.contains('hidden')) return;
+        }
+        e.preventDefault();
+        closePomodoroPage();
+        return;
+    }
+
     // End_Settlement 状态的特殊键盘约束
     if (pomodoroState.state === 'end_settlement') {
-        // Esc = 继续专注 (CANCEL)
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            handleCancelSettlement();
-            return;
-        }
         // Space/Enter = 计入任务并结束（仅当按钮可见时）
         if (e.key === ' ' || e.key === 'Enter') {
             e.preventDefault();
@@ -944,11 +953,13 @@ function renderPomodoroPage() {
                     </div>
                 </div>`;
             }).join('');
+            // 日期标题右侧汇总：次数 · 总时长（无 duration 字段回退默认25分钟，与统计口径一致）
+            const totalMinutes = group.records.reduce((sum, r) => sum + (r.duration || 25), 0);
             return `
             <div class="mb-4">
                 <div class="flex items-center gap-2 mb-2">
                     <h3 class="text-sm font-semibold text-theme-primary">${group.dateLabel}</h3>
-                    <span class="text-xs text-theme-muted">(${group.records.length})</span>
+                    <span class="text-xs text-theme-muted">${group.records.length} · ${totalMinutes}min</span>
                 </div>
                 ${recordsHtml}
             </div>`;
@@ -1179,32 +1190,44 @@ function selectPomodoroTask(taskId) {
         pomodoroState.state = 'focusing';
         startPomodoro();
     }
-    // focusing/resting/pause: 仅切换任务关联，不重置计时器
-    if (pomodoroState.state === 'focusing' || pomodoroState.state === 'resting' || pomodoroState.state === 'pause') {
-        showToast('已切换专注任务', 'info');
-    }
 }
 
 function updatePomodoroTaskButton() {
     const selectText = document.getElementById('pomodoro-select-task-text');
     const currentDisplay = document.getElementById('pomodoro-current-task-display');
     const currentTaskText = document.getElementById('pomodoro-current-task-text');
-    
+    const listBadge = document.getElementById('pomodoro-current-task-list');
+    const listDot = document.getElementById('pomodoro-current-task-list-dot');
+    const listNameEl = document.getElementById('pomodoro-current-task-list-name');
+
+    const hideListBadge = () => { if (listBadge) listBadge.classList.add('hidden'); };
+
     if (pomodoroState.currentTaskId) {
         const task = tasks.find(t => t.id === pomodoroState.currentTaskId);
         if (task) {
             selectText.classList.add('hidden');
             currentDisplay.classList.remove('hidden');
             currentTaskText.textContent = task.title;
+            // 任务名称后跟随清单圆点+清单名称（样式同右栏历史记录）；默认清单不显示
+            const list = lists.find(l => l.id === task.listId);
+            if (list && listBadge && list.id !== 'default' && list.name !== '默认') {
+                listDot.style.backgroundColor = list.color;
+                listNameEl.textContent = list.name;
+                listBadge.classList.remove('hidden');
+            } else {
+                hideListBadge();
+            }
         } else {
             // 任务已删除，回退到一般专注
             pomodoroState.currentTaskId = null;
             selectText.classList.remove('hidden');
             currentDisplay.classList.add('hidden');
+            hideListBadge();
         }
     } else {
         selectText.classList.remove('hidden');
         currentDisplay.classList.add('hidden');
+        hideListBadge();
     }
 }
 
@@ -1263,7 +1286,6 @@ function startPomodoroForTask(taskId) {
         closePomodoroPage();
         switchToPomodoroPage();
         updatePomodoroDisplay();
-        showToast('已切换专注任务', 'info');
     }
 }
 
@@ -1455,7 +1477,6 @@ function handlePause() {
     updatePomodoroDisplay();
     updatePomodoroBackground();
     // 暂停/恢复操作在页面内进行，不需要系统级通知
-    showToast('专注已暂停', 'warning');
     notifyOtherTabs();
 }
 
@@ -1637,6 +1658,7 @@ function syncPomodoroFromServer() {
         if (state.state === 'completed' && (pomodoroState.state === 'focusing' || pomodoroState.state === 'resting')) {
             if (state.phase !== 'focus') {
                 showInAppNotification('专注完成', '系统休眠期间专注已自动完成');
+                playPomodoroChime(true);
             }
         }
         
@@ -1946,6 +1968,9 @@ function onPomodoroComplete() {
 
     const completedPhase = pomodoroState.phase;
 
+    // 完成提示音（本地合成，无需资源文件）
+    playPomodoroChime(completedPhase === 'focus');
+
     // 构建拆分信息（专注完成时才需要，此时timeLeft=0，总时长=focusDuration*60）
     const totalElapsedSeconds = pomodoroState.focusDuration * 60;
     const splitInfo = (completedPhase === 'focus') ? _buildSplitInfo(pomodoroState.currentTaskId, totalElapsedSeconds) : null;
@@ -2203,7 +2228,7 @@ function updatePomodoroDisplay() {
             if (btnResume) btnResume.classList.remove('hidden');
             if (btnEnd) btnEnd.classList.remove('hidden');
             if (phaseIcon) phaseIcon.className = isFocus ? 'fas fa-bullseye' : 'fas fa-mug-hot';
-            phaseTextContent = isFocus ? '暂停中，去处理紧急事情吧' : '休息暂停';
+            phaseTextContent = isFocus ? '已暂停' : '休息暂停';
             break;
             
         case 'end_settlement':
@@ -2426,6 +2451,47 @@ function sendBackendNotification(title, body) {
         body: JSON.stringify({ title: title, body: body || '' })
     }).catch(err => {
         console.error('Notify error:', err);
+    });
+}
+
+// ==================== 完成提示音（Web Audio 本地合成，零资源依赖，离线可用） ====================
+let _pomodoroAudioCtx = null;
+
+function _getPomodoroAudioCtx() {
+    if (!_pomodoroAudioCtx) {
+        try {
+            _pomodoroAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+            return null;
+        }
+    }
+    return _pomodoroAudioCtx;
+}
+
+// isFocusComplete：专注完成用上行双音（完成感），休息结束用下行双音（收束感）
+function playPomodoroChime(isFocusComplete) {
+    if (typeof settings !== 'undefined' && settings.pomodoroSound === false) return;
+    const ctx = _getPomodoroAudioCtx();
+    if (!ctx) return;
+    // 自动播放策略：上下文被挂起时尝试恢复（用户此前已点击"开始专注"，恢复通常被允许）
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+
+    const notes = isFocusComplete
+        ? [[523.25, 0], [783.99, 0.18]]   // C5 → G5 上行
+        : [[659.25, 0], [523.25, 0.18]];  // E5 → C5 下行
+    const startAt = ctx.currentTime;
+    notes.forEach(([freq, offset]) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, startAt + offset);
+        gain.gain.exponentialRampToValueAtTime(0.18, startAt + offset + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + offset + 0.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startAt + offset);
+        osc.stop(startAt + offset + 0.55);
     });
 }
 

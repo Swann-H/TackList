@@ -301,6 +301,7 @@ function openSettingsModal() {
     document.getElementById('settings-auto-break').checked = settings.autoBreak || false;
     document.getElementById('settings-auto-focus').checked = settings.autoFocus || false;
     document.getElementById('settings-pomodoro-state-bg').checked = settings.pomodoroStateBg !== false;
+    document.getElementById('settings-pomodoro-sound').checked = settings.pomodoroSound !== false;
     document.getElementById('settings-bg-flow-effect').checked = settings.bgFlowEffect === true;
     document.getElementById('settings-advanced-particle').checked = settings.advancedParticleAnimation !== false;
     document.getElementById('settings-smooth-animations').checked = settings.smoothAnimations === true;
@@ -678,6 +679,7 @@ function saveSettings(silent) {
     settings.autoBreak = document.getElementById('settings-auto-break').checked;
     settings.autoFocus = document.getElementById('settings-auto-focus').checked;
     settings.pomodoroStateBg = document.getElementById('settings-pomodoro-state-bg').checked;
+    settings.pomodoroSound = document.getElementById('settings-pomodoro-sound').checked;
     settings.bgFlowEffect = document.getElementById('settings-bg-flow-effect').checked;
     settings.advancedParticleAnimation = document.getElementById('settings-advanced-particle').checked;
     settings.smoothAnimations = document.getElementById('settings-smooth-animations').checked;

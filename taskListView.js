@@ -20,6 +20,7 @@ let _scheduleStickyResizeBound = false; // 日期块吸顶位置的 resize 监�
 let _scheduleNavMonthLabel = null; // 当前锚点月份（YYYY-MM），由导航月份指示 IO 实时维护
 let _scheduleScrollTargetMonth = null; // 窗口平移重渲染后的滚动定位目标月份（YYYY-MM）
 let _scheduleScrollTargetDir = 1; // 定位目标的导航方向（目标月份为空月份时就近查找用）
+let _scheduleRestoreFilling = false; // 滚动锚点恢复期间填充月份时，跳过填充锚定补偿（位置由恢复逻辑显式设定）
 
 // 计算日程视图日期块吸顶位置：使其在滚动时常驻滚动容器视口的垂直中部。
 // sticky 的 top 百分比相对包含块（整张卡片）解析，无法直接写 50%，故由 JS 换算成像素
@@ -1434,8 +1435,26 @@ function renderScheduleView(container) {
         </div>
     `;
 
-    const savedScrollTop = container.querySelector('.schedule-container')
-        ? container.querySelector('.schedule-container').scrollTop : 0;
+    const prevScrollContainer = container.querySelector('.schedule-container');
+    const savedScrollTop = prevScrollContainer ? prevScrollContainer.scrollTop : 0;
+    // 滚动锚点：记录旧 DOM 中视口顶线所处的月份区块及其相对视口偏移。
+    // 重渲染后上方曾懒加载填充的月份会退回空壳（高度≈0），旧 DOM 的绝对像素 scrollTop
+    // 在新 DOM 中会指向更晚的日期甚至被钳到已填充内容末尾，表现为"关闭详情面板后
+    // 跳到明天/未来某天"。改为按锚点元素恢复可对任意填充状态保持视觉位置稳定。
+    let savedAnchorMonth = null;
+    let savedAnchorOffset = 0;
+    if (prevScrollContainer && savedScrollTop > 0) {
+        const cRect = prevScrollContainer.getBoundingClientRect();
+        const sections = prevScrollContainer.querySelectorAll('[data-schedule-month]');
+        for (const sec of sections) {
+            const r = sec.getBoundingClientRect();
+            if (r.bottom > cRect.top) {
+                savedAnchorMonth = sec.getAttribute('data-schedule-month');
+                savedAnchorOffset = r.top - cRect.top;
+                break;
+            }
+        }
+    }
 
     container.innerHTML = html;
 
@@ -1468,7 +1487,8 @@ function renderScheduleView(container) {
         // 视口上方月份填充后，按内容下移量补偿 scrollTop，消除跳动。
         // 将“读取新几何属性 + 修正 scrollTop”放到 requestAnimationFrame 中执行，
         // 与上面的 innerHTML 写入分离到不同帧，避免强制同步布局导致的卡顿。
-        if (needAnchor && scheduleScrollContainer) {
+        // 滚动锚点恢复期间填充的月份不补偿：其最终位置由恢复逻辑按锚点元素显式设定。
+        if (needAnchor && scheduleScrollContainer && !_scheduleRestoreFilling) {
             const anchorRef = anchorEl;
             const anchorTopRef = anchorTopBefore;
             const selfHeightRef = selfHeightBefore;
@@ -1522,7 +1542,34 @@ function renderScheduleView(container) {
     if (scheduleScrollContainer) {
         // 同步恢复滚动位置，消除刷新时从顶部（往期任务）跳到今天的跳动
         if (!_scheduleAutoScroll && savedScrollTop > 0) {
-            scheduleScrollContainer.scrollTop = savedScrollTop;
+            // 优先按锚点月份恢复：先填充锚点月份（补偿逻辑与本恢复互斥），再把该月份
+            // 区块顶部放回原来的视口偏移处。锚点月份在新 DOM 中缺失（如勾选完成后该月
+            // 变为空月份不再生成外壳）时，就近查找相邻月份，仍找不到才回退像素恢复。
+            let restoredByAnchor = false;
+            if (savedAnchorMonth && /^\d{4}-\d{2}$/.test(savedAnchorMonth)) {
+                let anchorSec = scheduleScrollContainer.querySelector(`[data-schedule-month="${savedAnchorMonth}"]`);
+                if (!anchorSec) {
+                    const ay = parseInt(savedAnchorMonth.substring(0, 4), 10);
+                    const am = parseInt(savedAnchorMonth.substring(5), 10) - 1;
+                    anchorSec = _findScheduleMonthSection(scheduleScrollContainer, ay, am, 1)
+                        || _findScheduleMonthSection(scheduleScrollContainer, ay, am, -1);
+                }
+                if (anchorSec) {
+                    const anchorContent = anchorSec.querySelector('.schedule-month-content');
+                    if (anchorContent && anchorContent.dataset.populated !== 'true') {
+                        _scheduleRestoreFilling = true;
+                        try { _populateScheduleMonth(anchorContent); } finally { _scheduleRestoreFilling = false; }
+                    }
+                    const cRect = scheduleScrollContainer.getBoundingClientRect();
+                    const r = anchorSec.getBoundingClientRect();
+                    scheduleScrollContainer.scrollTop += r.top - cRect.top - savedAnchorOffset;
+                    _scheduleNavMonthLabel = anchorSec.getAttribute('data-schedule-month');
+                    restoredByAnchor = true;
+                }
+            }
+            if (!restoredByAnchor) {
+                scheduleScrollContainer.scrollTop = savedScrollTop;
+            }
         } else if (_scheduleAutoScroll) {
             // 自动定位"今天"：同步执行（今天所在月份已在上文同步填充，卡片必然存在）。
             // 原实现用 200ms 延时定位，会与懒加载填充的滚动锚定补偿（rAF）产生竞态：

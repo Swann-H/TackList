@@ -29,5 +29,8 @@ Thumbs.db
 # Agent workspace data
 .workbuddy/
 
+# Local dev test scripts (not shipped)
+test-cp.js
+
 # Reference/backup app copy
 TackList-reference/

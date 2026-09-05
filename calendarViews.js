@@ -129,6 +129,46 @@ function resetMonthViewConfig() {
     }
 }
 
+// 月视图网格单元格内的任务条目（渲染循环与完成揭示动画共用，保证两处 HTML 完全一致）
+function buildMonthGridTaskItemHtml(task) {
+    const list = lists.find(l => l.id === task.listId);
+    const startTime = task.startTime ? new Date(task.startTime) : null;
+    const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}` : '');
+    const isOverdue = isTaskOverdue(task);
+    const titleClass = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : '');
+    return `
+        <div draggable="true" data-task-id="${task.id}"
+             ondragstart="handleTaskDragStart(event, '${task.id}')"
+             ondragend="handleTaskDragEnd(event)"
+             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
+             class="text-xs p-1 rounded-r cursor-pointer truncate task-item month-task-item task-row ${task.completed ? 'opacity-55' : 'hover:bg-theme-tertiary'} flex items-center justify-between gap-1"
+             style="background-color: ${list?.color}15; border-left: 2px solid ${list?.color || '#3b82f6'}">
+            <div class="flex items-center gap-1 min-w-0 flex-1">
+                ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
+                <span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
+            </div>
+            ${timeStr ? `<span class="flex-shrink-0 text-theme-muted">${timeStr}</span>` : ''}
+        </div>
+    `;
+}
+
+// 周视图全天区任务条目（渲染循环与完成揭示动画共用）
+function buildWeekAllDayTaskItemHtml(task) {
+    const list = lists.find(l => l.id === task.listId);
+    const isOverdue = isTaskOverdue(task);
+    const titleClass = task.completed ? 'opacity-55 text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
+    return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer task-row ${titleClass} flex items-center gap-1 min-w-0"
+                 style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${list?.color || '#3b82f6'};"
+                 title="${escapeHtml(task.title || '新任务')}"
+                 onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
+                 draggable="true"
+                 ondragstart="handleTaskDragStart(event, '${task.id}')"
+                 ondragend="handleTaskDragEnd(event)">
+                 ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
+                 <span class="truncate">${task.title || '新任务'}</span>
+             </div>`;
+}
+
 function renderWeekView(container) {
     const weekStart = new Date(currentDate);
     const dayOffset = settings.weekStart === 'monday' ? 1 : 0;
@@ -189,23 +229,10 @@ function renderWeekView(container) {
                     ${(() => { const lt = getLunarDisplayText(date, getWeekConfig().showLunar); return lt ? `<div class="text-[10px] text-theme-muted leading-none mt-0.5 truncate">${lt}</div>` : ''; })()}
                 </div>
                 <div class="p-1 min-h-[28px]"
+                     data-weekallday="${dateStr}"
                      ondragover="event.preventDefault()"
                      ondrop="handleWeekAllDayDrop(event, '${dateStr}')">
-                    ${visibleTasks.map(task => {
-                        const list = lists.find(l => l.id === task.listId);
-                        const isOverdue = isTaskOverdue(task);
-                        const titleClass = task.completed ? 'opacity-55 text-theme-muted' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
-                        return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer ${titleClass} flex items-center gap-1 min-w-0"
-                                     style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${list?.color || '#3b82f6'};"
-                                     title="${escapeHtml(task.title || '新任务')}"
-                                     onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
-                                     draggable="true"
-                                     ondragstart="handleTaskDragStart(event, '${task.id}')"
-                                     ondragend="handleTaskDragEnd(event)">
-                                     ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                                     <span class="truncate">${task.title || '新任务'}</span>
-                                 </div>`;
-                    }).join('')}
+                    ${visibleTasks.map(task => buildWeekAllDayTaskItemHtml(task)).join('')}
                     ${dayAllDay.length > 2 && collapsed ? `<div class="text-xs text-accent cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">+${dayAllDay.length - 2}更多</div>` : ''}
                     ${dayAllDay.length > 2 && !collapsed ? `<div class="text-xs text-accent cursor-pointer px-1" onclick="toggleWeekAllDay('${dateStr}')">收起</div>` : ''}
                 </div>
@@ -726,27 +753,7 @@ function renderMonthView(container) {
                                 <div class="flex justify-end">${lunarHtml || ''}</div>
                             </div>
                             <div class="space-y-1">
-                                ${displayTasks.map(task => {
-                                    const list = lists.find(l => l.id === task.listId);
-                                    const startTime = task.startTime ? new Date(task.startTime) : null;
-                                    const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}` : '');
-                                    const isOverdue = isTaskOverdue(task);
-                                    const titleClass = task.completed ? 'opacity-55 text-theme-muted' : (isOverdue ? OVERDUE_TEXT_CLASS : '');
-                                    return `
-                                        <div draggable="true" data-task-id="${task.id}"
-                                             ondragstart="handleTaskDragStart(event, '${task.id}')"
-                                             ondragend="handleTaskDragEnd(event)"
-                                             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
-                                             class="text-xs p-1 rounded-r cursor-pointer truncate task-item month-task-item ${task.completed ? '' : 'hover:bg-theme-tertiary'} flex items-center justify-between gap-1"
-                                             style="background-color: ${list?.color}15; border-left: 2px solid ${list?.color || '#3b82f6'}">
-                                            <div class="flex items-center gap-1 min-w-0 flex-1">
-                                                ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                                                <span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
-                                            </div>
-                                            ${timeStr ? `<span class="flex-shrink-0 text-theme-muted ${task.completed ? 'opacity-55' : ''}">${timeStr}</span>` : ''}
-                                        </div>
-                                    `;
-                                }).join('')}
+                                ${displayTasks.map(task => buildMonthGridTaskItemHtml(task)).join('')}
                                 ${dayTasks.length > displayCount ? `<div class="relative text-xs"><span class="month-more-link text-accent cursor-pointer hover:underline block text-center" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"><span class="month-more-count">+${dayTasks.length - displayCount}</span><span class="month-more-word"> 更多</span></span><span class="text-accent cursor-pointer hover:underline font-bold opacity-0 group-hover:opacity-100 transition-opacity absolute right-0 top-0" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</span></div>` : ''}
                             </div>
                             ${dayTasks.length <= displayCount ? `<button class="absolute bottom-1 right-1 text-accent text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10" onclick="event.stopPropagation(); openAddTaskModal('${dateStr}')">+</button>` : ''}
@@ -979,6 +986,81 @@ function closeMonthDayPopover() {
     }
 }
 
+// ==================== 任务完成动效预案（月视图网格 / 周视图全天区） ====================
+// 勾选完成时由 tasks.js 的 _playTaskDoneCollapseFx 调用（在任务状态翻转前）：
+// - 任务完成后仍在该容器可见切片内 → 计入 skip（跳过塌陷，避免"消失后闪回"）
+// - 任务被挤出切片 → 计入 reveals（塌陷同时在 +N 按钮前"生长"出被顶入的下一条任务）
+// 返回 { skip: Set<Element>, reveals: [{ container, refEl, html, gap }] }
+function planCalendarTaskDoneFx(taskId) {
+    const skip = new Set();
+    const reveals = [];
+    const anchors = document.querySelectorAll(`[onclick*="toggleTaskComplete('${taskId}')"]`);
+    for (const anchor of anchors) {
+        const row = anchor.closest('.task-row');
+        if (!row || row.offsetParent === null) continue;
+        const dayCell = row.closest('.calendar-day');
+        if (dayCell && dayCell.dataset.date) {
+            _planMonthGridCellDoneFx(taskId, row, dayCell, skip, reveals);
+            continue;
+        }
+        const weekCol = row.closest('[data-weekallday]');
+        if (weekCol) {
+            _planWeekAllDayDoneFx(taskId, row, weekCol, skip, reveals);
+        }
+    }
+    return { skip, reveals };
+}
+
+// 模拟任务完成后的当日可见切片（与渲染同口径：getTasksForDate + 过滤 + sortTasksByCompletion + slice）
+// includeCompleted 关闭时完成任务会整体离开当日列表
+function _simDayVisibleAfterComplete(dateStr, taskId, includeCompleted, filterFn, count) {
+    const date = new Date(dateStr + 'T00:00:00');
+    let dayTasks = getTasksForDate(date, { includeCompleted });
+    if (filterFn) dayTasks = dayTasks.filter(filterFn);
+    let sim;
+    if (includeCompleted) {
+        const now = new Date().toISOString();
+        sim = dayTasks.map(t => t.id === taskId ? { ...t, completed: true, completedAt: now } : t);
+    } else {
+        sim = dayTasks.filter(t => t.id !== taskId);
+    }
+    return sortTasksByCompletion(sim).slice(0, count);
+}
+
+// 月视图网格格：displayCount = 3（与 renderMonthView 一致）
+function _planMonthGridCellDoneFx(taskId, row, dayCell, skip, reveals) {
+    const count = 3;
+    const newVisible = _simDayVisibleAfterComplete(dayCell.dataset.date, taskId, getMonthConfig().showCompleted !== false, null, count);
+    // 仍在切片内：仅变灰/格内重排，不塌陷
+    if (newVisible.some(t => t.id === taskId)) { skip.add(row); return; }
+    // 切片未满（如隐藏已完成任务被关闭）：无新行顶入，仅塌陷
+    const entering = (newVisible.length === count) ? newVisible[count - 1] : null;
+    if (!entering) return;
+    const listEl = row.parentElement;
+    const realTask = tasks.find(t => t.id === entering.id);
+    if (!listEl || !realTask) return;
+    // 揭示行插入参照：+N 更多按钮；gap 对齐 space-y-1 的 4px 子项边距
+    const moreLink = listEl.querySelector('.month-more-link');
+    reveals.push({ container: listEl, refEl: moreLink ? moreLink.parentElement : null, html: buildMonthGridTaskItemHtml(realTask), gap: '4px' });
+}
+
+// 周视图全天列：收起态显示前 2 条（与 renderWeekView 一致）；展开态显示全部（任务仍在列内重排，跳过）
+function _planWeekAllDayDoneFx(taskId, row, weekCol, skip, reveals) {
+    const dateStr = weekCol.dataset.weekallday;
+    if (!dateStr) return;
+    if (weekAllDayCollapsed[dateStr] === false) { skip.add(row); return; }
+    const count = 2;
+    const newVisible = _simDayVisibleAfterComplete(dateStr, taskId, getWeekConfig().showCompleted !== false, t => t.isAllDay || isMultiDayTask(t), count);
+    if (newVisible.some(t => t.id === taskId)) { skip.add(row); return; }
+    const entering = (newVisible.length === count) ? newVisible[count - 1] : null;
+    if (!entering) return;
+    const realTask = tasks.find(t => t.id === entering.id);
+    if (!realTask) return;
+    // 揭示行插入参照：+N 更多/收起按钮；周全天区子项无边距
+    const refEl = weekCol.querySelector('[onclick^="toggleWeekAllDay("]');
+    reveals.push({ container: weekCol, refEl, html: buildWeekAllDayTaskItemHtml(realTask), gap: '0px' });
+}
+
 // ==================== 移动端月视图：上下分栏（日历网格 + 任务列表） ====================
 function renderMonthViewMobile(container) {
     const year = currentDate.getFullYear();
@@ -1075,10 +1157,10 @@ function renderMonthViewMobile(container) {
         const startTime = task.startTime ? new Date(task.startTime) : null;
         const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2,'0')}:${startTime.getMinutes().toString().padStart(2,'0')}` : '');
         const isOverdue = isTaskOverdue(task);
-        const titleCls = task.completed ? 'text-theme-muted line-through' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
+        const titleCls = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
         const checked = task.completed ? 'checked' : '';
         return `
-            <div class="flex items-center gap-3 py-2.5 border-b border-theme/50 last:border-b-0" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
+            <div class="task-row flex items-center gap-3 py-2.5 border-b border-theme/50 last:border-b-0 ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
                 <label class="flex-shrink-0" onclick="event.stopPropagation()">
                     <input type="checkbox" ${checked} onchange="toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded border-theme accent-color">
                 </label>

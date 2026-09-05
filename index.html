@@ -999,6 +999,29 @@
             opacity: 1;
         }
 
+        /* 命令面板候选浮层：悬浮于输入框上方（仿输入法候选词），出现/消失不改变命令输入框位置 */
+        #command-palette-candidates:not(.hidden) {
+            animation: cmdPalCandidatesIn 0.14s ease-out;
+        }
+        @keyframes cmdPalCandidatesIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: none; }
+        }
+
+        /* 命令面板候选胶囊的键盘高亮：半透明标签色底 + 内描边（inset 阴影不改布局）+ 文字加粗。
+           全部收在胶囊边界内，替代原 outline 外圈（外圈会被滚动容器上缘裁剪且与胶囊描边混淆）；
+           用 background-image 叠加而非 background-color，保证已选实底胶囊上也能正确叠色 */
+        .cmd-pal-candidate-active {
+            background-image: linear-gradient(color-mix(in srgb, var(--tag-color) 14%, transparent),
+                                              color-mix(in srgb, var(--tag-color) 14%, transparent));
+            box-shadow: inset 0 0 0 1.5px var(--tag-color);
+            font-weight: 600;
+        }
+        /* 已选实底胶囊的高亮：同色内描边在实底上不可见，改用白色内描边标识焦点 */
+        .detail-tag-pill-selected.cmd-pal-candidate-active {
+            box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+        }
+
         .shadow-theme {
             box-shadow: var(--shadow-sm);
         }
@@ -1202,6 +1225,11 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
             transition: background 0.2s ease, border-color 0.2s ease;
         }
+        /* 历史记录卡片右侧与专注概况最右块（今日时长）对齐：
+           滚动条占用滚动容器 6px 内容宽度（子元素负 margin 会被滚动视口裁剪，无效），
+           改为让滚动容器自身右扩 6px（借入右栏 p-8 padding，不被裁剪），滚动条压在借来的
+           空间上，卡片内容区宽度恢复为与概况网格一致；scrollbar-gutter 保证无滚动条时也对齐 */
+        #pomodoro-history { margin-right: -6px; scrollbar-gutter: stable; }
         .pomodoro-glass-item:hover {
             background: rgba(255, 255, 255, 0.12);
             border-color: rgba(255, 255, 255, 0.15);
@@ -1346,23 +1374,50 @@
         }
 
         /* ==================== 布局稳定：状态切换不移动圆环 ==================== */
-        /* 左栏内容整体垂直居中，状态切换会改变内容块总高（结算面板比主按钮行高约 120px、
-           长文案换行、任务名过长），挤压上方圆环及文字移动。以下固定可变区域尺寸：
-           1) phase 提示区固定高度（inline min-height: 3em，容纳最长文案两行，文字垂直居中）
-           2) 任务名单行截断，超长任务名不再撑高/撑宽内容块
-           3) 按钮区固定最小高度（覆盖结算面板最高形态，内容顶部对齐向下延展） */
+        /* 圆环是左栏垂直居中的唯一锚点（即历史默认位置：面板正中）。阶段提示/任务名
+           绝对定位于圆环上方、按钮区绝对定位于圆环下方，状态切换（结算面板比主按钮
+           行高约 120px、长文案换行、任务名过长）只影响锚点以外的区域，圆环恒定不动：
+           1) 任务名单行截断，超长任务名不再撑宽上方文案区
+           2) 按钮区固定最小高度（覆盖结算面板最高形态，内容顶部对齐向下延展） */
         #pomodoro-task-selector { max-width: min(90vw, 24rem); margin-left: auto; margin-right: auto; overflow: hidden; }
-        #pomodoro-select-task-text:not(.hidden),
-        #pomodoro-current-task-display:not(.hidden) {
+        #pomodoro-select-task-text:not(.hidden) {
             display: block;
             max-width: 100%;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        /* 当前任务行：flex 布局让任务名独立截断，清单徽标与箭头固定不缩，
+           避免整行 ellipsis 时徽标被挤掉/切半 */
+        #pomodoro-current-task-display:not(.hidden) {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            max-width: 100%;
+            white-space: nowrap;
+        }
+        #pomodoro-current-task-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #pomodoro-current-task-list,
+        #pomodoro-current-task-display > i { flex-shrink: 0; }
         #pomodoro-buttons { min-height: 176px; }
-        /* 按钮区固定高度后内容总高增大，矮屏放不下时顶部对齐而非居中裁切（safe center） */
+        /* 矮屏放不下时顶部对齐而非居中裁切（safe center） */
         #pomodoro-left-panel { justify-content: safe center; }
+
+        /* ==================== 番茄页矮屏适配（高度不足时压缩圆环与间距） ==================== */
+        /* 圆环上下方的文案/按钮均为绝对定位，不参与面板溢出计算；
+           矮屏（小窗口/半屏）下主动缩小圆环并收紧间距，防止上方文案被裁切、按钮溢出 */
+        @media (max-height: 800px) {
+            #pomodoro-circle { width: 288px; height: 288px; }
+            #pomodoro-buttons { min-height: 150px; margin-top: 20px; }
+        }
+        @media (max-height: 700px) {
+            #pomodoro-circle { width: 256px; height: 256px; }
+            #pomodoro-buttons { min-height: 140px; margin-top: 16px; }
+        }
 
         /* ==================== 统一圆环发光效果 (Unified Halo) ==================== */
         /* 去除原本生硬的drop-shadow，采用多层柔和阴影叠加，呈现高级弥散光 */
@@ -1623,13 +1678,21 @@
             transition: height 0.3s ease, margin 0.3s ease, padding 0.3s ease;
         }
         @keyframes fxTaskWipe { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
+        /* 任务完成揭示：月视图网格/周视图全天区中被 +N 按钮挡住的下一条任务，
+           随上方条目塌陷同步从 0 高"生长"露出（初始高度/边距/透明度由 JS 内联设定后过渡到位），
+           与塌陷行高相抵后 +N 按钮原地不动，320ms 后重渲染落在与动画终点一致的状态 */
+        body.fx-smooth .fx-task-reveal {
+            overflow: hidden;
+            transition: height 0.3s ease, margin 0.3s ease, opacity 0.3s ease;
+        }
         /* 系统级减弱动态效果时禁用全部 fx 动画 */
         @media (prefers-reduced-motion: reduce) {
             body.fx-smooth .fx-view-ghost,
             body.fx-smooth .fx-enter-from-left,
             body.fx-smooth .fx-enter-from-right,
             body.fx-smooth .fx-collapse,
-            body.fx-smooth .fx-task-done { animation: none !important; transition: none !important; }
+            body.fx-smooth .fx-task-done,
+            body.fx-smooth .fx-task-reveal { animation: none !important; transition: none !important; }
             body.fx-smooth #task-detail-panel.panel-fade-in,
             body.fx-smooth #task-detail-panel.panel-fade-out { animation: none !important; }
             body.fx-smooth #main-content,
@@ -2051,6 +2114,22 @@
                 border-radius: 0 !important;
                 display: flex;
                 flex-direction: column;
+                /* 顶部预留候选面板空间（与桌面 pt-[max(15vh,168px)] 同理）：
+                   面板出现/消失均不推动输入框，无面板时留白为固定顶距 */
+                padding-top: 148px;
+            }
+            #command-palette-candidates {
+                /* 候选面板渲染在预留区内、贴屏幕顶端，超出内部滚动 */
+                position: absolute !important;
+                top: 0 !important;
+                bottom: auto !important;
+                margin: 0 !important;
+                max-height: 144px !important;
+                overflow-y: auto !important;
+                border: 0 !important;
+                border-bottom: 1px solid var(--border-color) !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
             }
             #command-palette-results { max-height: none !important; flex: 1 1 auto; }
             #command-palette-results > * { min-height: 56px; }
@@ -2188,7 +2267,9 @@
             #pomodoro-right-panel.mobile-overview-collapsed #pomodoro-history { display: none !important; }
             /* 移动端用面板内把手收起/展开，隐藏原左栏收起按钮（其会整体隐藏右栏） */
             #pomodoro-toggle-panel-btn { display: none !important; }
-            #pomodoro-circle { width: min(62vw, 260px) !important; height: min(62vw, 260px) !important; margin-bottom: 16px !important; }
+            #pomodoro-circle { width: min(62vw, 260px) !important; height: min(62vw, 260px) !important; }
+            /* 圆环与下方按钮区的间距收紧（按钮区绝对定位于圆环下方） */
+            #pomodoro-buttons { margin-top: 16px !important; }
             #pomodoro-time { font-size: clamp(2.4rem, 13vw, 4rem) !important; }
             #pomodoro-phase { font-size: 18px !important; }
             #pomodoro-main-btns { gap: 12px !important; flex-wrap: wrap; justify-content: center; }
@@ -2936,7 +3017,7 @@
         <div id="pomodoro-bg-container" class="flex h-full">
             <!-- 左栏 - 倒计时 (70%) -->
             <div id="pomodoro-left-panel" class="flex-[7] flex flex-col items-center justify-center p-8 relative transition-all duration-500 pomodoro-focus-bg">
-                <button onclick="closePomodoroPage()" id="pomodoro-back-btn" class="absolute top-4 left-4 text-white hover:text-gray-200">
+                <button onclick="closePomodoroPage()" id="pomodoro-back-btn" class="absolute top-4 left-4 text-white hover:text-gray-200" title="返回 (Esc)">
                     <i class="fas fa-arrow-left mr-2"></i>返回
                 </button>
                 <button onclick="openPomodoroStats()" id="pomodoro-stats-btn" class="absolute bottom-4 right-40 text-white hover:text-gray-200 p-2" title="番茄统计">
@@ -2953,21 +3034,10 @@
                 </button>
                 
                 <div class="text-center">
-                    <div id="pomodoro-phase" class="text-2xl font-medium text-white mb-2 opacity-90 flex items-center justify-center gap-2" style="min-height: 3em;">
-                        <i id="pomodoro-phase-icon" class="fas fa-bullseye"></i>
-                        <span id="pomodoro-phase-text">专注时间</span>
-                    </div>
-                    
-                    <!-- 任务名称：默认纯文本，hover显示按钮样式 -->
-                    <div id="pomodoro-task-selector" class="mb-6" style="min-height: 1.5em;">
-                        <span id="pomodoro-select-task-text" class="text-white/50 text-sm cursor-pointer hover:text-white/80 transition" onclick="openPomodoroTaskPanel()">一般专注</span>
-                        <span id="pomodoro-current-task-display" class="hidden text-white/70 text-sm cursor-pointer group" onclick="openPomodoroTaskPanel()">
-                            <span id="pomodoro-current-task-text"></span>
-                            <i class="fas fa-chevron-right ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"></i>
-                        </span>
-                    </div>
-                    
-                    <div id="pomodoro-circle" class="relative w-80 h-80 mx-auto mb-8">
+                    <!-- 圆环为左栏垂直居中的唯一锚点（历史默认位置）：
+                         阶段文案/任务名绝对定位于圆环上方，按钮区绝对定位于圆环下方，
+                         状态切换不改变内容总高，圆环位置恒定 -->
+                    <div id="pomodoro-circle" class="relative w-80 h-80 mx-auto">
                         <svg class="w-full h-full transform -rotate-90" viewBox="0 0 320 320" style="overflow: visible;">
                             <circle cx="160" cy="160" r="150" stroke="rgba(255,255,255,0.3)" stroke-width="8" fill="none"/>
                             <circle id="pomodoro-progress" cx="160" cy="160" r="150" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" stroke-dasharray="942" stroke-dashoffset="0" style="transition: stroke-dashoffset 0.3s ease;"/>
@@ -2975,22 +3045,43 @@
                         <div class="absolute inset-0 flex items-center justify-center">
                             <div id="pomodoro-time" class="text-7xl font-bold text-white pomodoro-timer-font">25:00</div>
                         </div>
-                    </div>
-                    
-                    <!-- 按钮区域 - 根据状态显示不同按钮 -->
-                    <div id="pomodoro-buttons" class="flex flex-col items-center gap-3 mb-4">
+
+                        <!-- 阶段提示 + 任务名称：绝对定位于圆环上方；宽度上限跟随屏幕比例：
+                             90vw 保证窄屏不溢出，36rem 上限覆盖最长阶段文案（约520px）在宽屏单行显示 -->
+                        <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-6 w-max max-w-[min(90vw,36rem)] text-center">
+                            <div id="pomodoro-phase" class="text-2xl font-medium text-white mb-6 opacity-90 flex items-center justify-center gap-2" style="min-height: 1.5em;">
+                                <i id="pomodoro-phase-icon" class="fas fa-bullseye"></i>
+                                <span id="pomodoro-phase-text">专注时间</span>
+                            </div>
+
+                            <!-- 任务名称：默认纯文本，hover显示按钮样式 -->
+                            <div id="pomodoro-task-selector" style="min-height: 1.5em;">
+                                <span id="pomodoro-select-task-text" class="text-white/50 text-sm cursor-pointer hover:text-white/80 transition" onclick="openPomodoroTaskPanel()">一般专注</span>
+                                <span id="pomodoro-current-task-display" class="hidden text-white/70 text-sm cursor-pointer group" onclick="openPomodoroTaskPanel()">
+                                    <span id="pomodoro-current-task-text"></span>
+                                    <span id="pomodoro-current-task-list" class="hidden inline-flex items-center gap-1 ml-1.5 text-white/50 text-xs">
+                                        <span id="pomodoro-current-task-list-dot" class="w-2 h-2 rounded-full flex-shrink-0"></span>
+                                        <span id="pomodoro-current-task-list-name"></span>
+                                    </span>
+                                    <i class="fas fa-chevron-right ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- 按钮区域 - 根据状态显示不同按钮；绝对定位于圆环下方 -->
+                        <div id="pomodoro-buttons" class="absolute top-full left-1/2 -translate-x-1/2 mt-8 w-80 flex flex-col items-center gap-3">
                         <!-- 主操作按钮行 -->
                         <div id="pomodoro-main-btns" class="flex justify-center gap-3">
                             <!-- Idle: 开始专注 -->
-                            <button onclick="handleStartFocus()" id="btn-start-focus" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg" style="color: #3b82f6">
+                            <button onclick="handleStartFocus()" id="btn-start-focus" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg" style="color: #3b82f6" title="开始专注 (Space)">
                                 <i class="fas fa-play mr-2"></i>开始专注
                             </button>
                             <!-- Focusing: 暂停 -->
-                            <button onclick="handlePause()" id="btn-pause" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg hidden" style="color: #3b82f6">
+                            <button onclick="handlePause()" id="btn-pause" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg hidden" style="color: #3b82f6" title="暂停 (Space)">
                                 <i class="fas fa-pause mr-2"></i>暂停
                             </button>
                             <!-- Pause: 恢复专注 -->
-                            <button onclick="handleResume()" id="btn-resume" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg hidden" style="color: #3b82f6">
+                            <button onclick="handleResume()" id="btn-resume" class="px-8 py-3 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg hidden" style="color: #3b82f6" title="恢复专注 (Space)">
                                 <i class="fas fa-play mr-2"></i>恢复专注
                             </button>
                             <!-- Pause/Resting: 结束 -->
@@ -2998,32 +3089,33 @@
                                 <i class="fas fa-stop mr-2"></i>结束
                             </button>
                             <!-- Completed: 开始休息 -->
-                            <button onclick="handleClickRest()" id="btn-start-rest" class="px-5 py-2.5 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg text-sm hidden" style="color: #2D795C">
+                            <button onclick="handleClickRest()" id="btn-start-rest" class="px-5 py-2.5 bg-white rounded-full font-medium hover:bg-gray-100 transition shadow-lg text-sm hidden" style="color: #2D795C" title="开始休息 (Space)">
                                 <i class="fas fa-mug-hot mr-1"></i>开始休息
                             </button>
                             <!-- Completed/Resting: 跳过休息 -->
-                            <button onclick="handleSkipRest()" id="btn-skip-rest" class="px-5 py-2.5 bg-white/20 text-white rounded-full font-medium hover:bg-white/30 transition text-sm hidden">
+                            <button onclick="handleSkipRest()" id="btn-skip-rest" class="px-5 py-2.5 bg-white/20 text-white rounded-full font-medium hover:bg-white/30 transition text-sm hidden" title="跳过休息 (Space)">
                                 <i class="fas fa-forward mr-1"></i>跳过休息
                             </button>
                         </div>
                         <!-- End_Settlement: 结算按钮组 -->
                         <div id="pomodoro-settlement-btns" class="hidden flex flex-col items-center gap-2 w-full max-w-xs">
                             <p id="settlement-info-text" class="text-white/70 text-sm mb-1"></p>
-                            <button onclick="handleSaveTime()" id="btn-save-time" class="w-full px-4 py-2.5 bg-accent text-white rounded-lg hover:bg-accent-hover transition text-sm font-medium hidden">
+                            <button onclick="handleSaveTime()" id="btn-save-time" class="w-full px-4 py-2.5 bg-accent text-white rounded-lg hover:bg-accent-hover transition text-sm font-medium hidden" title="计入任务并结束 (Space/Enter)">
                                 <i class="fas fa-check mr-2"></i>计入任务并结束
                             </button>
                             <button onclick="handleDropAll()" id="btn-drop-all" class="w-full px-4 py-2.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm font-medium">
                                 <i class="fas fa-trash mr-2"></i>直接作废
                             </button>
-                            <button onclick="handleCancelSettlement()" id="btn-cancel-settlement" class="text-white/60 hover:text-white text-sm transition mt-1">
-                                <i class="fas fa-arrow-left mr-1"></i>继续专注 <span class="opacity-50 text-xs">(Esc)</span>
+                            <button onclick="handleCancelSettlement()" id="btn-cancel-settlement" class="text-white/60 hover:text-white text-sm transition mt-1" title="继续专注">
+                                <i class="fas fa-arrow-left mr-1"></i>继续专注
                             </button>
                         </div>
+                        </div>
                     </div>
-                    
+
                 </div>
             </div>
-            
+
             <!-- 右栏 - 概况和历史 (30%) -->
             <div id="pomodoro-right-panel" class="flex-[3] p-8 overflow-hidden flex flex-col pomodoro-focus-bg">
                 <div class="w-full mx-auto flex flex-col flex-1 min-h-0">
@@ -3692,6 +3784,16 @@
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
+                                    <label class="block text-sm font-medium text-theme-primary">完成提示音</label>
+                                    <p class="text-xs text-theme-secondary">专注或休息倒计时结束时播放提示音（本地合成，无需联网）</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="settings-pomodoro-sound" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
                                     <label class="block text-sm font-medium text-theme-primary">自动休息</label>
                                     <p class="text-xs text-theme-secondary">专注倒计时结束后，自动进入休息倒计时</p>
                                 </div>
@@ -3868,7 +3970,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.8</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">数据管理 <span class="text-xs font-normal text-theme-muted ml-2">v11.6.9</span></h3>
                         <div class="space-y-4">
                             <div class="flex gap-3">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer">

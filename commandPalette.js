@@ -3,6 +3,12 @@
 let _commandPaletteOpen = false;
 let _commandPaletteDebounceTimer = null;
 
+// —— 候选面板状态（仿输入法候选词：~ 触发清单候选、# 触发标签候选）——
+let _cpCandidates = null; // { type:'list'|'tag', prefix:'~'|'#', start, end, query, items:[{name,color,selected,isCurrent}], activeIndex, virtual }
+let _cpDelToken = null;   // 已武装的识别块（双退格整删用）：{ start, text }
+let _cpDraft = null;      // 未完成草稿：误触遮罩空白关闭面板时保留（文本+光标），下次呼出恢复；
+                          // Esc 关闭 / Enter 创建成功后清空（主动放弃 / 已消费）
+
 // ==================== 命令面板 UI ====================
 
 function openCommandPalette() {
@@ -15,36 +21,43 @@ function openCommandPalette() {
 
     const overlay = document.createElement('div');
     overlay.id = 'command-palette-overlay';
-    overlay.className = 'fixed inset-0 z-50 flex items-start justify-center pt-[15vh]';
+    // 顶部预留候选面板的悬浮空间（max 保证小屏也有足够留白），候选面板出现时不推动输入框
+    overlay.className = 'fixed inset-0 z-50 flex items-start justify-center pt-[max(15vh,168px)]';
     overlay.style.background = 'rgba(0,0,0,0.45)';
     overlay.style.backdropFilter = 'blur(4px)';
     overlay.onclick = function(e) {
-        if (e.target === overlay) closeCommandPalette();
+        // 误触遮罩空白：关闭但保留草稿（下次呼出恢复输入到一半的文本）
+        if (e.target === overlay) closeCommandPalette(true);
     };
 
     const palette = document.createElement('div');
     palette.id = 'command-palette';
-    palette.className = 'w-full max-w-xl bg-theme-secondary rounded-2xl shadow-2xl border border-theme overflow-hidden';
+    // relative 作为候选浮层的定位容器；子元素均为透明背景，无需 overflow-hidden 裁圆角
+    palette.className = 'w-full max-w-xl bg-theme-secondary rounded-2xl shadow-2xl border border-theme relative';
     palette.style.animation = 'fadeIn 0.15s ease-out';
     palette.innerHTML = `
+        <div id="command-palette-candidates" class="hidden absolute bottom-full inset-x-0 mb-2 bg-theme-secondary rounded-xl shadow-2xl border border-theme"></div>
         <div class="flex items-center gap-3 px-5 py-4 border-b border-theme">
             <i class="fas fa-terminal text-theme-secondary"></i>
             <input id="command-palette-input" type="text"
                    class="flex-1 bg-transparent outline-none text-theme-primary text-base"
                    placeholder="快速新建任务 或 /s 搜索历史任务…"
                    autocomplete="off" spellcheck="false">
-            <kbd class="px-2 py-0.5 text-xs bg-theme-tertiary text-theme-muted rounded border border-theme">ESC</kbd>
         </div>
         <div id="command-palette-results" class="max-h-72 overflow-y-auto"></div>
         <div id="command-palette-hint" class="px-5 py-3 text-xs text-theme-secondary border-t border-theme flex items-center gap-4">
-            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Enter</kbd> 执行</span>
-            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Esc</kbd> 关闭</span>
+            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Enter</kbd> 新建任务</span>
+            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Esc</kbd> 关闭面板</span>
             <span class="ml-auto">支持自动识别日期时间 / ~清单 / #标签 / !优先级 / |详情</span>
         </div>
     `;
 
     overlay.appendChild(palette);
     document.body.appendChild(overlay);
+
+    // 每次打开都是全新 DOM，候选/双退格状态一并复位
+    _cpCandidates = null;
+    _cpDelToken = null;
 
     const input = document.getElementById('command-palette-input');
     input.focus();
@@ -54,10 +67,33 @@ function openCommandPalette() {
 
     input.addEventListener('keydown', handleCommandPaletteKeydown);
     input.addEventListener('input', handleCommandPaletteInput);
+    // 纯光标移动（方向键/鼠标点击）不触发 input 事件，需单独同步候选状态
+    input.addEventListener('keyup', handleCommandPaletteKeyup);
+    input.addEventListener('mouseup', handleCommandPaletteMouseUp);
+    // IME 组字结束兜底刷新（Chrome 最后一次 input 在 compositionend 之前，组字期间
+    // 光标位置可能尚未稳定，结束时以最终光标位置再同步一次；操作幂等无副作用）
+    input.addEventListener('compositionend', handleCommandPaletteCompositionEnd);
+
+    // 恢复上次未完成的草稿（误触遮罩空白关闭时保留）：文本 + 光标位置一并还原，
+    // 并走一遍 input 流程刷新候选面板 / 搜索结果 / 创建预览（/s 草稿同样可恢复）
+    if (_cpDraft) {
+        input.value = _cpDraft.text;
+        const s = Math.min(_cpDraft.start, _cpDraft.text.length);
+        const end = Math.min(_cpDraft.end, _cpDraft.text.length);
+        input.setSelectionRange(s, end);
+        handleCommandPaletteInput({});
+    }
 }
 
-function closeCommandPalette() {
+function closeCommandPalette(keepDraft) {
     _commandPaletteOpen = false;
+    // keepDraft=true（误触遮罩空白）：保留当前输入为草稿；否则（Esc / 创建成功 / 移动端返回）清空
+    const draftInput = document.getElementById('command-palette-input');
+    _cpDraft = (keepDraft && draftInput && draftInput.value)
+        ? { text: draftInput.value, start: draftInput.selectionStart, end: draftInput.selectionEnd }
+        : null;
+    _cpCandidates = null;
+    _cpDelToken = null;
     if (_commandPaletteDebounceTimer) {
         clearTimeout(_commandPaletteDebounceTimer);
         _commandPaletteDebounceTimer = null;
@@ -74,18 +110,99 @@ function closeCommandPalette() {
 }
 
 function handleCommandPaletteKeydown(e) {
+    // IME 组字中的按键不进入面板逻辑（Enter=上屏候选、Esc=取消组字），
+    // 避免拼音选字时把半截拼音直接建成任务
+    if (e.isComposing) return;
+
+    const input = document.getElementById('command-palette-input');
+
     if (e.key === 'Escape') {
         e.preventDefault();
         closeCommandPalette();
-    } else if (e.key === 'Enter') {
+        return;
+    }
+
+    // 候选面板激活：↑↓ 在候选间移动；Tab 确认当前高亮候选
+    if (_cpCandidates) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (_cpCandidates.items.length > 0) {
+                e.preventDefault();
+                const n = _cpCandidates.items.length;
+                _cpCandidates.activeIndex = (_cpCandidates.activeIndex + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+                renderCommandPaletteCandidates();
+            }
+            return;
+        }
+        // Tab 确认候选：Tab 不经过输入法（IME）处理，preventDefault 可 100% 拦截默认行为，
+        // 天然无「确认字符被上屏」问题（此前 · 键由 IME 产出，keydown 拦不住、码点随输入法而异）
+        if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault(); // 阻止焦点移出输入框（含 Shift+Tab 逆向导航）
+            if (e.shiftKey) {
+                // Shift+Tab：高亮上移（与 ↑ 等价的逆向导航，仿终端 Tab 补全习惯）
+                if (_cpCandidates.items.length > 0) {
+                    const n = _cpCandidates.items.length;
+                    _cpCandidates.activeIndex = (_cpCandidates.activeIndex - 1 + n) % n;
+                    renderCommandPaletteCandidates();
+                }
+            } else if (_cpCandidates.items.length > 0) {
+                applyCommandPaletteCandidate(_cpCandidates.activeIndex);
+            }
+            return;
+        }
+    }
+
+    // 双退格整删：针对已识别信息（!优先级 / ~清单 / #标签 / 日期时间文字）。
+    // 第一次退格删掉块尾空格（默认行为，同时武装该块），第二次退格整块删除；
+    // 删完自动武装前一个识别块，可连续逐个撤销
+    if (e.key === 'Backspace') {
+        const v = input.value;
+        const pos = input.selectionStart;
+        if (input.selectionStart !== input.selectionEnd) {
+            _cpDelToken = null; // 有选区：普通删除
+        } else {
+            const t = _cpDelToken;
+            // ① 光标停在已武装块尾（尾随空格已被上一次退格删除）→ 整删该块
+            //    只删块本身、保留块前分隔空格：链式删除时每个识别块固定消耗两次退格
+            //    （第一次删尾随空格、第二次整删），与前一块的删除互不干扰
+            if (t && pos === t.start + t.text.length && v.startsWith(t.text, t.start) && v.charAt(pos) !== ' ') {
+                e.preventDefault();
+                input.value = v.slice(0, t.start) + v.slice(t.start + t.text.length);
+                input.setSelectionRange(t.start, t.start);
+                _cpDelToken = null;
+                armPreviousCommandPaletteToken();
+                updateCommandPaletteCandidates();
+                renderCommandPalettePreview();
+                return;
+            }
+            // ② 光标前是空格：放行默认删空格，同时武装空格前的识别块（下一次退格整删）
+            if (pos > 0 && v.charAt(pos - 1) === ' ') {
+                const chunk = findCommandPaletteChunkEndingAt(v, pos - 1);
+                _cpDelToken = chunk ? { start: chunk.start, text: v.slice(chunk.start, pos - 1) } : null;
+            } else {
+                // ③ 其他位置：普通逐字删除
+                _cpDelToken = null;
+            }
+        }
+    }
+
+    if (e.key === 'Enter') {
         e.preventDefault();
         executeCommandPalette();
     }
 }
 
 function handleCommandPaletteInput(e) {
+    // 注意：这里不能按 isComposing 提前返回——Chrome 中 IME 提交文本的最后一次
+    // input 事件发生在 compositionend 之前且 isComposing=true，提前返回会完全错过
+    // IME 提交（表现为：输入法打出的 ~ / # / 中文不触发候选与预览，而退格等
+    // 非组字操作一切正常）。组字过程中的 input 事件照常处理：候选随组字文本
+    // 实时过滤（与输入法候选行为一致），提交后的最后一次 input 即为最终结果。
     const input = document.getElementById('command-palette-input');
+
     const value = input.value.trim();
+
+    // 候选面板实时刷新（不走防抖，保证导航与输入的即时反馈）
+    updateCommandPaletteCandidates();
 
     // 清除上一次防抖定时器
     if (_commandPaletteDebounceTimer) {
@@ -120,8 +237,7 @@ function handleCommandPaletteInput(e) {
     _commandPaletteDebounceTimer = setTimeout(() => {
         const curInput = document.getElementById('command-palette-input');
         if (!curInput || curInput.value.trim().startsWith('/s')) return;
-        const parsed = parseNLPInput(value);
-        resultsContainer.innerHTML = renderNLPPreview(parsed);
+        renderCommandPalettePreview();
     }, 120);
 }
 
@@ -148,6 +264,303 @@ function executeCommandPalette() {
     const parsed = parseNLPInput(value);
     createTaskFromNLP(parsed);
     closeCommandPalette();
+}
+
+// ==================== 候选面板（仿输入法候选词：~清单 / #标签）====================
+
+// 光标所在的 ~/# token 视为「组字中」：光标位于触发符之后、token 内部或紧随 token 末尾
+function findCommandPaletteCandidateToken(value, cursor) {
+    const re = /([~#])([^\s|]*)/g;
+    let m;
+    while ((m = re.exec(value)) !== null) {
+        const start = m.index;
+        const end = start + m[0].length;
+        if (cursor > start && cursor <= end) {
+            return { type: m[1] === '~' ? 'list' : 'tag', prefix: m[1], start, end, query: m[2] };
+        }
+    }
+    return null;
+}
+
+// 构建候选面板的候选项：过滤（前缀匹配优先于包含匹配）+ 标记已在输入中生效的完整 token（实心）
+function buildCommandPaletteItems(type, query, value) {
+    let items = type === 'list'
+        // 「默认」清单不出现在候选中：不填 ~token 时任务本就归属默认清单，
+        // 想改回默认直接双退格删掉 ~token 即可
+        ? lists.filter(l => !l.archived && !l.isFolder && l.id !== 'default').map(l => ({ name: l.name, color: l.color || '#6b7280' }))
+        : (settings.tags || []).map(t => ({ name: t.name, color: t.color || '#6b7280' }));
+
+    const q = (query || '').toLowerCase();
+    if (q) {
+        const prefixHits = [];
+        const containsHits = [];
+        items.forEach(it => {
+            const n = it.name.toLowerCase();
+            if (n.startsWith(q)) prefixHits.push(it);
+            else if (n.indexOf(q) !== -1) containsHits.push(it);
+        });
+        items = prefixHits.concat(containsHits);
+    }
+
+    const prefix = type === 'list' ? '~' : '#';
+    const present = new Set();
+    const re = /([~#])([^\s|]+)/g;
+    let m;
+    while ((m = re.exec(value)) !== null) present.add(m[0]);
+    items.forEach(it => {
+        it.selected = present.has(prefix + it.name);
+        it.isCurrent = query === it.name;
+    });
+    return items;
+}
+
+function updateCommandPaletteCandidates() {
+    const input = document.getElementById('command-palette-input');
+    const box = document.getElementById('command-palette-candidates');
+    if (!input || !box) { _cpCandidates = null; return; }
+
+    const hidePanel = () => { _cpCandidates = null; box.classList.add('hidden'); box.innerHTML = ''; };
+    const value = input.value;
+    if (value.trim().startsWith('/s')) { hidePanel(); return; } // /s 搜索模式不出候选
+
+    // 标签多选「虚拟面板」仍锚定在光标处（光标未动、无选区）：保持展开，不重建
+    if (_cpCandidates && _cpCandidates.virtual
+        && input.selectionStart === _cpCandidates.start && input.selectionEnd === input.selectionStart) {
+        return;
+    }
+
+    // 双退格整删已「武装」且光标正停在待删块的相关位置：用户处于连续删除流程中，
+    // 此时不弹候选（否则整删流程中面板会在每次删除间隙闪烁）；
+    // 移动光标或继续输入即脱离武装位置，恢复正常候选逻辑
+    if (_cpDelToken) {
+        const t = _cpDelToken;
+        const pos = input.selectionStart;
+        const atEndWithSpace = pos === t.start + t.text.length + 1 && value.startsWith(t.text + ' ', t.start);
+        const atEndNoSpace = pos === t.start + t.text.length && value.startsWith(t.text, t.start) && value.charAt(pos) !== ' ';
+        if (atEndWithSpace || atEndNoSpace) { hidePanel(); return; }
+    }
+
+    const token = findCommandPaletteCandidateToken(value, input.selectionStart);
+    if (!token) { hidePanel(); return; }
+
+    _cpCandidates = Object.assign(token, {
+        items: buildCommandPaletteItems(token.type, token.query, value),
+        activeIndex: 0
+    });
+    renderCommandPaletteCandidates();
+}
+
+function renderCommandPaletteCandidates() {
+    const box = document.getElementById('command-palette-candidates');
+    const c = _cpCandidates;
+    if (!box || !c) return;
+
+    const kbd = 'px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px] border border-theme';
+    const label = c.type === 'list' ? '清单' : '标签';
+    const icon = c.type === 'list' ? 'fa-list-ul' : 'fa-tags';
+    const hint = `<span class="ml-auto flex items-center gap-3 whitespace-nowrap">
+            <span class="flex items-center gap-1"><kbd class="${kbd}">↑↓</kbd>切换</span>
+            <span class="flex items-center gap-1"><kbd class="${kbd}">Tab</kbd>设置任务${label}</span>
+        </span>`;
+
+    if (c.items.length === 0) {
+        box.innerHTML = `<div class="px-4 py-2 text-xs text-theme-secondary flex items-center gap-1.5">
+            <i class="fas ${icon}"></i>${label}
+            <span class="ml-1.5">没有匹配${c.query ? '「' + escapeHtml(c.query) + '」' : ''}的${label}</span>
+            ${hint}
+        </div>`;
+        box.classList.remove('hidden');
+        return;
+    }
+
+    // 复用任务详情栏清单/标签选择器的胶囊样式（detail-tag-pill / detail-tag-pill-selected）；
+    // 键盘高亮挂 cmd-pal-candidate-active 类（半透明标签色底 + 内描边，均在胶囊边界内，无 outline 外扩裁剪）
+    const pills = c.items.map((it, i) => {
+        const cls = it.selected ? 'detail-tag-pill-selected' : 'detail-tag-pill';
+        const active = i === c.activeIndex ? ' cmd-pal-candidate-active' : '';
+        return `<button type="button" class="${cls}${active} cmd-pal-candidate" data-idx="${i}"
+                style="--tag-color:${it.color};" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</button>`;
+    }).join('');
+
+    box.innerHTML = `
+        <div class="px-4 pt-2 pb-1.5 text-[11px] text-theme-secondary flex items-center gap-2">
+            <i class="fas ${icon}"></i>${label}
+            ${hint}
+        </div>
+        <div class="px-4 pb-2.5 flex flex-wrap gap-2 max-h-24 overflow-y-auto">${pills}</div>`;
+    box.classList.remove('hidden');
+
+    box.querySelectorAll('.cmd-pal-candidate').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // 防止输入框失焦
+            applyCommandPaletteCandidate(parseInt(btn.dataset.idx, 10));
+        });
+    });
+    const active = box.querySelector(`.cmd-pal-candidate[data-idx="${c.activeIndex}"]`);
+    if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+function applyCommandPaletteCandidate(idx) {
+    const input = document.getElementById('command-palette-input');
+    const c = _cpCandidates;
+    if (!input || !c || !c.items[idx]) return;
+    const it = c.items[idx];
+    const v = input.value;
+
+    if (it.selected && !it.isCurrent) {
+        // 已生效的完整 token：再点一次 = 从输入中移除（取消选择，连同尾随空格，避免留下双空格）
+        const re = /([~#])([^\s|]+)/g;
+        let m;
+        while ((m = re.exec(v)) !== null) {
+            if (m[0] === c.prefix + it.name) {
+                const tokenEnd = m.index + m[0].length;
+                const removeEnd = tokenEnd + (v.charAt(tokenEnd) === ' ' ? 1 : 0);
+                input.value = v.slice(0, m.index) + v.slice(removeEnd);
+                const pos = Math.min(m.index, input.value.length);
+                input.setSelectionRange(pos, pos);
+                break;
+            }
+        }
+        _cpDelToken = null;
+    } else {
+        // 确认候选：仿输入法上屏，用 `~名称 ` / `#名称 ` 替换光标所在 token，尾随空格保证断词
+        const insert = c.prefix + it.name + ' ';
+        // 清单为单选语义：前后文中已生效的其他 ~清单 token 一并移除（新清单替换旧清单），
+        // 否则旧 ~token 残留会落入标题文字，解析出错误的任务名
+        if (c.type === 'list') {
+            const stripLists = s => s.replace(/~[^\s|!]+\s?/g, '');
+            const before = stripLists(v.slice(0, c.start));
+            input.value = before + insert + stripLists(v.slice(c.end));
+            const cursor = before.length + insert.length;
+            input.setSelectionRange(cursor, cursor);
+        } else {
+            input.value = v.slice(0, c.start) + insert + v.slice(c.end);
+            const cursor = c.start + insert.length;
+            input.setSelectionRange(cursor, cursor);
+        }
+        // 整删不在此时武装：退格时由 Backspace 处理器按识别块动态武装
+    }
+    input.focus();
+    // 标签多选：确认/移除后候选面板保持展开（虚拟空 token），可继续 ↑↓ Tab 连选，
+    // 高亮停留在刚操作的标签上（接续连选）；清单为单选，走常规刷新收起
+    if (c.type === 'tag') keepTagPanelOpen(it.name);
+    else updateCommandPaletteCandidates();
+    renderCommandPalettePreview();
+}
+
+// 标签多选连选：以光标为锚点保持一个「虚拟空 token」候选面板，不向输入框写入任何字符，
+// 可继续用 ↑↓ Tab 选择其他标签（再按 Tab 于已选标签 = 移除）；输入任意字符或移动光标即退出。
+// focusName：刚确认/移除的标签名，高亮停留在其上（接续连选，避免每次都从第一个重新开始）
+function keepTagPanelOpen(focusName) {
+    const input = document.getElementById('command-palette-input');
+    if (!input) return;
+    const cursor = input.selectionStart;
+    // 光标仍落在真实 ~/# token 内（确认后紧邻下一个组字 token 等）：走常规刷新
+    if (findCommandPaletteCandidateToken(input.value, cursor)) {
+        updateCommandPaletteCandidates();
+        return;
+    }
+    const items = buildCommandPaletteItems('tag', '', input.value);
+    const focusIdx = focusName ? items.findIndex(x => x.name === focusName) : -1;
+    _cpCandidates = {
+        type: 'tag', prefix: '#', start: cursor, end: cursor, query: '',
+        items,
+        activeIndex: focusIdx >= 0 ? focusIdx : 0,
+        virtual: true
+    };
+    renderCommandPaletteCandidates();
+}
+
+// ==================== 识别块扫描（双退格整删用）====================
+
+// 将输入中「已识别信息」定位为区间：!优先级 / ~清单 / #标签 / 日期时间与重复文字。
+// 与 parseNLPInput 的识别口径一致：先提取 ! 与 ~/# token，再对剩余文本跑 NLP 日期解析。
+// 掩码副本与原串等长（已识别的字符置 \u0000，不被 \s 与任何日期模式匹配），保证区间位置与原始输入一一对应
+function findCommandPaletteChunks(value) {
+    const intervals = [];
+    const mask = value.split('');
+    const take = (start, end, time) => {
+        intervals.push({ start, end, time: !!time });
+        for (let i = start; i < end; i++) mask[i] = '\u0000';
+    };
+
+    let m = /!!!|!!|!/.exec(value); // ! 优先级（提取顺序与 parseNLPInput 一致）
+    if (m) take(m.index, m.index + m[0].length);
+
+    const tokenRe = /([~#])([^\s|!]+)/g; // ~清单 / #标签（! 已被优先级提取，不并入 token 名）
+    while ((m = tokenRe.exec(value)) !== null) take(m.index, m.index + m[0].length);
+
+    const masked = mask.join('');
+    const dateResult = parseNLPDate(masked);
+    if (dateResult) {
+        // 顺序定位：模拟解析器「首个匹配即消费」的行为，避免同名匹配串定位到未消费的出现处
+        const work = masked.split('');
+        dateResult.matches.forEach(s => {
+            const idx = work.join('').indexOf(s);
+            if (idx !== -1) {
+                take(idx, idx + s.length, true);
+                for (let i = idx; i < idx + s.length; i++) work[i] = '\u0000';
+            }
+        });
+    }
+
+    // 同一时间表达式的相邻日期/时刻部分合并为一个块（可跨空格，如「明天」+「上午八点」、
+    // 「每天 8点」）；! / ~ / # 等独立 token 不参与合并
+    intervals.sort((a, b) => a.start - b.start || a.end - b.end);
+    const chunks = [];
+    intervals.forEach(iv => {
+        const last = chunks[chunks.length - 1];
+        if (last && last.time && iv.time && iv.start >= last.end
+            && !/\S/.test(value.slice(last.end, iv.start))) {
+            last.end = Math.max(last.end, iv.end);
+        } else {
+            chunks.push({ start: iv.start, end: iv.end, time: iv.time });
+        }
+    });
+    return chunks;
+}
+
+// 找到恰好结束于 end 位置的识别块（供退格武装：光标前的空格若是识别块的尾随空格，该块可整删）
+function findCommandPaletteChunkEndingAt(value, end) {
+    return findCommandPaletteChunks(value).find(c => c.end === end) || null;
+}
+
+// 整删一个识别块后，若光标前紧贴另一个识别块（其尾随空格已被整删吞掉），直接武装它，
+// 使继续按退格可逐个撤销此前的识别信息；带尾随空格的形态由 Backspace ② 分支动态武装
+function armPreviousCommandPaletteToken() {
+    const input = document.getElementById('command-palette-input');
+    if (!input) return;
+    const chunk = findCommandPaletteChunkEndingAt(input.value, input.selectionStart);
+    if (chunk) _cpDelToken = { start: chunk.start, text: input.value.slice(chunk.start, chunk.end) };
+}
+
+// 立即重渲染 NLP 预览（绕过防抖，供候选确认/整删/组字结束后即时刷新）
+function renderCommandPalettePreview() {
+    const curInput = document.getElementById('command-palette-input');
+    const resultsContainer = document.getElementById('command-palette-results');
+    if (!curInput || !resultsContainer) return;
+    const v = curInput.value.trim();
+    if (!v) { resultsContainer.innerHTML = ''; return; }
+    // /s 搜索模式的结果由其自身防抖分支负责渲染，此处不得用 NLP 预览覆盖
+    if (v.startsWith('/s')) return;
+    const parsed = parseNLPInput(v);
+    resultsContainer.innerHTML = renderNLPPreview(parsed);
+}
+
+function handleCommandPaletteKeyup(e) {
+    if (e.isComposing) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+        updateCommandPaletteCandidates();
+    }
+}
+
+function handleCommandPaletteMouseUp() {
+    updateCommandPaletteCandidates();
+}
+
+function handleCommandPaletteCompositionEnd() {
+    updateCommandPaletteCandidates();
+    renderCommandPalettePreview();
 }
 
 // ==================== 任务搜索 ====================
@@ -275,23 +688,23 @@ function parseNLPInput(input) {
         removedParts.push(listMatch[0]);
     }
 
-    // 2.5 从标题中解析标签：#标签名（支持多个#标签，不存在则标记待创建）
+    // 2.5 从标题中解析标签：#标签名（支持多个#标签，不存在则标记待创建）。
+    // 必须单遍 replace 完成「提取 + 剥离」：此前在 exec 循环里边遍历边缩短字符串，
+    // 全局正则的 lastIndex 仍指向旧串位置，会跳过紧邻的下一个 #标签
+    // （多选标签后面板输入形如「#a #b 标题」，#b 会原样泄漏进任务标题）
     const tagIds = [];
     const tagNamesToCreate = [];
-    const tagRegex = /#(\S+)/g;
-    let tagMatch;
-    while ((tagMatch = tagRegex.exec(titleText)) !== null) {
-        const tagName = tagMatch[1];
-        let foundTag = (settings.tags || []).find(t => t.name === tagName);
+    titleText = titleText.replace(/#(\S+)/g, (full, name) => {
+        let foundTag = (settings.tags || []).find(t => t.name === name);
         if (foundTag) {
             tagIds.push(foundTag.id);
         } else {
             // 标签不存在，标记待创建（不在输入时创建，避免中间状态）
-            tagNamesToCreate.push(tagName);
+            tagNamesToCreate.push(name);
         }
-        titleText = titleText.replace(tagMatch[0], ' ');
-        removedParts.push(tagMatch[0]);
-    }
+        removedParts.push(full);
+        return ' ';
+    });
 
     // 3. 解析日期和时间（先从标题解析，再从详情解析）
     // 设置项 cmdRemoveTimeText：是否从标题中移除已解析的日期/时间文字

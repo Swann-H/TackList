@@ -1740,8 +1740,22 @@ function toggleSubtaskComplete(subtaskId, completed) {
             if (nextTask) tasks.push(nextTask);
         }
 
+        // 子任务全部完成导致父任务被标记完成时，与手动完成一致：在当前视图中播放父任务条目的塌陷动画
+        const playFx = task.completed && !wasTaskCompleted && _playTaskDoneCollapseFx(task.id);
+
+        // 父任务完成状态变化时，与手动完成口径一致：刷新侧栏清单计数与标签
+        if (task.completed !== wasTaskCompleted) {
+            renderLists();
+            if (typeof renderTags === 'function') renderTags();
+        }
+
         saveData();
-        renderView();
+        if (playFx) {
+            // 播放过塌陷动画后延迟全量重渲染（与 toggleTaskComplete 口径一致）
+            setTimeout(() => renderView(), 320);
+        } else {
+            renderView();
+        }
 
         // 触发彩蛋效果（子任务完成时）
         if (completed && !wasCompleted) {
@@ -1949,6 +1963,9 @@ function toggleTaskDetailComplete() {
     const task = tasks.find(t => t.id === currentDetailTaskId);
     if (!task) return;
 
+    // 与主视图勾选一致：标记完成时在当前视图中对该任务条目播放塌陷动画（下方任务上移补位）
+    const playFx = !task.completed && _playTaskDoneCollapseFx(task.id);
+
     const { structuralChange } = applyTaskCompletionToggle(task);
 
     updateDetailCompleteButton(task.completed);
@@ -1957,6 +1974,14 @@ function toggleTaskDetailComplete() {
     if (task.completed) {
         _detailSkipUndoSnapshot = null;
         _clearDetailSkipUndoTimer();
+    }
+    // 与主视图勾选（toggleTaskComplete）口径一致：完成状态变更后刷新侧栏清单计数与标签
+    renderLists();
+    if (typeof renderTags === 'function') renderTags();
+    if (playFx) {
+        // 播放过塌陷动画后必须延迟全量重渲染：局部更新会把塌陷条目替换回正常高度，导致下方任务瞬间回弹下移
+        setTimeout(() => renderView(), 320);
+        return;
     }
     // 日程视图下非结构性变更走局部更新
     if (structuralChange
@@ -4022,34 +4047,76 @@ function applyTaskCompletionToggle(task) {
     return { wasCompleted, structuralChange };
 }
 
+/**
+ * 播放任务完成塌陷动画：条目从左侧勾选框向右擦除、高度塌陷（下方任务向上平移补位）。
+ * 主视图勾选 / 右侧详情面板勾选 / 子任务全部完成自动勾选父任务 共用，保证各入口完成动效一致。
+ * 同一任务可能同时出现在多处（多日任务跨多个日期列、月视图网格 + 日浮层 / 命令面板），
+ * 对全部可见条目播放，避免只播一处导致其余位置状态不同步。
+ * 月视图网格 / 周视图全天区：完成仍在可见切片内的行跳过塌陷（避免消失后闪回）；
+ * 被挤出切片时在 +N 按钮前同步"生长"出被顶入的下一条任务（揭示行动画）。
+ * @param {string} taskId - 任务 id
+ * @returns {boolean} 是否实际播放（未开启动效、系统减弱动态或当前视图中无可见任务条目时为 false）
+ */
+function _playTaskDoneCollapseFx(taskId) {
+    if (typeof settings === 'undefined' || settings.smoothAnimations !== true) return false;
+    // 系统级减弱动态效果时不播放（与视图切换等 fx 入口口径一致）
+    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    // 视图级完成动效预案（月视图网格 / 周视图全天区）：切片内保留行跳过塌陷、切片外补揭示行
+    const plan = (typeof planCalendarTaskDoneFx === 'function') ? planCalendarTaskDoneFx(taskId) : null;
+    const skipRows = plan ? plan.skip : null;
+    const reveals = (plan && plan.reveals.length > 0) ? plan.reveals : [];
+    // 收集该任务所有可见条目（task-row 语义类；周视图时间块等不重排的条目不带该类，自然不播放）
+    const anchors = document.querySelectorAll(`[onclick*="toggleTaskComplete('${taskId}')"]`);
+    const rows = [];
+    for (const anchor of anchors) {
+        const row = anchor.closest('.task-row');
+        if (row && row.offsetParent !== null && !rows.includes(row) && !(skipRows && skipRows.has(row))) rows.push(row);
+    }
+    if (rows.length === 0 && reveals.length === 0) return false;
+    rows.forEach(item => {
+        const cs = getComputedStyle(item);
+        // 先固定当前尺寸，再加类并塌陷到 0，使 height/margin/padding 可过渡（下方任务上移）
+        item.style.height = item.offsetHeight + 'px';
+        item.style.marginTop = cs.marginTop;
+        item.style.marginBottom = cs.marginBottom;
+        item.style.paddingTop = cs.paddingTop;
+        item.style.paddingBottom = cs.paddingBottom;
+        void item.offsetWidth;
+        item.classList.add('fx-task-done');
+        item.style.height = '0px';
+        item.style.marginTop = '0px';
+        item.style.marginBottom = '0px';
+        item.style.paddingTop = '0px';
+        item.style.paddingBottom = '0px';
+    });
+    // 揭示行：与塌陷同步从 0 高生长到自然行高（透明度渐入），新任务看似从 +N 按钮底部滑出；
+    // 行高与被塌陷行一致，二者相抵后 +N 按钮视觉上原地不动
+    reveals.forEach(rv => {
+        if (!rv || !rv.container) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'fx-task-reveal';
+        wrap.style.cssText = 'height:0;margin-top:0;opacity:0;overflow:hidden;';
+        wrap.innerHTML = rv.html;
+        if (rv.refEl && rv.refEl.parentNode === rv.container) {
+            rv.container.insertBefore(wrap, rv.refEl);
+        } else {
+            rv.container.appendChild(wrap);
+        }
+        const targetH = wrap.scrollHeight;
+        void wrap.offsetWidth; // 强制回流，让初始态先落地再过渡
+        wrap.style.height = targetH + 'px';
+        wrap.style.marginTop = rv.gap || '0px';
+        wrap.style.opacity = '1';
+    });
+    return true;
+}
+
 function toggleTaskComplete(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (task) {
         const willComplete = !task.completed;
         // 平滑过渡动画：标记完成时旧条目从左侧勾选框向右擦除、高度塌陷（下方任务向上平移补位），再延迟刷新视图
-        let playFx = false;
-        if (willComplete && settings.smoothAnimations === true) {
-            const anchor = document.querySelector(`[onclick*="toggleTaskComplete('${taskId}')"]`);
-            // 各视图任务条目容器已统一附加 task-row 语义类（含看板外层整行），塌陷时整行消失
-            const item = anchor ? anchor.closest('.task-row') : null;
-            if (item) {
-                playFx = true;
-                const cs = getComputedStyle(item);
-                // 先固定当前尺寸，再加类并塌陷到 0，使 height/margin/padding 可过渡（下方任务上移）
-                item.style.height = item.offsetHeight + 'px';
-                item.style.marginTop = cs.marginTop;
-                item.style.marginBottom = cs.marginBottom;
-                item.style.paddingTop = cs.paddingTop;
-                item.style.paddingBottom = cs.paddingBottom;
-                void item.offsetWidth;
-                item.classList.add('fx-task-done');
-                item.style.height = '0px';
-                item.style.marginTop = '0px';
-                item.style.marginBottom = '0px';
-                item.style.paddingTop = '0px';
-                item.style.paddingBottom = '0px';
-            }
-        }
+        const playFx = willComplete && _playTaskDoneCollapseFx(taskId);
         const { structuralChange } = applyTaskCompletionToggle(task);
         renderLists();
         if (typeof renderTags === 'function') renderTags();
@@ -4203,6 +4270,8 @@ function saveListInput() {
         editingListId = null;
         renderLists();
         renderView();
+        // 清单重命名/改色后同步刷新番茄页当前任务徽标（圆点颜色/清单名），避免残留旧值
+        if (typeof updatePomodoroTaskButton === 'function') updatePomodoroTaskButton();
         showToast('清单已更新', 'success');
     } else {
         const newList = {
