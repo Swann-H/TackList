@@ -40,6 +40,57 @@ function getDateBounds() {
     return _dateBoundsCache;
 }
 
+// ==================== 侧边栏特殊筛选项（固定清单） ====================
+// 这些筛选由侧边栏固定项触发，在任务视图中按「天」分组展示、时间列只显示 HH:MM，
+// 且各自拥有独立的偏好视图（settings.specialViewPrefs[filter]）。
+const SPECIAL_TIME_FILTERS = ['today', 'tomorrow', 'recent3days', 'recent7days'];
+
+// 侧边栏固定筛选项/分组的显隐默认值（settings.sidebarItems）
+// show = 显示 | auto = 有内容时显示 | hide = 隐藏
+const SIDEBAR_ITEM_DEFAULTS = {
+    allTasks: 'show',
+    today: 'hide',
+    tomorrow: 'hide',
+    recent3days: 'hide',
+    recent7days: 'show',
+    summary: 'show',
+    tags: 'show',
+    filters: 'show'
+};
+
+// 当前（或给定）筛选是否为侧边栏特殊时间筛选
+function isSpecialTimeFilter(filter) {
+    const f = arguments.length ? filter : currentFilter;
+    return SPECIAL_TIME_FILTERS.indexOf(f) !== -1;
+}
+
+// 返回特殊时间筛选的 [start, end) 毫秒区间；非特殊筛选返回 null
+// 今天 = [今天0点, 明天0点)；明天 = [明天0点, 后天0点)
+// 最近3天 = [今天0点, 后天24点)；最近7天 = [今天0点, 第7天24点)
+function getSpecialTimeFilterRange(filter) {
+    const f = arguments.length ? filter : currentFilter;
+    if (SPECIAL_TIME_FILTERS.indexOf(f) === -1) return null;
+    const b = getDateBounds();
+    switch (f) {
+        case 'today':
+            return [b.todayStart.getTime(), b.tomorrowStart.getTime()];
+        case 'tomorrow':
+            return [b.tomorrowStart.getTime(), b.dayAfterTomorrowStart.getTime()];
+        case 'recent3days':
+            return [b.todayStart.getTime(), b.threeDaysLaterStart.getTime()];
+        case 'recent7days':
+            return [b.todayStart.getTime(), b.sevenDaysLaterEnd.getTime()];
+    }
+    return null;
+}
+
+// 读取侧边栏项的显隐配置（非法值回退默认值）
+function getSidebarItemVisibility(key) {
+    const cfg = settings.sidebarItems || {};
+    const v = cfg[key];
+    return (v === 'show' || v === 'auto' || v === 'hide') ? v : (SIDEBAR_ITEM_DEFAULTS[key] || 'show');
+}
+
 // 番茄计时器状态
 let pomodoroState = {
     state: 'idle',  // idle | focusing | pause | end_settlement | completed | resting | ended
@@ -866,14 +917,8 @@ function filterTasks(taskList, opts) {
     const hasTagFilter = currentTagIds && currentTagIds.length > 0;
     const tagSet = hasTagFilter ? new Set(currentTagIds) : null;
 
-    // 最近7天筛选的时间边界
-    let recent7StartMs = 0, recent7EndMs = 0;
-    const isRecent7 = currentFilter === 'recent7days';
-    if (isRecent7) {
-        const b = getDateBounds();
-        recent7StartMs = b.todayStart.getTime();
-        recent7EndMs = b.sevenDaysLaterEnd.getTime();
-    }
+    // 侧边栏特殊时间筛选（今天/明天/最近3天/最近7天）的时间边界
+    const specialRange = getSpecialTimeFilterRange();
 
     // 自定义过滤器条件预解析
     let cf = null; // { listSet?, tagSet?, important?, urgent?, timeCheck?: (task)=>bool }
@@ -980,11 +1025,11 @@ function filterTasks(taskList, opts) {
             if (!pass) continue;
         }
 
-        // 最近7天筛选
-        if (isRecent7) {
+        // 侧边栏特殊时间筛选（今天/明天/最近3天/最近7天）
+        if (specialRange) {
             if (!task.startTime) continue;
             const t = new Date(task.startTime).getTime();
-            if (t < recent7StartMs || t >= recent7EndMs) continue;
+            if (t < specialRange[0] || t >= specialRange[1]) continue;
         }
 
         // 自定义过滤器
@@ -1207,8 +1252,8 @@ function userSwitchView(view) {
                 saveData();
             }
         } else if (!currentListId && !currentFilterId && !(currentTagIds && currentTagIds.length)) {
-            // 无清单/标签/过滤器：处于「全部任务」或「最近7天」上下文，记录对应偏好视图
-            _setSpecialViewPrefView(currentFilter === 'recent7days' ? 'recent7days' : 'allTasks', view);
+            // 无清单/标签/过滤器：处于「全部任务」或侧边栏特殊时间筛选上下文，记录对应偏好视图
+            _setSpecialViewPrefView(isSpecialTimeFilter() ? currentFilter : 'allTasks', view);
         }
     }
     switchView(view);

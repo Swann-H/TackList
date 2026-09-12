@@ -177,6 +177,9 @@
         body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
         body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
         body.has-bg-image #sidebar-all-tasks-btn.bg-theme-tertiary,
+        body.has-bg-image #sidebar-today-btn.bg-theme-tertiary,
+        body.has-bg-image #sidebar-tomorrow-btn.bg-theme-tertiary,
+        body.has-bg-image #sidebar-recent3days-btn.bg-theme-tertiary,
         body.has-bg-image #sidebar-next7days-btn.bg-theme-tertiary,
         body.has-bg-image #sidebar-summary-btn.bg-theme-tertiary {
             background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5) !important;
@@ -261,6 +264,9 @@
         html[data-blur="off"] body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image #sidebar-all-tasks-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-today-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-tomorrow-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-recent3days-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image #sidebar-next7days-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image #sidebar-summary-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image .view-btn-active,
@@ -297,6 +303,9 @@
         html[data-blur="off"] body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image #sidebar-all-tasks-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-today-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-tomorrow-btn.bg-theme-tertiary,
+        html[data-blur="off"] body.has-bg-image #sidebar-recent3days-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image #sidebar-next7days-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image #sidebar-summary-btn.bg-theme-tertiary {
             background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.92) !important;
@@ -2515,6 +2524,27 @@
                         <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-all-tasks-count" data-page-node-id="kPrPmsHfWxZVCNcCPxOBbM"></span>
                     </button>
                     
+                    <!-- 今天 -->
+                    <button onclick="filterToday()" id="sidebar-today-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="VUBm8FBz6R4nrlRxHGabJl">
+                        <i class="fas fa-sun w-5" data-page-node-id="RTGTjPsk9WK6Yf1uqzA88e"></i>
+                        <span class="sidebar-text flex-1" data-page-node-id="G8TuhXa9Njk08G7StxK9iS">今天</span>
+                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-today-count" data-page-node-id="Ydv4JjJxbo6rTb7Zpbv7E3"></span>
+                    </button>
+
+                    <!-- 明天 -->
+                    <button onclick="filterTomorrow()" id="sidebar-tomorrow-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="tFnEDqapL0MQwNFZYxgjAV">
+                        <i class="fas fa-calendar-day w-5" data-page-node-id="C4TSP2aaLKCXg169kxqTPe"></i>
+                        <span class="sidebar-text flex-1" data-page-node-id="r8QAfC8JAdVUveOjLm2a6k">明天</span>
+                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-tomorrow-count" data-page-node-id="ocIdIqB2YgFkdFG1lfgTNi"></span>
+                    </button>
+
+                    <!-- 最近3天 -->
+                    <button onclick="filterRecent3Days()" id="sidebar-recent3days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="jJT0e7h74II31MGwGTokY1">
+                        <i class="fas fa-calendar-days w-5" data-page-node-id="eASQqalftIVZsysvi8Il1s"></i>
+                        <span class="sidebar-text flex-1" data-page-node-id="H6VpkqN7pErR7tJEw5lbGS">最近3天</span>
+                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-recent3days-count" data-page-node-id="AvphFpvVOksYky4eqEjXXj"></span>
+                    </button>
+
                     <!-- 最近7天 -->
                     <button onclick="filterNext7Days()" id="sidebar-next7days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="lWKPHVs9TbzQfCsi4hR64m">
                         <i class="fas fa-calendar-week w-5" data-page-node-id="4n5UklGvaNNOLcSXKPTRrj"></i>
@@ -3609,6 +3639,7 @@
                             <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2" data-page-node-id="le0U55VUMawhkAnpCfWjbv">任务习惯</div>
                             <ul class="space-y-1" data-page-node-id="rGq4s3dpWsC3bEfEQUbjxs">
                                 <li data-page-node-id="ZBNAgXBPBwhDcDX9UrrNVs"><a data-target="settings-section-defaults" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="dZTPcXUUetFoKtHSpUBR4U">新建任务默认值</a></li>
+                                <li data-page-node-id="baq0rJc04ta6vEXuwEen5q"><a data-target="settings-section-sidebar-items" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="w2tk3AvB3FtJT5V1QGzbD6">侧边栏清单配置</a></li>
                                 <li data-page-node-id="hrJaJu1X7l1XMfFEnCRW5x"><a data-target="settings-section-command" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="c8r7K4Nhe1d9jcGMgXggQP">命令面板</a></li>
                                 <li data-page-node-id="jsTvzVZGs6YYG0D3XzAkSF"><a data-target="settings-section-shortcuts" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="nDp38PcECtVRZYapmM1ORN">快捷键</a></li>
                             </ul>
@@ -3921,6 +3952,80 @@
                         </div>
                     </div>
                     
+                    <!-- 侧边栏清单配置 -->
+                    <div id="settings-section-sidebar-items" data-page-node-id="aHC9gDAH6FPUplDQ4VlP8Q">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="v5mAYP3coaTV1LtGxtiklG">侧边栏清单配置</h3>
+                        <div class="space-y-4" data-page-node-id="CphMVhcNEUTkFshHj2NAvg">
+                            <div class="space-y-3" data-page-node-id="79UvP3QGPWC9mMtcGfveVG">
+                                <p class="text-xs text-theme-muted" data-page-node-id="kndYTW5Q4DxisnqG32RcUY">固定清单：控制侧边栏中各项是否显示；「有内容时显示」表示仅当存在符合条件的任务时才显示</p>
+                                <div class="flex items-center justify-between" data-page-node-id="Vsj1c9kw5qHl2EGof1u0Jz">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="PLUUpoFXKydSktBmi4dFva">所有任务</label>
+                                    <select id="settings-sidebar-all-tasks" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="rTek5WHhc8P5XNglfXW6ib">
+                                        <option value="show" data-page-node-id="fWUB7WReFPdsKZNKp2rpi7">显示</option>
+                                        <option value="hide" data-page-node-id="iK9NBJclPHqxcPSH4Et4t4">隐藏</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between" data-page-node-id="8NUgVomWgCdgwSwdGnQJr5">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="gwAQzZkE57veZ5gLJFQ3AN">今天</label>
+                                    <select id="settings-sidebar-today" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="t3c1uUQKI2KehHyvf8I83V">
+                                        <option value="show" data-page-node-id="ojtC4yOEDwDpbRDLIOsZWF">显示</option>
+                                        <option value="auto" data-page-node-id="5yJ7X5z25bnzT4HuSCfUm8">有内容时显示</option>
+                                        <option value="hide" data-page-node-id="RRbRb1dPHtcpDqVxtSPj0K">隐藏</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between" data-page-node-id="g1hgv8sJwtsjpEEMpeClTU">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="asrFP2LY2afDVEgM7AIggG">明天</label>
+                                    <select id="settings-sidebar-tomorrow" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="s0cnWZWdQs9rRjc2CUVXVD">
+                                        <option value="show" data-page-node-id="vNFR5HBt7XQgwSvvVKGyKJ">显示</option>
+                                        <option value="auto" data-page-node-id="RKJj6kjIwNKuzhK5wsR1jy">有内容时显示</option>
+                                        <option value="hide" data-page-node-id="H1QBM6qzHQOmMOPdT9yUXx">隐藏</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between" data-page-node-id="XRxNGlUNWoU9SPnPPxQmVQ">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="SbL54nfl7WJVY27C5H1EUM">最近3天</label>
+                                    <select id="settings-sidebar-recent3days" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="ivFAQgj0XEQrUWxRGUfsvg">
+                                        <option value="show" data-page-node-id="LsG6Tr5ibOTVWpYbolWMI7">显示</option>
+                                        <option value="auto" data-page-node-id="i3YzMWXuKjQ0MdW9JmVi6Q">有内容时显示</option>
+                                        <option value="hide" data-page-node-id="Puvlb7WNT3ZyVGWUUnXzZM">隐藏</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between" data-page-node-id="3JZHndFNdVLl5v8kcsQNEg">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="D9XiPZSovUuUqT5Ek4XKdg">最近7天</label>
+                                    <select id="settings-sidebar-recent7days" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="MTe4pFQZnAWS2IMRgFFHKe">
+                                        <option value="show" data-page-node-id="Zq1xLm0vRbTdKfNhPcYu2W">显示</option>
+                                        <option value="auto" data-page-node-id="Hb7nQs4VdXeJgAyT0Li6RZ">有内容时显示</option>
+                                        <option value="hide" data-page-node-id="Wp3rKc8mNvBzFuEd5Sj1QX">隐藏</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between" data-page-node-id="Yt6dGa2lMxPvRhKq9Wn4ZC">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Ne8vJc5sQzLwTbFm3Xr7DH">摘要</label>
+                                    <select id="settings-sidebar-summary" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="Kb2mRd7xTnVyZcAh6Pq9WJ">
+                                        <option value="show" data-page-node-id="Qf5sLw9yVpXaBgNk4Rt3MH">显示</option>
+                                        <option value="hide" data-page-node-id="Jd4xCm8vUqYbHhOl5Sw2NG">隐藏</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="border-t border-theme pt-4 space-y-3" data-page-node-id="Rt7yDn3wXsZcJjPm6Vu5QL">
+                                <p class="text-xs text-theme-muted" data-page-node-id="Pg9wBk6yUaAdEeLn8Xs4RN">侧边栏分组：控制标签、过滤器两个分组是否显示</p>
+                                <div class="flex items-center justify-between" data-page-node-id="Cn5vHm2sTbZfGgQk7Wy3PM">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Vq8wJd4xLcAbIiRl9Zu6SN">标签</label>
+                                    <select id="settings-sidebar-tags" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="Xs3nGf7yPvCdKkMm5Qt2RL">
+                                        <option value="show" data-page-node-id="Bm6wLh9zRxEfNnOo4Vu8TN">显示</option>
+                                        <option value="auto" data-page-node-id="Hq4yNj8vWzGhPpQq3Xs7SM">有内容时显示</option>
+                                        <option value="hide" data-page-node-id="Zk7vPm5xYbJjRrSs2Wu9QL">隐藏</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between" data-page-node-id="Ld9sQn6yWcHhTtUu1Xv8RN">
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Mj3wRp7zXdKkVvWw0Yt5SM">过滤器</label>
+                                    <select id="settings-sidebar-filters" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="Nk5yTs9vZfLlXxYy2Wq7QL">
+                                        <option value="show" data-page-node-id="Pm7vWq4xBnMmZzAa1Ys9RN">显示</option>
+                                        <option value="hide" data-page-node-id="Qn9xYs6wCpNnAbBb0Zt8SM">隐藏</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 命令面板 -->
                     <div id="settings-section-command" data-page-node-id="jPE1Wpa3jnNsZANMa5IEgz">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="JpTc0FflnKMmisZPw2xA98">命令面板</h3>

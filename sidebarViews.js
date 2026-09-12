@@ -939,15 +939,16 @@ function updateSettingsListSelect() {
     }
 }
 
-// ==================== 最近7天筛选 & 侧边栏高亮 ====================
+// ==================== 侧边栏固定项筛选（今天/明天/最近3天/最近7天）====================
 
-function filterNext7Days() {
+// 统一的固定时间筛选入口：切换筛选上下文 + 按该项的偏好视图渲染
+function _applySpecialTimeFilter(filter) {
     currentListId = null;
-    currentFilter = 'recent7days';
+    currentFilter = filter;
     currentTagIds = [];
     currentFilterId = null;
-    // 视图偏好：「最近7天」有偏好视图时切换到该视图
-    const prefView = _getSpecialViewPrefView('recent7days');
+    // 视图偏好：该项有偏好视图时切换到该视图
+    const prefView = _getSpecialViewPrefView(filter);
     if (prefView && currentView !== prefView) {
         switchView(prefView); // 内部已调用 renderView/renderLists/updateSidebarHighlight
     } else if (!prefView && VIEW_ORDER_DEFAULT.indexOf(currentView) === -1) {
@@ -963,12 +964,83 @@ function filterNext7Days() {
     renderFilters();
 }
 
+function filterToday() { _applySpecialTimeFilter('today'); }
+function filterTomorrow() { _applySpecialTimeFilter('tomorrow'); }
+function filterRecent3Days() { _applySpecialTimeFilter('recent3days'); }
+function filterNext7Days() { _applySpecialTimeFilter('recent7days'); }
+
+// ==================== 侧边栏清单配置（显隐） ====================
+// 配置存于 settings.sidebarItems，键与取值见 utils.js 的 SIDEBAR_ITEM_DEFAULTS。
+// 侧边栏固定项（按钮）与分组（标签/过滤器容器）的显隐统一由本段控制。
+
+// 固定项 key → 侧边栏按钮元素 id
+const SIDEBAR_ITEM_BTN_IDS = {
+    allTasks: 'sidebar-all-tasks-btn',
+    today: 'sidebar-today-btn',
+    tomorrow: 'sidebar-tomorrow-btn',
+    recent3days: 'sidebar-recent3days-btn',
+    recent7days: 'sidebar-next7days-btn',
+    summary: 'sidebar-summary-btn'
+};
+
+// 「有内容时显示」的内容量：time 项取对应筛选的任务数，标签取标签个数，其余恒为有内容
+function _sidebarItemContentCount(key, counts) {
+    if (key === 'tags') return (settings.tags || []).length;
+    if (key === 'filters' || key === 'summary') return 1;
+    const c = counts || _computeSidebarSpecialCounts();
+    return (c[key] === undefined) ? 1 : c[key];
+}
+
+// 综合「配置值 + 内容量」判断某项是否可见
+function _sidebarItemVisible(key, contentCount) {
+    const v = getSidebarItemVisibility(key);
+    if (v === 'hide') return false;
+    if (v === 'auto') return contentCount > 0;
+    return true;
+}
+
+// 应用侧边栏清单配置（设置保存后、数据加载后、任务数变化后均需调用）
+function applySidebarItemsConfig(counts) {
+    const c = counts || _computeSidebarSpecialCounts();
+    Object.keys(SIDEBAR_ITEM_BTN_IDS).forEach(function (key) {
+        const el = document.getElementById(SIDEBAR_ITEM_BTN_IDS[key]);
+        if (!el) return;
+        // 用 style.display 覆盖，避免与 renderTags/renderFilters 中的 classList 操作互相打架
+        el.style.display = _sidebarItemVisible(key, _sidebarItemContentCount(key, c)) ? '' : 'none';
+    });
+    const tagsSection = document.getElementById('sidebar-tags-section');
+    if (tagsSection) tagsSection.style.display = _sidebarItemVisible('tags', _sidebarItemContentCount('tags', c)) ? '' : 'none';
+    const filtersSection = document.getElementById('sidebar-filters-section');
+    if (filtersSection) filtersSection.style.display = _sidebarItemVisible('filters', 1) ? '' : 'none';
+}
+
+// 当前激活的侧边栏项 key（无对应项时返回 null）
+function _getActiveSidebarItemKey() {
+    if (currentFilterId) return 'filters';
+    if (currentTagIds && currentTagIds.length) return 'tags';
+    if (isSpecialTimeFilter()) return currentFilter;
+    if (currentView === 'summary') return 'summary';
+    if (!currentListId && !currentFilter) return 'allTasks';
+    return null;
+}
+
+// 当前激活项被隐藏（或「有内容时显示」但无内容）时，自动切回「所有任务」
+function redirectIfActiveSidebarItemHidden() {
+    const key = _getActiveSidebarItemKey();
+    if (!key) return;
+    if (_sidebarItemVisible(key, _sidebarItemContentCount(key))) return;
+    if (typeof filterAllTasks === 'function') filterAllTasks();
+}
+
+// ==================== 侧边栏高亮 ====================
+
 function updateSidebarHighlight() {
     // 更新侧边栏计数
     updateSidebarCounts();
 
     // 清除所有侧边栏按钮的高亮
-    const sidebarBtns = ['sidebar-all-tasks-btn', 'sidebar-next7days-btn', 'sidebar-summary-btn'];
+    const sidebarBtns = ['sidebar-all-tasks-btn', 'sidebar-today-btn', 'sidebar-tomorrow-btn',
+        'sidebar-recent3days-btn', 'sidebar-next7days-btn', 'sidebar-summary-btn'];
     sidebarBtns.forEach(id => {
         const btn = document.getElementById(id);
         if (btn) {
@@ -1006,8 +1078,9 @@ function updateSidebarHighlight() {
             const btn = document.getElementById(`sidebar-tag-${tagId}`);
             if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
         });
-    } else if (currentFilter === 'recent7days') {
-        const btn = document.getElementById('sidebar-next7days-btn');
+    } else if (isSpecialTimeFilter()) {
+        const btnId = SIDEBAR_ITEM_BTN_IDS[currentFilter];
+        const btn = btnId ? document.getElementById(btnId) : null;
         if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
     } else if (currentView === 'summary') {
         const btn = document.getElementById('sidebar-summary-btn');
@@ -1033,26 +1106,45 @@ function updateSidebarHighlight() {
     }
 }
 
-function updateSidebarCounts() {
-    // 所有任务：未完成且未归档的任务数
-    const archivedListIds = lists.filter(l => l.archived).map(l => l.id);
-    const allUncompleted = tasks.filter(t => !t.completed && !archivedListIds.includes(t.listId)).length;
-    const allCountEl = document.getElementById('sidebar-all-tasks-count');
-    if (allCountEl) allCountEl.textContent = allUncompleted > 0 ? allUncompleted : '';
+// 侧边栏固定项计数：未完成且未归档，落在各时间窗内的任务数（与 filterTasks 的过滤口径一致）
+function _computeSidebarSpecialCounts() {
+    const b = getDateBounds();
+    const archivedSet = new Set();
+    lists.forEach(function (l) { if (l.archived) archivedSet.add(l.id); });
+    const todayStart = b.todayStart.getTime();
+    const tomorrowStart = b.tomorrowStart.getTime();
+    const dayAfterStart = b.dayAfterTomorrowStart.getTime();
+    const recent3End = b.threeDaysLaterStart.getTime();
+    const recent7End = b.sevenDaysLaterEnd.getTime();
+    const counts = { allTasks: 0, today: 0, tomorrow: 0, recent3days: 0, recent7days: 0 };
+    for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        if (t.completed || archivedSet.has(t.listId)) continue;
+        counts.allTasks++;
+        if (!t.startTime) continue;
+        const d = new Date(t.startTime).getTime();
+        if (d < todayStart) continue;
+        if (d < tomorrowStart) counts.today++;
+        else if (d < dayAfterStart) counts.tomorrow++;
+        if (d < recent3End) counts.recent3days++;
+        if (d < recent7End) counts.recent7days++;
+    }
+    return counts;
+}
 
-    // 最近7天：未完成且未归档，7天内有开始时间的任务数
-    const now = new Date();
-    const sevenDaysLater = new Date(now);
-    sevenDaysLater.setDate(sevenDaysLater.getDate() + 7);
-    sevenDaysLater.setHours(23, 59, 59, 999);
-    const recent7Uncompleted = tasks.filter(t => {
-        if (t.completed || archivedListIds.includes(t.listId)) return false;
-        if (!t.startTime) return false;
-        const taskDate = new Date(t.startTime);
-        return taskDate >= now && taskDate <= sevenDaysLater;
-    }).length;
-    const recent7CountEl = document.getElementById('sidebar-next7days-count');
-    if (recent7CountEl) recent7CountEl.textContent = recent7Uncompleted > 0 ? recent7Uncompleted : '';
+function updateSidebarCounts() {
+    const counts = _computeSidebarSpecialCounts();
+    const setCount = function (id, n) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = n > 0 ? n : '';
+    };
+    setCount('sidebar-all-tasks-count', counts.allTasks);
+    setCount('sidebar-today-count', counts.today);
+    setCount('sidebar-tomorrow-count', counts.tomorrow);
+    setCount('sidebar-recent3days-count', counts.recent3days);
+    setCount('sidebar-next7days-count', counts.recent7days);
+    // 「有内容时显示」随任务数量变化实时生效
+    applySidebarItemsConfig(counts);
 }
 
 // ==================== 标签渲染与筛选 ====================
@@ -1165,6 +1257,8 @@ function renderTags() {
     }
     applySectionCollapse();
     if (editingTagId) ensureSectionVisible('tags');
+    // 标签数量变化后重新应用显隐配置（「有内容时显示」需即时响应）
+    if (typeof applySidebarItemsConfig === 'function') applySidebarItemsConfig();
 }
 
 function createTagEditForm(existingTag) {
@@ -1303,6 +1397,8 @@ function renderFilters() {
     appendFlatGap(container, filters.length, () => { if (draggingFilterId) doReorderFilters(draggingFilterId, filters.length); draggingFilterId = null; });
     applySectionCollapse();
     if (editingFilterId) ensureSectionVisible('filters');
+    // 过滤器数量变化后重新应用显隐配置
+    if (typeof applySidebarItemsConfig === 'function') applySidebarItemsConfig();
 }
 
 function matchFilterConditions(task, filter) {

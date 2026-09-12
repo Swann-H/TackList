@@ -763,6 +763,20 @@ const DEFAULT_SETTINGS = {
     priorityDisplayMode: 'checkbox',
     showSidebarExtras: true,
     showFocusButton: true,
+    // 侧边栏清单配置：控制侧边栏固定项与分组的显隐
+    // 取值：show = 显示 | auto = 有内容时显示 | hide = 隐藏
+    // 说明：「所有任务」「摘要」「过滤器」不支持 auto（下拉框仅提供 show/hide），
+    //       若历史数据出现 auto，按「有内容时显示」处理（所有任务/摘要恒视为有内容）。
+    sidebarItems: {
+        allTasks: 'show',      // 所有任务
+        today: 'hide',         // 今天
+        tomorrow: 'hide',      // 明天
+        recent3days: 'hide',   // 最近3天
+        recent7days: 'show',   // 最近7天
+        summary: 'show',       // 摘要
+        tags: 'show',          // 标签分组
+        filters: 'show'        // 过滤器分组
+    },
     bgFlowEffect: false,
     advancedParticleAnimation: true,
     // 平滑过渡动画：开启后任务加载、详情呼出、标记完成等交互播放过渡动画（性能消耗较大）
@@ -850,6 +864,19 @@ function applySettings(parsed) {
         settings.defaultTaskDate = settings.cmdDefaultDate;
         delete settings.cmdDefaultDate;
     }
+    // 迁移：侧边栏清单配置 sidebarItems（旧数据无此字段时补齐默认值；非法值回退默认）
+    (function migrateSidebarItems() {
+        const def = (typeof SIDEBAR_ITEM_DEFAULTS === 'object' && SIDEBAR_ITEM_DEFAULTS)
+            ? SIDEBAR_ITEM_DEFAULTS
+            : { allTasks: 'show', today: 'hide', tomorrow: 'hide', recent3days: 'hide', recent7days: 'show', summary: 'show', tags: 'show', filters: 'show' };
+        const src = (settings.sidebarItems && typeof settings.sidebarItems === 'object') ? settings.sidebarItems : {};
+        const out = {};
+        Object.keys(def).forEach(function (k) {
+            const v = src[k];
+            out[k] = (v === 'show' || v === 'auto' || v === 'hide') ? v : def[k];
+        });
+        settings.sidebarItems = out;
+    })();
     // 迁移：视图自定义 viewOrder / defaultHomeView
     if (!Array.isArray(settings.viewOrder) || settings.viewOrder.length === 0) {
         settings.viewOrder = [

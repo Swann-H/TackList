@@ -784,8 +784,8 @@ function renderTaskListView(container) {
         groups.forEach(g => { m[g.key] = true; });
         taskListGroupCollapsed = m;
     }
-    // 最近7天按天视图：任务时间只显示 HH:MM，避免与分组标题中的日期重复
-    const useShortTime = currentFilter === 'recent7days';
+    // 按天分组视图：任务时间只显示 HH:MM，避免与分组标题中的日期重复
+    const useShortTime = isSpecialTimeFilter();
 
     if (groups.length === 0) {
         _teardownTaskListVirtualScroll();
@@ -1035,7 +1035,7 @@ function toggleTaskListGroup(groupKey) {
         }
         if (lazyEl.dataset.populated !== 'true') {
             const groups = _taskListVirtualState ? _taskListVirtualState.groups : buildTaskListGroups();
-            const useShortTime = _taskListVirtualState ? _taskListVirtualState.useShortTime : (currentFilter === 'recent7days');
+            const useShortTime = _taskListVirtualState ? _taskListVirtualState.useShortTime : isSpecialTimeFilter();
             _populateTaskListGroupContent(lazyEl, groups, useShortTime);
             // 若该分组在 IO 观察中，填充后取消观察
             if (_taskListVirtualIO) _taskListVirtualIO.unobserve(lazyEl);

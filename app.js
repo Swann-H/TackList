@@ -280,6 +280,45 @@ function onVCDblClick(id) {
     renderViewCustomize();
 }
 
+// ==================== 侧边栏清单配置（设置面板） ====================
+// 与「新建任务默认值」等配置项一致：打开面板时回填，点「保存设置」时才写入 settings
+const SIDEBAR_ITEM_SETTING_IDS = {
+    allTasks: 'settings-sidebar-all-tasks',
+    today: 'settings-sidebar-today',
+    tomorrow: 'settings-sidebar-tomorrow',
+    recent3days: 'settings-sidebar-recent3days',
+    recent7days: 'settings-sidebar-recent7days',
+    summary: 'settings-sidebar-summary',
+    tags: 'settings-sidebar-tags',
+    filters: 'settings-sidebar-filters'
+};
+
+function _sidebarItemDefaultOf(key) {
+    const def = (typeof SIDEBAR_ITEM_DEFAULTS === 'object' && SIDEBAR_ITEM_DEFAULTS) ? SIDEBAR_ITEM_DEFAULTS : {};
+    return def[key] || 'show';
+}
+
+function loadSidebarItemsSettings() {
+    const cfg = settings.sidebarItems || {};
+    Object.keys(SIDEBAR_ITEM_SETTING_IDS).forEach(function (key) {
+        const el = document.getElementById(SIDEBAR_ITEM_SETTING_IDS[key]);
+        if (!el) return;
+        const v = cfg[key];
+        el.value = (v === 'show' || v === 'auto' || v === 'hide') ? v : _sidebarItemDefaultOf(key);
+    });
+}
+
+function saveSidebarItemsSettings() {
+    const cfg = {};
+    Object.keys(SIDEBAR_ITEM_SETTING_IDS).forEach(function (key) {
+        const el = document.getElementById(SIDEBAR_ITEM_SETTING_IDS[key]);
+        if (!el) return;
+        cfg[key] = (el.value === 'show' || el.value === 'auto' || el.value === 'hide')
+            ? el.value : _sidebarItemDefaultOf(key);
+    });
+    settings.sidebarItems = cfg;
+}
+
 function openSettingsModal() {
     document.getElementById('settings-default-list').value = settings.defaultListId || 'default';
     document.getElementById('settings-default-important').checked = settings.defaultImportant || false;
@@ -294,6 +333,7 @@ function openSettingsModal() {
     // 注：原「全局默认」（显示已完成/农历/专注按钮/无日期位置）已移至各视图配置面板，
     // 旧数据由 applySettings 内的迁移逻辑无感升级到各视图配置
     document.getElementById('settings-default-task-date').value = settings.defaultTaskDate || 'today';
+    loadSidebarItemsSettings();
     document.getElementById('settings-focus-duration').value = settings.focusDuration || 25;
     document.getElementById('settings-short-break-duration').value = settings.shortBreakDuration || 5;
     document.getElementById('settings-long-break-duration').value = settings.longBreakDuration || 15;
@@ -675,6 +715,7 @@ function saveSettings(silent) {
     settings.priorityDisplayMode = document.getElementById('settings-priority-display-mode').value;
     // 注：原「全局默认」4 项已移至各视图配置面板，此处不再读写
     settings.defaultTaskDate = document.getElementById('settings-default-task-date').value;
+    saveSidebarItemsSettings();
     settings.focusDuration = parseInt(document.getElementById('settings-focus-duration').value);
     settings.shortBreakDuration = parseInt(document.getElementById('settings-short-break-duration').value);
     settings.longBreakDuration = parseInt(document.getElementById('settings-long-break-duration').value);
@@ -765,6 +806,8 @@ function saveSettings(silent) {
 
     closeSettingsModal();
     applyDisplaySettings();
+    // 侧边栏清单配置：若当前激活项被隐藏（或「有内容时显示」但无内容），自动切回「所有任务」
+    if (typeof redirectIfActiveSidebarItemHidden === 'function') redirectIfActiveSidebarItemHidden();
     renderView();
     updateViewButtons();
     if (!silent) {
@@ -786,6 +829,9 @@ function applyDisplaySettings() {
     if (boringBtn) boringBtn.style.display = showExtras ? '' : 'none';
     const answerBtn = document.getElementById('sidebar-answer-book-btn');
     if (answerBtn) answerBtn.style.display = showExtras ? '' : 'none';
+
+    // 侧边栏清单配置：固定项（所有任务/今天/明天/最近3天/最近7天/摘要）与分组（标签/过滤器）显隐
+    if (typeof applySidebarItemsConfig === 'function') applySidebarItemsConfig();
 
     // 番茄专注：背景流动效果开关（开启时 body.bg-flow-strong 触发 background-position 强动画）
     document.body.classList.toggle('bg-flow-strong', settings.bgFlowEffect === true);
