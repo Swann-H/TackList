@@ -59,10 +59,14 @@ function switchView(view) {
     if (currentView === 'month' && view !== 'month') {
         closeMonthDayPopover();
     }
+    // 四象限展开态：离开视图时清空（FR5-5，不持久化；切回时从折叠态起步）
+    if (currentView === 'quadrant' && view !== 'quadrant' && typeof collapseQuadrantExpand === 'function') {
+        collapseQuadrantExpand();
+    }
     currentView = view;
     const mainHeader = document.querySelector('#main-content > header');
     if (mainHeader) {
-        if (view === 'summary' || view === 'countdown' || view === 'holiday') {
+        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync') {
             mainHeader.classList.add('hidden');
         } else {
             mainHeader.classList.remove('hidden');
@@ -285,6 +289,13 @@ function renderView() {
         case 'holiday':
             if (typeof renderHolidayView === 'function') {
                 renderHolidayView(container);
+            } else {
+                renderTaskListView(container);
+            }
+            break;
+        case 'calendarsync':
+            if (typeof renderCalendarSyncView === 'function') {
+                renderCalendarSyncView(container);
             } else {
                 renderTaskListView(container);
             }

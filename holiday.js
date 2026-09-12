@@ -469,10 +469,9 @@ function renderSectionView(group, section) {
         holidayDeleteConfirming.festival === section.festival;
 
     const deleteBtnClass = isDeleteConfirming
-        ? 'bg-red-600 text-white border-red-600'
+        ? 'bg-red-600 text-white border-red-600 dark:bg-red-700 dark:border-red-700'
         : 'border border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30';
     const deleteBtnTitle = isDeleteConfirming ? '确认删除' : '删除';
-    const deleteBtnIcon = isDeleteConfirming ? 'fa-check' : 'fa-trash';
     const editBtnClass = 'border border-accent text-accent hover:bg-accent-soft dark:border-accent-secondary dark:text-accent-light dark:hover:bg-accent-strong';
 
     // "其他"分组显示名称
@@ -489,7 +488,7 @@ function renderSectionView(group, section) {
                 <i class="fas fa-edit text-sm"></i>
             </button>
             <button onclick="deleteSection('${group.name}', '${section.type}', '${section.festival}')" class="flex items-center justify-center w-8 h-8 rounded-lg border ${deleteBtnClass} transition" title="${deleteBtnTitle}">
-                <i class="fas ${deleteBtnIcon} text-sm"></i>
+                <i class="fas fa-trash text-sm"></i>
             </button>
         </div>
     `;

@@ -30,7 +30,8 @@ DATA_FILE = os.path.join(DIRECTORY, 'data.json')
 DEFAULT_PORT = 14438
 HEALTH_TIMEOUT = 60          # 冷启动（杀毒扫描等）最长等待秒数
 ZOMBIE_CONFIRM_SECONDS = 10  # 判定占端口的进程僵死前的观察期
-LOCK_FRESH_SECONDS = 90      # 认为另一个启动器仍在工作的窗口期
+# 等待另一启动器释放锁的最长时间：需覆盖其"僵尸观察 + 杀进程等待 + 健康等待"全程
+LOCK_WAIT_SECONDS = ZOMBIE_CONFIRM_SECONDS + 10 + HEALTH_TIMEOUT + 30
 
 # pythonw 下 stdout/stderr 为 None，统一落到日志文件
 if sys.stdout is None:
@@ -183,11 +184,19 @@ def acquire_launch_lock():
         return False
 
 
-def launch_lock_stale():
+def launch_lock_holder_pid():
     try:
-        return time.time() - os.path.getmtime(LAUNCH_LOCK) > LOCK_FRESH_SECONDS
-    except OSError:
-        return True
+        with open(LAUNCH_LOCK, 'r') as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def launch_lock_stale():
+    """按持有者进程是否存活判断锁陈旧（锁文件里写有 PID）。
+    合法启动流程可耗时 100 秒以上，按文件 mtime 判断会误拆仍在工作的活锁。"""
+    holder = launch_lock_holder_pid()
+    return holder is None or not pid_alive(holder)
 
 
 def find_healthy_port(candidates, timeout=2):
@@ -238,6 +247,14 @@ def show_startup_failure(preferred, proc=None):
 
 
 def do_start(preferred):
+    # 双保险：等待锁 / 接手期间服务可能已被另一启动器拉起（含端口漂移场景），
+    # 此时直接开浏览器，绝不再 spawn 第二个实例
+    healthy = find_healthy_port({preferred, read_small_int(PORT_FILE)})
+    if healthy:
+        log('service already running on port %d' % healthy)
+        open_browser(healthy)
+        return 0
+
     file_port = read_small_int(PORT_FILE)
 
     # 清理失效的 pid/port 文件（对应进程已不存在，或端口上并非本服务）
@@ -279,6 +296,12 @@ def do_start(preferred):
             # 非 python 进程占用端口：不杀，交给 server.py 的端口漂移逻辑
 
     log('starting server...')
+    # 最后防线：僵尸观察期间占端口的服务可能已自愈，避免重复 spawn
+    healthy = find_healthy_port({preferred, read_small_int(PORT_FILE)})
+    if healthy:
+        log('service already running on port %d' % healthy)
+        open_browser(healthy)
+        return 0
     try:
         proc = spawn_server()
     except Exception as e:
@@ -322,18 +345,33 @@ def cmd_start():
         locked = acquire_launch_lock()
 
     if not locked:
-        # 另一个启动流程正在进行：等它拉起服务后直接开浏览器，不再另起进程
-        log('another launch in progress, waiting...')
-        deadline = time.time() + HEALTH_TIMEOUT
+        # 另一个启动流程正在进行：等它拉起服务后直接开浏览器，不再另起进程。
+        # 等待窗口需覆盖对方"僵尸观察 + 杀进程 + 健康等待"的最长耗时
+        holder = launch_lock_holder_pid()
+        log('another launch in progress (pid %s), waiting...' % holder)
+        deadline = time.time() + LOCK_WAIT_SECONDS
         while time.time() < deadline:
             time.sleep(1.5)
             healthy = find_healthy_port({preferred, read_small_int(PORT_FILE)})
             if healthy:
+                log('service ready on port %d, launched by pid %s' % (healthy, holder))
                 open_browser(healthy)
                 return 0
             if not os.path.exists(LAUNCH_LOCK):
+                # 对方已退出（服务仍未就绪，可能启动失败）：由我们接手重试
+                break
+            if launch_lock_stale():
+                # 对方进程已死亡但未清理锁：拆除陈旧锁后接手
+                log('stale lock from dead pid %s, taking over' % launch_lock_holder_pid())
+                remove_file(LAUNCH_LOCK)
                 break
         locked = acquire_launch_lock()
+        if not locked:
+            # 持锁进程仍存活且服务迟迟未就绪：宁可放弃也不无锁启动，
+            # 否则会双开服务，两个实例同时写 data.json 会互相覆盖
+            log('another launcher still holds the lock, giving up')
+            message_box(u'另一个 TackList 启动流程正在进行中，请稍候片刻后重试。')
+            return 1
 
     try:
         return do_start(preferred)

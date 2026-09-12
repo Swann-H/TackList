@@ -5,18 +5,19 @@ echo   Schedule Manager - Windows Install
 echo ========================================
 echo.
 
-:: Check Python
-where python >nul 2>&1
-if errorlevel 1 (
-    where python3 >nul 2>&1
-    if errorlevel 1 (
-        echo [ERROR] Python not found. Please install Python 3.8+
-        echo Download: https://www.python.org/downloads/
-        echo Check "Add Python to PATH" during installation
-        echo.
-        pause
-        exit /b 1
-    )
+:: Check Python (probe by running it: WindowsApps stub aliases pass "where"
+:: checks but cannot execute, and Python 2 must be rejected as well)
+set PYTHON_OK=
+python -c "import sys; assert sys.version_info[0]==3" >nul 2>&1 && set PYTHON_OK=1
+if not defined PYTHON_OK python3 -c "import sys; assert sys.version_info[0]==3" >nul 2>&1 && set PYTHON_OK=1
+if not defined PYTHON_OK py -c "import sys; assert sys.version_info[0]==3" >nul 2>&1 && set PYTHON_OK=1
+if not defined PYTHON_OK (
+    echo [ERROR] Python 3 not found. Please install Python 3.8+
+    echo Download: https://www.python.org/downloads/
+    echo Check "Add Python to PATH" during installation
+    echo.
+    pause
+    exit /b 1
 )
 
 echo [1/3] Checking Python...OK

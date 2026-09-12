@@ -90,9 +90,10 @@ function handleTaskDragEnd(e) {
 
 function handleTaskDrop(e, targetId, targetQuadrant = null) {
     e.preventDefault();
+    // 象限标题栏拖拽（无 draggedTaskId）：不拦截冒泡，交给卡片级 handleQuadrantCardDrop 调换象限位置
+    if (!draggedTaskId) return;
     e.stopPropagation();
-    
-    if (!draggedTaskId || draggedTaskId === targetId) return;
+    if (draggedTaskId === targetId) return;
     
     const task = tasks.find(t => t.id === draggedTaskId);
     if (!task) return;
@@ -130,13 +131,24 @@ function handleTaskDrop(e, targetId, targetQuadrant = null) {
 function handleWeekDragOver(event) {
     event.preventDefault();
 }
+// 外部订阅任务拖拽改期统一拦截（3.3.2）；外部覆盖字段不可本地改期
+function _blockExtTaskTimeEdit(task, ev) {
+    if (isExternalTask(task)) {
+        if (typeof showToast === 'function') showToast('外部订阅日程的时间请在原日历中修改', 'warning');
+        if (ev && typeof handleTaskDragEnd === 'function') handleTaskDragEnd(ev);
+        return true;
+    }
+    return false;
+}
+
 function handleWeekTimeDrop(event, dateStr) {
     event.preventDefault();
     if (!draggedTaskId) return;
-    
+
     const task = tasks.find(t => t.id === draggedTaskId);
     if (!task) return;
-    
+    if (_blockExtTaskTimeEdit(task, event)) return;
+
     const grid = event.currentTarget;
     const rect = grid.getBoundingClientRect();
     const y = event.clientY - rect.top;
@@ -179,6 +191,7 @@ function handleWeekAllDayDrop(event, dateStr) {
 
     const task = tasks.find(t => t.id === draggedTaskId);
     if (!task) return;
+    if (_blockExtTaskTimeEdit(task, event)) return;
 
     const oldDate = task.startTime ? new Date(task.startTime) : null;
 
@@ -199,10 +212,11 @@ function handleWeekAllDayDrop(event, dateStr) {
 function handleWeekDrop(e, dateStr) {
     e.preventDefault();
     if (!draggedTaskId) return;
-    
+
     const task = tasks.find(t => t.id === draggedTaskId);
     if (!task) return;
-    
+    if (_blockExtTaskTimeEdit(task, e)) return;
+
     const wasNoDate = !task.startTime;
     const oldDate = task.startTime ? new Date(task.startTime) : new Date(task.createdAt);
     const time = (!wasNoDate && !task.isAllDay) ? `${oldDate.getHours().toString().padStart(2, '0')}:${oldDate.getMinutes().toString().padStart(2, '0')}` : '';
@@ -228,10 +242,11 @@ function handleWeekDrop(e, dateStr) {
 function handleMonthDrop(e, dateStr) {
     e.preventDefault();
     if (!draggedTaskId) return;
-    
+
     const task = tasks.find(t => t.id === draggedTaskId);
     if (!task) return;
-    
+    if (_blockExtTaskTimeEdit(task, e)) return;
+
     const wasNoDate = !task.startTime;
     const oldDate = task.startTime ? new Date(task.startTime) : new Date(task.createdAt);
     if (wasNoDate) {
@@ -259,6 +274,11 @@ let draggedQuadrant = null;
 function handleQuadrantDragStart(e, key) {
     draggedQuadrant = key;
     e.target.classList.add('dragging');
+    // 拖拽取消（未在有效目标释放）时清理半透明态，避免残留到下次渲染
+    e.target.addEventListener('dragend', function () {
+        this.classList.remove('dragging');
+        document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    }, { once: true });
 }
 
 function handleQuadrantCardDrop(e, targetKey) {
@@ -323,7 +343,8 @@ function handleScheduleDrop(event) {
     const newDateStr = dayEl.dataset.dropDate;
     const task = tasks.find(t => t.id === draggedTaskId);
     if (!task) return;
-    
+    if (_blockExtTaskTimeEdit(task, event)) return;
+
     const wasNoDate = !task.startTime;
     const newDate = new Date(newDateStr);
     
@@ -681,7 +702,7 @@ function openTaskDetailModal(taskId) {
 
 // 平滑过渡动画：任务详情面板显示/隐藏的统一入口（设置项 smoothAnimations 开启时播放过渡动画）
 let _detailPanelHideTimer = null;
-function showDetailPanel() {
+function showDetailPanel(taskId) {
     const panel = document.getElementById('task-detail-panel');
     if (!panel) return;
     // 取消尚未完成的关闭动画，避免面板被延迟 hidden
@@ -689,21 +710,64 @@ function showDetailPanel() {
         clearTimeout(_detailPanelHideTimer);
         _detailPanelHideTimer = null;
     }
+    // 本次是否真的需要播入场动画：只有「由隐藏变可见」或「正在淡出途中被重新打开」才播。
+    // 面板已完整可见时（换看另一条任务）只是换内容，若再补一次 panel-fade-in，
+    // fxPanelIn 会整段重播 → 面板从右侧再滑入一次。
+    // 该 bug 在四象限展开态尤其明显：接管路径会摘掉 panel-fade-in（改由 VT 补间），
+    // 于是下一次「非接管」的换看就成了唯一一次 class 从无到有，动画必播一遍。
+    const wasHidden = panel.classList.contains('hidden');
+    const wasExiting = panel.classList.contains('panel-fade-out');
+    // 同步解除 hidden：后续 renderSubtasks()/autoResizeTextarea 需面板可见才能测量高度
     panel.classList.remove('hidden');
+    // 四象限展开态窄轨联动（PRD FR4 方案 B）：「象限重排 + 主区 margin 收缩」交给 qHookDetailPanelToggle，
+    // 与面板入场并入同一场 View Transition，同帧起跑、同时长同缓动
+    // （taskId 供其实现象限跟随与状态去重：点击缩略格任务时同步切换展开象限，换看任务时不重播象限动画）
+    const taken = typeof qHookDetailPanelToggle === 'function'
+        && qHookDetailPanelToggle(true, function () { document.body.classList.add('detail-panel-open'); }, taskId);
+    if (taken) {
+        // 面板入场由过渡的 panel 分组接管（滑入），避免 CSS 关键帧与快照补间相互叠加/相互遮蔽；
+        // fx-detail-open 亦由过渡回调内添加，保证主区收缩与卡片 morph 同步
+        panel.classList.remove('panel-fade-in', 'panel-fade-out');
+        return;
+    }
+    document.body.classList.add('detail-panel-open');
     if (settings.smoothAnimations === true) {
         // 主界面（含顶部右侧按钮）跟随面板收缩：CSS 过渡 margin-right
         document.body.classList.add('fx-detail-open');
         panel.classList.remove('panel-fade-out');
-        panel.classList.add('panel-fade-in');
+        if (wasHidden || wasExiting) {
+            // 强制重排后再加类，保证同一元素上入场动画必定从头播放
+            panel.classList.remove('panel-fade-in');
+            void panel.offsetWidth;
+            panel.classList.add('panel-fade-in');
+        }
     } else {
         document.body.classList.remove('fx-detail-open');
+        panel.classList.remove('panel-fade-in', 'panel-fade-out');
     }
 }
 function hideDetailPanel() {
+    _clearExtTaskDetailGuard(); // 关闭面板时移除横幅并恢复控件可编辑（3.3.2）
     const panel = document.getElementById('task-detail-panel');
     if (!panel) return;
+    // 四象限展开态窄轨联动（PRD FR4 方案 B）：面板的移除同样交给 qHookDetailPanelToggle，
+    // 与「象限重排 + 主区 margin 回弹」同场过渡；fx-detail-open 的摘除时机也交给回调，
+    // 保证 margin 过渡与卡片 morph 同帧起跑（此前同步摘除会让回弹早于快照补间，收尾出现跳变）
+    let taken = false;
+    if (typeof qHookDetailPanelToggle === 'function') {
+        taken = qHookDetailPanelToggle(false, function () {
+            // 旧快照已捕获（面板仍在其中）→ 立即退出实时 DOM，由旧快照分组滑出
+            panel.classList.add('hidden');
+            document.body.classList.remove('detail-panel-open');
+        });
+    }
+    if (taken) {
+        panel.classList.remove('panel-fade-in', 'panel-fade-out');
+        return;
+    }
     // 移除跟随类，主界面平滑回弹（与面板滑出动画同时进行）
     document.body.classList.remove('fx-detail-open');
+    document.body.classList.remove('detail-panel-open');
     if (settings.smoothAnimations === true && !panel.classList.contains('hidden')) {
         panel.classList.remove('panel-fade-in');
         panel.classList.add('panel-fade-out');
@@ -716,6 +780,67 @@ function hideDetailPanel() {
     } else {
         panel.classList.remove('panel-fade-in', 'panel-fade-out');
         panel.classList.add('hidden');
+    }
+}
+
+// ==================== 外部订阅任务详情面板守卫（3.3.2 分字段权限）====================
+const _EXT_DETAIL_LOCKED_IDS = ['detail-task-title', 'detail-task-notes', 'detail-task-description',
+    'detail-task-date', 'detail-task-time', 'detail-task-end-date', 'detail-task-end-time'];
+
+function _applyExtTaskDetailGuard(task) {
+    _clearExtTaskDetailGuard();
+    if (!task || !task.extSourceId) return;
+    // 信息横幅（动态注入，不依赖 HTML 静态结构，双入口自动一致）
+    const titleEl = document.getElementById('detail-task-title');
+    if (titleEl) {
+        const host = titleEl.closest('.p-4');
+        if (host && host.parentNode) {
+            const banner = document.createElement('div');
+            banner.id = 'detail-ext-banner';
+            banner.className = 'px-4 py-2 bg-cyan-50 dark:bg-cyan-900/20 border-b border-cyan-200 dark:border-cyan-800 text-xs text-cyan-700 dark:text-cyan-300 flex items-center gap-2 flex-shrink-0';
+            banner.innerHTML = '<i class="fas fa-lock"></i><span>外部订阅日程 · 来自 ' +
+                escapeHtml(getCalendarSubscriptionName(task.extSourceId)) +
+                '，任务标题、时间请在原日历中更改。</span>';
+            host.parentNode.insertBefore(banner, host);
+        }
+    }
+    // 锁定外部覆盖字段（readonly + 灰化；文字仍可选中复制，readonly 不阻止选择）
+    _EXT_DETAIL_LOCKED_IDS.forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.setAttribute('readonly', '');
+            el.classList.add('opacity-60', 'cursor-not-allowed');
+        }
+    });
+    // 禁用「设置时间」按钮（外部任务不允许展开时间设置面板）
+    const timeBtnText = document.getElementById('detail-time-btn-text');
+    if (timeBtnText) {
+        const timeBtn = timeBtnText.closest('button');
+        if (timeBtn) {
+            timeBtn.setAttribute('data-ext-locked', '1');
+            timeBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+    }
+}
+
+function _clearExtTaskDetailGuard() {
+    const banner = document.getElementById('detail-ext-banner');
+    if (banner) banner.remove();
+    _EXT_DETAIL_LOCKED_IDS.forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.removeAttribute('readonly');
+            el.classList.remove('opacity-60', 'cursor-not-allowed');
+        }
+    });
+    // 恢复「设置时间」按钮
+    const timeBtnText = document.getElementById('detail-time-btn-text');
+    if (timeBtnText) {
+        const timeBtn = timeBtnText.closest('button');
+        if (timeBtn) {
+            timeBtn.removeAttribute('data-ext-locked');
+            timeBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
     }
 }
 
@@ -742,6 +867,7 @@ function openTaskDetailPanel(taskId, readOnly = false) {
     currentDetailTaskId = taskId;
     isTimeRangeMode = !!task.endTime;
     detailReadOnly = readOnly;
+    _applyExtTaskDetailGuard(task); // 外部任务：注入横幅 + 锁定外部覆盖字段（3.3.2）
     
     const titleInput = document.getElementById('detail-task-title');
     titleInput.value = task.title;
@@ -958,7 +1084,7 @@ function openTaskDetailPanel(taskId, readOnly = false) {
     renderDetailTags(task);
     
     // 显示面板（必须在renderSubtasks之前，否则scrollHeight为0导致文本不显示）
-    showDetailPanel();
+    showDetailPanel(taskId);
     
     // 渲染子任务（在面板可见后，确保autoResizeTextarea能正确计算高度）
     if (currentTaskMode === 'subtasks') {
@@ -2122,7 +2248,7 @@ function populateDetailListSelect(selectedListId) {
     if (!pillsContainer) return;
     pillsContainer.innerHTML = '';
 
-    lists.filter(l => !l.archived && !l.isFolder).forEach(list => {
+    lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).forEach(list => {
         const isSelected = list.id === detailSelectedListId;
         const color = list.color || '#6b7280';
         const btn = document.createElement('button');
@@ -2192,6 +2318,7 @@ function populateDetailGroupSelect() {
  */
 function applyDetailInputsToTask(task, options = {}) {
     const fallbackTitle = options.fallbackTitle !== false;
+    const _isExtTask = !!task.extSourceId; // 外部任务：保护外部覆盖字段（5.2 字段合并表，UI 已 readonly，此为防御性兜底）
 
     // ── 第一段：只读 DOM，收集全部待写入值（不触碰 task）──
     // 标题：undefined 表示「不写」（空标题且面板保持打开）；空字符串表示「写空标题」（关闭时兜底）
@@ -2274,32 +2401,44 @@ function applyDetailInputsToTask(task, options = {}) {
     }
 
     // ── 第三段：校验通过，统一写入 ──
-    if (newTitle !== undefined) task.title = newTitle;
-    task.mode = mode;
-    if (description !== undefined) task.description = description;
-    if (notes !== undefined) task.notes = notes;
-    task.listId = listId;
-    task.groupId = groupId;
-    task.important = important;
-    task.urgent = urgent;
-    task.reminder = reminder;
-    task.repeat = repeat;
+    // 外部任务（_isExtTask）保护外部覆盖字段：title/notes/startTime/endTime/isAllDay/repeat 保留原值，
+    // 本地保留字段（mode/description/listId/groupId/important/urgent）仍写；reminder 强制 0（附录 A-5）。
+    // 变更追踪（changeFlag）：仅记录真实变化；无修改的换看任务由调用方跳过保存与整板重渲染
+    const _cf = options.changeFlag;
+    const _setIf = (cond, apply) => { if (cond) { apply(); if (_cf) _cf.changed = true; } };
+    if (!_isExtTask) {
+        if (newTitle !== undefined) _setIf(task.title !== newTitle, () => { task.title = newTitle; });
+        if (notes !== undefined) _setIf(task.notes !== notes, () => { task.notes = notes; });
+        _setIf(JSON.stringify(task.repeat || null) !== JSON.stringify(repeat || null), () => { task.repeat = repeat; });
 
-    if (newStartTime) {
-        task.startTime = newStartTime;
-        task.isAllDay = isAllDay;
-    } else {
-        delete task.startTime;
-        task.isAllDay = false;
-    }
-    // 手动修改时间后，清除顺延保留的原始时间
-    delete task._originalStartTime;
+        if (newStartTime) {
+            _setIf(task.startTime !== newStartTime || task.isAllDay !== isAllDay, () => {
+                task.startTime = newStartTime;
+                task.isAllDay = isAllDay;
+            });
+        } else {
+            _setIf(task.startTime !== undefined || task.isAllDay !== false, () => {
+                delete task.startTime;
+                task.isAllDay = false;
+            });
+        }
+        // 手动修改时间后，清除顺延保留的原始时间
+        _setIf(task._originalStartTime !== undefined, () => { delete task._originalStartTime; });
 
-    if (newEndTime) {
-        task.endTime = newEndTime;
-    } else {
-        delete task.endTime;
+        if (newEndTime) {
+            _setIf(task.endTime !== newEndTime, () => { task.endTime = newEndTime; });
+        } else {
+            _setIf(task.endTime !== undefined, () => { delete task.endTime; });
+        }
     }
+    _setIf(task.mode !== mode, () => { task.mode = mode; });
+    if (description !== undefined) _setIf(task.description !== description, () => { task.description = description; });
+    _setIf(task.listId !== listId, () => { task.listId = listId; });
+    _setIf(task.groupId !== groupId, () => { task.groupId = groupId; });
+    _setIf(task.important !== important, () => { task.important = important; });
+    _setIf(task.urgent !== urgent, () => { task.urgent = urgent; });
+    const newReminder = _isExtTask ? 0 : reminder;
+    _setIf(task.reminder !== newReminder, () => { task.reminder = newReminder; });
     return true;
 }
 
@@ -2314,19 +2453,23 @@ function saveTaskDetail() {
     const beforeTodayIncomplete = (typeof ee_countTodayIncomplete === 'function') ? ee_countTodayIncomplete() : -1;
 
     // 面板即将关闭：空标题兜底生成「未命名任务」
-    if (!applyDetailInputsToTask(task, { fallbackTitle: true })) return false;
+    // 变更检测：无修改时跳过保存与重渲染，仅执行关闭流程
+    const changeFlag = { changed: false };
+    if (!applyDetailInputsToTask(task, { fallbackTitle: true, changeFlag })) return false;
 
-    saveData();
-    renderView();
-    if (typeof renderTags === 'function') renderTags();
-    if (typeof renderLists === 'function') renderLists();
+    if (changeFlag.changed) {
+        saveData();
+        renderView();
+        if (typeof renderTags === 'function') renderTags();
+        if (typeof renderLists === 'function') renderLists();
+    }
     hideDetailPanel();
     currentDetailTaskId = null;
     detailOpenedFromPlan = false;
     if (planPanelOpen) renderPlanPanel();
 
-    // 修改日期可能导致今日任务清空，检查并触发"落日归山"彩蛋
-    if (beforeTodayIncomplete > 0 && typeof ee_checkSunsetHorizon === 'function') {
+    // 修改日期可能导致今日任务清空，检查并触发"落日归山"彩蛋（仅在真实落盘时）
+    if (changeFlag.changed && beforeTodayIncomplete > 0 && typeof ee_checkSunsetHorizon === 'function') {
         ee_checkSunsetHorizon();
     }
     return true;
@@ -2561,6 +2704,11 @@ function syncDetailPanelInputsToTask(task) {
 }
 
 function toggleDetailTimeMenu() {
+    // 外部订阅任务：不允许展开时间设置面板（3.3.2，按钮已禁用，此处兜底拦截）
+    if (currentDetailTaskId) {
+        const task = tasks.find(t => t.id === currentDetailTaskId);
+        if (task && typeof isExternalTask === 'function' && isExternalTask(task)) return;
+    }
     const menu = document.getElementById('detail-time-menu');
     menu.classList.toggle('hidden');
 }
@@ -3004,6 +3152,9 @@ function deleteTaskFromDetail() {
         easterEgg_onTaskDelete(taskEl);
 
         const deletedId = currentDetailTaskId;
+        const _extTask = tasks.find(t => t.id === deletedId);
+        const _isExt = !!(_extTask && _extTask.extSourceId);
+        if (_isExt && typeof recordExternalTaskDeletion === 'function') recordExternalTaskDeletion(_extTask);
         tasks = tasks.filter(t => t.id !== currentDetailTaskId);
         saveData();
         hideDetailPanel();
@@ -3018,7 +3169,7 @@ function deleteTaskFromDetail() {
         if (typeof renderTags === 'function') renderTags();
         renderView();
         if (planPanelOpen) renderPlanPanel();
-        showToast('任务已删除', 'success');
+        showToast(_isExt ? '已删除；该日程已加入屏蔽名单，重新同步后不会再出现' : '任务已删除', 'success');
         return;
     }
     
@@ -3069,7 +3220,10 @@ function saveTaskDetailWithoutClose() {
     const beforeTodayIncomplete = (typeof ee_countTodayIncomplete === 'function') ? ee_countTodayIncomplete() : -1;
 
     // 面板保持打开：空标题跳过不写（用户可能继续输入）
-    if (!applyDetailInputsToTask(task, { fallbackTitle: false })) return;
+    // 变更检测：无任何修改的换看任务跳过保存与重渲染（整板重建会打断在途动画/滚动位置，也是无谓开销）
+    const changeFlag = { changed: false };
+    if (!applyDetailInputsToTask(task, { fallbackTitle: false, changeFlag })) return;
+    if (!changeFlag.changed) return;
 
     saveData();
     renderView();
@@ -3168,6 +3322,13 @@ function setupDetailPickerCloseHandler() {
 function setupDetailPanelCloseHandler() {
     document.addEventListener('click', (e) => {
         if (e.target.closest('#task-detail-panel')) {
+            return;
+        }
+
+        // 点击落在已打开的全屏浮层（设置/新增任务/番茄专注/命令面板等）内部时，不算「点击外部」：
+        // 浮层内的普通元素（如设置面板左侧导航 <a>）此前会误关详情面板，并连带触发四象限展开态的
+        // View Transition（伪元素树位于 top layer）把整页快照动画盖到浮层之上，出现层级倒挂
+        if (typeof isEventInsideOpenOverlay === 'function' && isEventInsideOpenOverlay(e)) {
             return;
         }
 
@@ -3594,6 +3755,12 @@ function updatePriorityButtonText() {
 }
 
 function deleteTask(taskId) {
+    const task = tasks.find(t => t.id === taskId);
+    const isExt = !!(task && task.extSourceId);
+    // 外部订阅任务：删除时写黑名单（3.3.3），下次同步跳过该 UID 不再重建
+    if (isExt && typeof recordExternalTaskDeletion === 'function') {
+        recordExternalTaskDeletion(task);
+    }
     // 彩蛋：断舍离检测（在DOM移除前获取位置）
     const taskEl = document.querySelector(`[onclick*="toggleTaskComplete('${taskId}')"]`) ||
                    document.querySelector(`[onclick*="openTaskDetailPanel('${taskId}')"]`);
@@ -3613,7 +3780,7 @@ function deleteTask(taskId) {
     renderLists();
     if (typeof renderTags === 'function') renderTags();
     renderView();
-    showToast('任务已删除', 'success');
+    showToast(isExt ? '已删除；该日程已加入屏蔽名单，重新同步后不会再出现' : '任务已删除', 'success');
 }
 
 /**

@@ -79,6 +79,7 @@ document.addEventListener('click', function (e) {
 // ---------- 侧边栏分组折叠（清单默认展开，标签/过滤器默认折叠） ----------
 const _mobileSidebarSections = [
     { selector: '#lists-container', defaultCollapsed: false },
+    { selector: '#sidebar-calsync-container', defaultCollapsed: false },
     { selector: '#sidebar-tags-container', defaultCollapsed: true },
     { selector: '#sidebar-filters-container', defaultCollapsed: true }
 ];
@@ -848,6 +849,13 @@ function _onMobileBreakpointChange() {
         enhanceWeekViewMobile();
         enhanceMonthViewMobile();
         enhanceQuadrantViewMobile();
+        // 桌面已展开、视口缩入移动断点：清空展开态并重渲染，避免缩略渲染残留（PRD FR8-4）
+        if (typeof _quadrantExpandedKey !== 'undefined' && _quadrantExpandedKey) {
+            _quadrantExpandedKey = null;
+            if (typeof currentView !== 'undefined' && currentView === 'quadrant' && typeof renderView === 'function') {
+                renderView();
+            }
+        }
         if (typeof renderMobileBottomNav === 'function') renderMobileBottomNav();
     } else {
         // 还原桌面端状态

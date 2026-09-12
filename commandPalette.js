@@ -287,7 +287,7 @@ function buildCommandPaletteItems(type, query, value) {
     let items = type === 'list'
         // 「默认」清单不出现在候选中：不填 ~token 时任务本就归属默认清单，
         // 想改回默认直接双退格删掉 ~token 即可
-        ? lists.filter(l => !l.archived && !l.isFolder && l.id !== 'default').map(l => ({ name: l.name, color: l.color || '#6b7280' }))
+        ? lists.filter(l => !l.archived && !l.isFolder && l.id !== 'default' && !shouldHideExternalList(l)).map(l => ({ name: l.name, color: l.color || '#6b7280' }))
         : (settings.tags || []).map(t => ({ name: t.name, color: t.color || '#6b7280' }));
 
     const q = (query || '').toLowerCase();
@@ -625,9 +625,9 @@ function renderSearchResults(results, query) {
             <div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
                  data-list-id="${task.listId || 'default'}"
                  onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
-                <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, listColor)};"></div>
+                <div class="task-list-color-bar" style="background-color: ${_extTaskBarColor(task, getTaskBarColor(task, listColor))};"></div>
                 ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
-                <span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
+                ${_extTaskIconHtml(task)}<span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
                 ${renderFocusButton(task.id)}
                 <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                     ${tagCapsules}

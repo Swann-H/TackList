@@ -5,6 +5,7 @@
 - 操作系统：Windows 10 / Windows 11
 - Python：3.8 或更高版本
 - 浏览器：Edge / Chrome / Firefox（系统自带即可）
+- 可选依赖 `icalendar`：**只有「外部日历订阅」功能需要**，详见下文《可选：安装 icalendar》。企业内网用户或不需要该功能的用户请跳过，不影响任何其它功能。
 
 ## 安装步骤
 
@@ -60,6 +61,68 @@ start.bat stop      # 停止服务
 start.bat restart   # 重启服务
 ```
 
+## 可选：安装 icalendar（仅「外部日历订阅」需要）
+
+> **这是可选项，请先判断是否需要，不需要就不要安装。**
+
+### 这个依赖是干什么的？
+
+它只服务于一个功能：**外部日历订阅**（设置 → 外部日历订阅）——把滴答清单、Outlook 日历、Google 日历、iCloud 日历等外部日历的 `.ics` 订阅链接接入本系统，把外部日程拉取进来作为只读任务展示。
+
+**不安装的影响：** 只有点「立即同步」时会提示"缺少 icalendar 库"。任务、清单、日历视图、四象限、看板、番茄专注、倒计时、统计等**其它全部功能正常可用**，不报错、不影响数据。
+
+**安装前提：必须能访问互联网**（pip 需要从 PyPI 下载）。如果你处在**企业内网 / 无外网环境，请直接跳过本节**——这是预期行为，不是故障。
+
+### 一键安装（推荐）
+
+双击运行 `install_icalendar.bat`（或在命令行进入应用目录执行 `install_icalendar.bat`）。
+`install_icalendar.bat` 只是引导器，真正的逻辑在同目录的 `install_icalendar.ps1`（PowerShell）。
+
+脚本会自动：
+
+1. 找到系统里的 Python（`python` → 回退 `py -3`），并检查版本
+2. 检查 pip，缺失时自动尝试 `python -m ensurepip`
+3. 检测互联网连通性
+4. 优先使用同目录下的 `wheels/` 离线包；没有则联网安装
+5. 安装后 `import icalendar` 验证，并提示重启服务
+
+失败时会明确打印原因与处理建议，常见提示包括：
+
+| 提示 | 含义 / 处理 |
+|------|-------------|
+| 未找到 Python | 安装 Python 3.8+ 并勾选 "Add Python to PATH" |
+| Python 版本过低（< 3.7） | 需升级 Python；3.7 装 5.0.x、3.8/3.9 装 6.3.x、3.10+ 装 7.x |
+| pip 不可用 | 重装 Python 并勾选 pip，或手动执行 `python -m ensurepip` |
+| 无法访问 PyPI | 无外网 / 被代理拦截：请改用离线包（见下），或配置代理后重试 |
+| 权限不足 | 以管理员身份运行，或脚本会自动降级为 `--user` 安装到当前用户 |
+| 公司代理/证书报错 | 设置 `HTTPS_PROXY`，或加 `--trusted-host pypi.org --trusted-host files.pythonhosted.org` |
+
+手动安装等价命令（需要与启动服务的是**同一个 Python**）：
+
+```cmd
+python -m pip install --user icalendar
+python -c "import icalendar; print(icalendar.__version__)"
+start.bat restart
+```
+
+若装了多个 Python、自动检测挑错了版本，可显式指定：
+
+```cmd
+powershell -ExecutionPolicy Bypass -File install_icalendar.ps1 -PythonPath "C:\Python314\python.exe"
+```
+
+想先预览将要执行的命令而不实际安装，加 `-DryRun`：
+
+```cmd
+powershell -ExecutionPolicy Bypass -File install_icalendar.ps1 -DryRun
+```
+
+### 离线 / 内网环境怎么装
+
+1. 在一台**能上网**的机器上双击 `pack_icalendar_wheels.bat`，生成 `wheels/` 目录。
+2. 把 `wheels/` 拷贝到内网机，与 `install_icalendar.bat` 放在同一目录。
+3. 在内网机运行 `install_icalendar.bat`，脚本自动识别 `wheels/` 走离线安装，全程不联网。
+
 ## 文件说明
 
 | 文件 | 说明 |
@@ -67,6 +130,11 @@ start.bat restart   # 重启服务
 | `start.bat` | 启动/停止/重启服务（入口，实际逻辑在 launcher.py） |
 | `launcher.py` | 启动编排器：单实例锁、健康检查、防误杀、确认就绪后才开浏览器 |
 | `install.bat` | 安装桌面快捷方式和开机自启动 |
+| `install_icalendar.bat` | **可选**：一键安装 icalendar（外部日历订阅用，支持联网/离线），双击即可 |
+| `install_icalendar.ps1` | **可选**：上述 .bat 的实际安装逻辑（PowerShell，可用 `-PythonPath` / `-DryRun` 参数） |
+| `pack_icalendar_wheels.bat` | **可选**：在联网机打包 icalendar 离线安装包（生成 `wheels/`），双击即可 |
+| `pack_icalendar_wheels.ps1` | **可选**：上述打包 .bat 的实际逻辑（可用 `-TargetVersion 3.8` 指定目标机 Python 版本） |
+| `requirements-optional.txt` | **可选**：icalendar 依赖清单（按 Python 版本自动约束） |
 | `server.py` | 主服务程序 |
 | `start_server.py` | 备用离线服务程序（功能有限） |
 | `data.json` | 用户数据文件 |
@@ -80,7 +148,7 @@ start.bat restart   # 重启服务
 
 - 应用包含 `index_offline.html`，无需网络即可使用全部功能
 - 所有数据存储在本地 `data.json` 文件中
-- 无需安装任何第三方 Python 包
+- 系统运行无需任何第三方 Python 包；唯一的可选依赖 `icalendar` 只用于「外部日历订阅」功能（见上文），不安装也不影响离线使用
 
 ## 常见问题
 

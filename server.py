@@ -616,6 +616,327 @@ def play_notification_sound():
         except Exception:
             pass
 
+# ==================== 外部日历订阅(ICS)同步 ====================
+# 文档：《外部日历订阅同步需求说明书.md》5.2 核心同步算法
+try:
+    from icalendar import Calendar
+    HAS_ICALENDAR = True
+except ImportError:
+    HAS_ICALENDAR = False
+    Calendar = None
+
+# 常见 Windows 时区名 → IANA 映射（Outlook 导出的 TZID 常为 Windows 名）
+WINDOWS_TZID_MAP = {
+    "China Standard Time": "Asia/Shanghai",
+    "UTC": "UTC",
+    "GMT Standard Time": "Europe/London",
+    "Romance Standard Time": "Europe/Paris",
+    "W. Europe Standard Time": "Europe/Berlin",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "Singapore Standard Time": "Asia/Singapore",
+    "India Standard Time": "Asia/Kolkata",
+    "Korea Standard Time": "Asia/Seoul",
+    "Taipei Standard Time": "Asia/Taipei",
+    "US Eastern Standard Time": "America/New_York",
+    "Eastern Standard Time": "America/New_York",
+    "Central Standard Time": "America/Chicago",
+    "Mountain Standard Time": "America/Denver",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "Russia Time Zone 3": "Europe/Moscow",
+    "AUS Eastern Standard Time": "Australia/Sydney",
+}
+
+CALENDAR_SYNC_TIMEOUT = 10
+CALENDAR_SYNC_WINDOW_PAST_DAYS = 30
+CALENDAR_SYNC_WINDOW_FUTURE_DAYS = 180
+
+
+def _int_to_base36(n):
+    if n == 0:
+        return '0'
+    chars = '0123456789abcdefghijklmnopqrstuvwxyz'
+    out = ''
+    while n > 0:
+        n, r = divmod(n, 36)
+        out = chars[r] + out
+    return out
+
+
+def _gen_task_id():
+    """生成与前端 generateId 风格一致的 id（base36 时间戳 + 随机）"""
+    import random
+    import time
+    return _int_to_base36(int(time.time() * 1000)) + _int_to_base36(random.randint(0, 2**31 - 1)) + _int_to_base36(random.randint(0, 2**31 - 1))[:4]
+
+
+def _safe_iana(tzid):
+    """尝试把 tzid 当 IANA 名直接用"""
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tzid)
+        return tzid
+    except Exception:
+        return None
+
+
+def _resolve_ical_dt(prop):
+    """icalendar 的 vDDDTypes 属性 → (iso_string, is_all_day)。
+    全天事件返回 (date 的本地 00:00 iso, True)；带时间事件返回 (本地时区 iso, False)。"""
+    import datetime as _dt
+    if prop is None:
+        return None, True
+    dt = getattr(prop, 'dt', prop)
+    if dt is None:
+        return None, True
+    # 补时区：floating datetime 且带 TZID 参数（如 Windows 时区名）
+    if isinstance(dt, _dt.datetime) and dt.tzinfo is None:
+        tzid = None
+        params = getattr(prop, 'params', None)
+        if params:
+            tzid = params.get('TZID')
+        if tzid:
+            iana = WINDOWS_TZID_MAP.get(tzid) or _safe_iana(tzid)
+            if iana:
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.replace(tzinfo=ZoneInfo(iana))
+                except Exception:
+                    pass
+    if isinstance(dt, _dt.datetime):
+        local = dt.astimezone() if dt.tzinfo else dt
+        return local.isoformat(), False
+    elif isinstance(dt, _dt.date):
+        from datetime import datetime as _dtt
+        local = _dtt(dt.year, dt.month, dt.day)
+        return local.isoformat(), True
+    return None, True
+
+
+def _event_key(vevent):
+    """匹配键 = UID [+ RECURRENCE-ID]，详见需求说明书 5.2 / 6.1"""
+    uid = str(vevent.get('UID', '') or '')
+    rid_prop = vevent.get('RECURRENCE-ID')
+    if rid_prop is not None:
+        rid = getattr(rid_prop, 'dt', rid_prop)
+        rid_str = rid.isoformat() if hasattr(rid, 'isoformat') else str(rid)
+        return uid + '@' + rid_str
+    return uid
+
+
+def _convert_rrule(rrule_prop):
+    """ICS RRULE → TackList repeat 结构；无法转换返回 None（调用方追加警告）"""
+    if rrule_prop is None:
+        return None
+    try:
+        freq_list = rrule_prop.get('FREQ')
+        freq = str(freq_list[0]).upper() if freq_list else ''
+        interval_list = rrule_prop.get('INTERVAL')
+        interval = int(interval_list[0]) if interval_list else 1
+        if freq == 'DAILY':
+            if interval == 1:
+                return {'type': 'daily', 'repeatMode': 'startTime'}
+            return {'type': 'custom', 'interval': interval, 'unit': 'days', 'repeatMode': 'startTime'}
+        if freq == 'WEEKLY':
+            if interval == 1:
+                return {'type': 'weekly', 'repeatMode': 'startTime'}
+            return {'type': 'custom', 'interval': interval, 'unit': 'weeks', 'repeatMode': 'startTime'}
+        if freq == 'MONTHLY':
+            if interval == 1:
+                return {'type': 'monthly', 'repeatMode': 'startTime'}
+            return {'type': 'custom', 'interval': interval, 'unit': 'months', 'repeatMode': 'startTime'}
+        if freq == 'YEARLY':
+            if interval == 1:
+                return {'type': 'yearly', 'repeatMode': 'startTime'}
+            return {'type': 'custom', 'interval': interval, 'unit': 'years', 'repeatMode': 'startTime'}
+        return None
+    except Exception:
+        return None
+
+
+def _ensure_subscription_list(data, sub):
+    """确保订阅的专属清单存在（带 extSourceId 标记）；返回 list_id。详见附录 A-4。"""
+    lists = data.get('taskLists', [])
+    target_id = 'extlist_' + sub['id']
+    for lst in lists:
+        if lst.get('extSourceId') == sub['id']:
+            return lst['id']
+        if lst.get('id') == target_id:
+            lst['extSourceId'] = sub['id']  # 兜底补标记
+            return target_id
+    color_map = {'blue': '#3b82f6', 'green': '#10b981', 'red': '#ef4444',
+                 'purple': '#8b5cf6', 'orange': '#f59e0b', 'teal': '#14b8a6',
+                 'pink': '#ec4899', 'gray': '#9ca3af'}
+    new_list = {
+        'id': target_id,
+        'name': sub.get('name') or '订阅',
+        'color': color_map.get(sub.get('color'), sub.get('color') or '#3b82f6'),
+        'extSourceId': sub['id']
+    }
+    data.setdefault('taskLists', []).append(new_list)
+    return target_id
+
+
+def _fetch_ics(url):
+    """拉取 ICS 内容（webcal://→https://，仅 http/https）；返回 bytes"""
+    u = url.strip()
+    if u.lower().startswith('webcal://'):
+        u = 'https://' + u[len('webcal://'):]
+    parsed = urllib.parse.urlparse(u)
+    if parsed.scheme not in ('http', 'https'):
+        raise ValueError('仅支持 http/https 订阅链接')
+    req = urllib.request.Request(u, headers={'User-Agent': 'TackList/11.6'})
+    with urllib.request.urlopen(req, timeout=CALENDAR_SYNC_TIMEOUT) as resp:
+        return resp.read()
+
+
+def _do_calendar_sync():
+    """执行外部日历同步；返回 {added, updated, removed, results}。
+    全部订阅在一次读改写事务内完成，统一写盘、_data_version 仅 +1（附录 A-6）。"""
+    global _data_version
+    if not HAS_ICALENDAR:
+        return {'error': '缺少 icalendar 库，请在服务端运行 pip install icalendar',
+                'added': 0, 'updated': 0, 'removed': 0, 'results': []}
+
+    data = load_data_from_file()
+    settings = data.get('settings', {})
+    subs = settings.get('calendarSubscriptions', []) or []
+    enabled_subs = [s for s in subs if s.get('enabled', True)]
+    if not enabled_subs:
+        return {'added': 0, 'updated': 0, 'removed': 0, 'results': [], 'message': '没有启用的订阅'}
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=CALENDAR_SYNC_WINDOW_PAST_DAYS)
+    window_end = now + timedelta(days=CALENDAR_SYNC_WINDOW_FUTURE_DAYS)
+
+    results = []
+    total_added = total_updated = total_removed = 0
+    data_changed = False
+
+    for sub in enabled_subs:
+        sub_id = sub['id']
+        # 兼容旧字符串格式和新对象格式 {uid, title, startTime, deletedAt}
+        deleted_uids = set()
+        for d in (sub.get('extDeletedUids') or []):
+            if isinstance(d, dict):
+                if d.get('uid'):
+                    deleted_uids.add(d['uid'])
+            elif isinstance(d, str):
+                deleted_uids.add(d)
+        result = {'id': sub_id, 'name': sub.get('name', ''), 'added': 0, 'updated': 0, 'removed': 0, 'error': ''}
+        try:
+            raw = _fetch_ics(sub['url'])
+            cal = Calendar.from_ical(raw)
+        except Exception as e:
+            result['error'] = '拉取/解析失败：%s' % str(e)
+            sub['lastSyncAt'] = now.isoformat().replace('+00:00', 'Z')
+            sub['lastSyncError'] = result['error']
+            results.append(result)
+            data_changed = True
+            continue
+
+        # 解析所有 VEVENT（含黑名单跳过、CANCELLED 跳过、时间窗口过滤）
+        events = []
+        for comp in cal.walk('VEVENT'):
+            status = str(comp.get('STATUS', '') or '').upper()
+            if status == 'CANCELLED':
+                continue
+            ev_uid = str(comp.get('UID', '') or '')
+            if ev_uid in deleted_uids:
+                continue
+            start_iso, _is_all_day = _resolve_ical_dt(comp.get('DTSTART'))
+            if not start_iso:
+                continue
+            try:
+                start_dt = parse_iso_datetime(start_iso)
+            except Exception:
+                continue
+            if start_dt < window_start or start_dt > window_end:
+                continue
+            events.append(comp)
+
+        # 隔离比对池：该订阅的全部已有任务
+        tasks = data.get('tasks', [])
+        local_pool = {}
+        for t in tasks:
+            if t.get('extSourceId') == sub_id:
+                key = t.get('extEventUid', '')
+                if key:
+                    local_pool[key] = t
+
+        list_id = _ensure_subscription_list(data, sub)
+
+        for comp in events:
+            key = _event_key(comp)
+            title = str(comp.get('SUMMARY', '') or '').strip() or '(无标题)'
+            desc = str(comp.get('DESCRIPTION', '') or '')
+            start_iso, is_all_day = _resolve_ical_dt(comp.get('DTSTART'))
+            end_iso, _ = _resolve_ical_dt(comp.get('DTEND'))
+            rrule = _convert_rrule(comp.get('RRULE'))
+            notes = desc
+            if rrule is None and comp.get('RRULE') is not None:
+                notes = (desc + '\n' if desc else '') + '[⚠️ 同步提示：此任务包含复杂的重复规则，TackList 已将其简化显示]'
+            if key in local_pool:
+                t = local_pool.pop(key)
+                t['title'] = title
+                t['startTime'] = start_iso
+                if end_iso:
+                    t['endTime'] = end_iso
+                else:
+                    t.pop('endTime', None)
+                t['isAllDay'] = is_all_day
+                t['notes'] = notes
+                t['reminder'] = 0
+                t['repeat'] = rrule
+                # completed / completedAt / tags / important / urgent / listId / progress 保留本地
+                result['updated'] += 1
+                total_updated += 1
+            else:
+                new_t = {
+                    'id': _gen_task_id(),
+                    'title': title,
+                    'listId': list_id,
+                    'important': False,
+                    'urgent': False,
+                    'notes': notes,
+                    'tags': [],
+                    'startTime': start_iso,
+                    'endTime': end_iso,
+                    'isAllDay': is_all_day,
+                    'reminder': 0,
+                    'repeat': rrule,
+                    'completed': False,
+                    'createdAt': now.isoformat().replace('+00:00', 'Z'),
+                    'mode': 'text',
+                    'description': '',
+                    'subtasks': [{'id': _gen_task_id(), 'text': '', 'completed': False, 'originalOrder': 0}],
+                    'progress': 0,
+                    'extSourceId': sub_id,
+                    'extEventUid': key,
+                }
+                tasks.append(new_t)
+                result['added'] += 1
+                total_added += 1
+
+        # 清理云端已删除（local_pool 剩余）；黑名单任务已不在 tasks 中（用户删除时已移除）
+        removed_keys = list(local_pool.keys())
+        if removed_keys:
+            removed_set = set(id(local_pool[k]) for k in removed_keys)
+            data['tasks'] = [t for t in tasks if id(t) not in removed_set]
+            result['removed'] = len(removed_keys)
+            total_removed += len(removed_keys)
+
+        sub['lastSyncAt'] = now.isoformat().replace('+00:00', 'Z')
+        sub['lastSyncError'] = ''
+        results.append(result)
+        data_changed = True
+
+    if data_changed:
+        save_data_to_file(data)
+        _data_version += 1
+
+    return {'added': total_added, 'updated': total_updated, 'removed': total_removed, 'results': results}
+
+
 def check_task_reminders():
     global notified_task_ids
     try:
@@ -1370,7 +1691,7 @@ class TodoHandler(BaseHTTPRequestHandler):
                                 "[Desktop Entry]\n"
                                 "Type=Application\n"
                                 "Name=Schedule Manager\n"
-                                "Exec=%s/start.sh\n"
+                                "Exec=\"%s/autostart.sh\"\n"
                                 "Icon=%s/favicon.ico\n"
                                 "Terminal=false\n"
                                 "Categories=Utility;\n"
@@ -2106,6 +2427,20 @@ class TodoHandler(BaseHTTPRequestHandler):
                 with snoozed_reminders_lock:
                     snoozed_reminders[task_id] = remind_after
                 self.send_json_response({"status": "ok", "remindAfter": remind_after})
+                return
+
+            # 外部日历订阅同步（仅在线版；详见《外部日历订阅同步需求说明书.md》）
+            if path == '/api/calendar-sync':
+                try:
+                    sync_result = _do_calendar_sync()
+                    if 'error' in sync_result:
+                        self.send_error_json(sync_result['error'], 500)
+                    else:
+                        self.send_json_response({'status': 'ok', 'version': _data_version, 'sync': sync_result})
+                except Exception as e:
+                    print("Calendar sync error: %s" % str(e))
+                    sys.stdout.flush()
+                    self.send_error_json("同步失败：%s" % str(e), 500)
                 return
 
             self.send_error_json("Not found", 404)

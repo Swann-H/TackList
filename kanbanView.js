@@ -87,6 +87,16 @@ function kanbanDescendantListIds(folderId, acc) {
 
 function kanbanListContext() {
     if (currentListId) {
+        // 外部日历订阅聚合视图：currentListId 形如 __extsrc__:<subId>
+        // 与 utils.js filterTasks 同前缀约定；listSet = base 任务（task.extSourceId===subId）所在的所有清单 ids
+        // （含订阅专属清单，因为聚合视图下它本身就是一列；非聚合模式才被 shouldHideExternalList 隐藏）
+        const _extSrcPrefix = '__extsrc__:';
+        if (currentListId.indexOf(_extSrcPrefix) === 0) {
+            const extSubId = currentListId.slice(_extSrcPrefix.length);
+            const set = new Set();
+            tasks.forEach(t => { if (t.extSourceId === extSubId && t.listId) set.add(t.listId); });
+            return { mode: 'extsrc', selectedList: null, extSubId: extSubId, listSet: set };
+        }
         const list = getList(currentListId);
         if (list && list.isFolder) {
             const set = kanbanDescendantListIds(currentListId);
@@ -97,7 +107,7 @@ function kanbanListContext() {
         }
     }
     const set = new Set();
-    lists.forEach(l => { if (!l.archived && !l.isFolder) set.add(l.id); });
+    lists.forEach(l => { if (!l.archived && !l.isFolder && !shouldHideExternalList(l)) set.add(l.id); });
     return { mode: 'lists', selectedList: null, listSet: set };
 }
 
@@ -189,7 +199,7 @@ function kanbanPriorityColumns(base) {
 function kanbanTagSubColumns(parentCol, tagTasks, cfg) {
     const sub = cfg.tagSubGroup;
     if (sub === 'list') {
-        return lists.filter(l => !l.archived && !l.isFolder).map(l => ({
+        return lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).map(l => ({
             key: `${parentCol.key}|sub:sublist:${l.id}`, title: l.name, type: 'tagSubList',
             tagId: parentCol.tagId, listId: l.id, tasks: tagTasks.filter(t => t.listId === l.id)
         }));
@@ -237,6 +247,10 @@ function computeKanbanColumns() {
     let base;
     if (ctx.mode === 'groups') {
         base = filterTasks(tasks, { includeCompleted: cfg.showCompleted !== false }); // 已按 currentListId 收窄到该清单
+    } else if (ctx.mode === 'extsrc') {
+        // 外部源聚合视图：filterTasks 已按 currentListId=__extsrc__: 过滤（utils.js:820-932）
+        // 不能用 kanbanBaseTasks（会把 currentListId 临时置 null 失去聚合）
+        base = filterTasks(tasks, { includeCompleted: cfg.showCompleted !== false });
     } else {
         base = kanbanBaseTasks(ctx.listSet);
     }
@@ -357,7 +371,7 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
     return `
         <div class="kanban-task-row task-row flex mb-2.5">
             <div class="kanban-card group relative ${colors.bg} rounded-r-lg p-2.5 flex-1 min-w-0 cursor-pointer hover:opacity-80 transition flex items-center gap-2.5 ${task.completed ? 'opacity-55' : ''}"
-                 style="border-left: 4px solid ${getTaskBarColor(task, listColor)};"
+                 style="border-left: 4px solid ${_extTaskBarColor(task, getTaskBarColor(task, listColor))};"
                  onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
                  draggable="true" data-task-id="${task.id}"
                  ondragstart="handleTaskDragStart(event, '${task.id}')"
@@ -366,7 +380,7 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
                 <div class="flex items-start gap-2 flex-1 min-w-0">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-1.5 flex-wrap text-xs text-theme-muted mb-1.5">${meta}</div>
-                        <div class="text-sm font-medium leading-snug break-words ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">${escapeHtml(task.title || '新任务')}</div>
+                        <div class="text-sm font-medium leading-snug break-words ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} flex items-center">${_extTaskIconHtml(task)}${escapeHtml(task.title || '新任务')}</div>
                         ${details ? `<div class="mt-1.5">${details}</div>` : ''}
                         ${tagHtml ? `<div class="mt-1.5">${tagHtml}</div>` : ''}
                     </div>
@@ -670,6 +684,11 @@ function setPriority(task, level) {
 }
 
 function setTaskTimeBucket(task, bucket) {
+    // 外部订阅任务：时间由外部日历覆盖，本地拖拽改期一律拦截（3.3.2）
+    if (isExternalTask(task)) {
+        if (typeof showToast === 'function') showToast('外部订阅日程的时间请在原日历中修改', 'warning');
+        return false;
+    }
     if (bucket === 'nodate') {
         if (task.startTime !== null) { task.startTime = null; delete task.endTime; return true; }
         return false;
@@ -1038,7 +1057,7 @@ function openKanbanColumnMenu(e, colKey) {
         baseItems.push({ label: '在右侧增加分组', icon: 'fa-arrow-right', onClick: () => addKanbanGroup(leaf.listId, {}) });
     } else if (leaf.type === 'list') {
         baseItems.push({ label: '重命名清单', icon: 'fa-pen', onClick: () => renameKanbanList(leaf.listId) });
-        const targetLists = lists.filter(l => !l.archived && l.id !== leaf.listId);
+        const targetLists = lists.filter(l => !l.archived && l.id !== leaf.listId && !shouldHideExternalList(l));
         if (targetLists.length) {
             baseItems.push({
                 label: '移动到…', icon: 'fa-arrow-right', nav: true,

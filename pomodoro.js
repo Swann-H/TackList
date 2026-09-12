@@ -931,7 +931,7 @@ function renderPomodoroPage() {
                 return `
                 <div class="pomodoro-glass-item flex items-start gap-2 py-2.5 px-3 rounded-r-lg cursor-pointer group relative"
                      data-record-idx="${recordIdx}"
-                     style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                     style="border-left: 4px solid ${_extTaskBarColor(task, getTaskBarColor(task, listColor))}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                     <i class="fas fa-clock text-sm text-theme-muted flex-shrink-0" style="width: 0.875rem; margin-top: 0.125rem;"></i>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center justify-between">
@@ -947,7 +947,7 @@ function renderPomodoroPage() {
                             </div>
                         </div>
                         <div class="flex items-center gap-2 mt-0.5">
-                            <span class="text-sm text-theme-primary truncate">${taskDesc}</span>
+                            <span class="text-sm text-theme-primary truncate flex items-center">${task ? _extTaskIconHtml(task) : ''}${taskDesc}</span>
                             ${listName ? `<span class="flex items-center gap-1 flex-shrink-0 text-xs text-theme-secondary"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span><span>${listName}</span></span>` : ''}
                         </div>
                     </div>
@@ -1067,7 +1067,7 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
             ${dividerHtml}
             <div onclick="${onClickFn(task.id)}"
                  class="flex items-start gap-3 py-2.5 px-3 rounded-r-lg transition cursor-pointer ${isCurrent ? 'pomodoro-task-selected' : 'hover:brightness-95'} ${task.completed ? 'opacity-55' : ''}"
-                 style="border-left: 4px solid ${getTaskBarColor(task, listColor)}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                 style="border-left: 4px solid ${_extTaskBarColor(task, getTaskBarColor(task, listColor))}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                 ${renderTaskCheckbox(task, { extraClass: 'mt-1 flex-shrink-0' })}
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 text-xs text-theme-secondary mb-0.5">
@@ -1075,7 +1075,7 @@ function renderPomodoroTaskList(onClickFn, currentTaskId) {
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${escapeHtml(list.name)}</span>` : ''}
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                     </div>
-                    <div class="text-sm ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} truncate">${pinnedTaskId === task.id ? '<i class="fas fa-thumbtack text-theme-muted text-xs mr-1"></i>' : ''}${escapeHtml(task.title || '新任务')}</div>
+                    <div class="text-sm ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} truncate flex items-center">${pinnedTaskId === task.id ? '<i class="fas fa-thumbtack text-theme-muted text-xs mr-1"></i>' : ''}${_extTaskIconHtml(task)}${escapeHtml(task.title || '新任务')}</div>
                 </div>
             </div>
             `;

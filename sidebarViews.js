@@ -36,6 +36,20 @@ document.addEventListener('click', function(e) {
 // ==================== 清单树（多级层级）辅助 ====================
 function getList(id) { return lists.find(l => l.id === id); }
 
+// 选中外部日历订阅筛选视图（3.4）：按 extSourceId 跨清单聚合；所有主视图均支持聚合（含看板）
+function selectExtSourceView(subId) {
+    const _supported = ['task', 'schedule', 'week', 'month', 'quadrant', 'kanban'];
+    if (_supported.indexOf(currentView) === -1 && typeof userSwitchView === 'function') {
+        userSwitchView('task');
+    }
+    currentListId = '__extsrc__:' + subId;
+    currentTagIds = [];
+    currentFilter = '';
+    currentFilterId = null;
+    renderView();
+    updateSidebarHighlight();
+}
+
 // 将 lists 重排为树的前序遍历，保证父节点总在其子节点之前；
 // 同时把 parentId 指向不存在节点的孤儿回退顶层，避免悬空引用。
 function normalizeListsOrder() {
@@ -102,12 +116,41 @@ function renderLists(force) {
     const uncompletedMap = {};
     tasks.forEach(t => { if (!t.completed) uncompletedMap[t.listId] = (uncompletedMap[t.listId] || 0) + 1; });
 
-    const topLevel = lists.filter(l => !l.archived && (!l.parentId || !getList(l.parentId)));
+    const topLevel = lists.filter(l => !l.archived && (!l.parentId || !getList(l.parentId)) && !shouldHideExternalList(l));
     for (let i = 0; i < topLevel.length; i++) {
         appendListGap(container, null, i);
         renderListNode(topLevel[i], 0, container, uncompletedMap);
     }
     appendListGap(container, null, topLevel.length);
+
+    // 外部日历订阅筛选入口（3.4）：独立分组（与清单同级）。设计（需求说明书 A-1 / DEFAULT_SETTINGS 注释）：
+    // 在线版有订阅即始终显示分组；离线版跟随「显示外部日历」开关（关闭时同时过滤视图中的外部任务）
+    const _subs = (settings && Array.isArray(settings.calendarSubscriptions)) ? settings.calendarSubscriptions : [];
+    const _showExtCal = window._WEB_VERSION === 'online' || !settings || settings.showExternalCalendars !== false;  // 在线始终显示
+    const calsyncSection = document.getElementById('sidebar-calsync-section');
+    const calsyncContainer = document.getElementById('sidebar-calsync-container');
+    if (calsyncSection && calsyncContainer) {
+        if (_subs.length > 0 && _showExtCal) {
+            calsyncSection.classList.remove('hidden');
+            calsyncContainer.innerHTML = '';
+            _subs.forEach(function (sub) {
+                const btn = document.createElement('button');
+                const extKey = '__extsrc__:' + sub.id;
+                const active = currentListId === extKey;
+                btn.className = 'w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition flex items-center gap-2 ' +
+                    (active ? 'bg-accent-soft text-accent-dark' : 'text-theme-primary') +
+                    (sub.enabled ? '' : ' opacity-50');
+                const hex = (typeof getCalendarSubscriptionColorHex === 'function') ? getCalendarSubscriptionColorHex(sub.id) : '#9ca3af';
+                btn.innerHTML = '<i class="fas fa-calendar-day w-3 text-center text-xs" style="color:' + hex + '"></i>' +
+                    '<span class="sidebar-text flex-1 truncate">' + escapeHtml(sub.name || '订阅') + '</span>';
+                btn.title = sub.enabled ? ('来自 ' + (sub.name || '外部日历')) : '已停用';
+                btn.onclick = function () { selectExtSourceView(sub.id); };
+                calsyncContainer.appendChild(btn);
+            });
+        } else {
+            calsyncSection.classList.add('hidden');
+        }
+    }
 
     // 已归档清单入口（放在清单分组末位，"新建清单"按钮之前）
     const archivedLists = lists.filter(l => l.archived);
@@ -132,6 +175,8 @@ function renderLists(force) {
     updateSettingsListSelect();
     updateSidebarHighlight();
     applySectionCollapse();
+    // 右上角同步按钮显隐跟随渲染刷新（仅在线版定义该函数）：初始加载后即显示，无需等待 30s 定时刷新
+    if (typeof updateCalendarSyncBtnVisibility === 'function') updateCalendarSyncBtnVisibility();
     if (editingListId) ensureSectionVisible('lists');
 }
 
@@ -212,7 +257,7 @@ function renderListNode(node, depth, container, uncompletedMap) {
         childContainer.className = 'mt-1';
         childContainer.style.paddingLeft = '0px';
         childContainer.style.boxShadow = 'inset 3px 0 0 0 var(--border-color, rgba(128,128,128,0.25))';
-        const children = lists.filter(l => l.parentId === node.id && !l.archived);
+        const children = lists.filter(l => l.parentId === node.id && !l.archived && !shouldHideExternalList(l));
         for (let i = 0; i < children.length; i++) {
             appendListGap(childContainer, node.id, i);
             renderListNode(children[i], depth + 1, childContainer, uncompletedMap);
@@ -310,7 +355,7 @@ function toggleFolder(folderId) {
 // ==================== 侧边栏分区（清单/标签/过滤器）展开/收起 ====================
 // 折叠状态持久化到 localStorage，刷新后保持
 const SECTION_COLLAPSE_KEY = 'tacklist_section_collapsed';
-let sectionCollapsed = { lists: false, tags: false, filters: false };
+let sectionCollapsed = { lists: false, tags: false, filters: false, calsync: false };
 (function loadSectionCollapse() {
     try {
         const saved = JSON.parse(localStorage.getItem(SECTION_COLLAPSE_KEY) || '{}');
@@ -318,6 +363,7 @@ let sectionCollapsed = { lists: false, tags: false, filters: false };
             sectionCollapsed.lists = !!saved.lists;
             sectionCollapsed.tags = !!saved.tags;
             sectionCollapsed.filters = !!saved.filters;
+            sectionCollapsed.calsync = !!saved.calsync;
         }
     } catch (_) {}
 })();
@@ -332,9 +378,9 @@ function toggleSectionCollapse(key) {
 }
 // 依据状态设置各分区容器可见性与头部箭头
 function applySectionCollapse() {
-    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
-    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
-    ['lists', 'tags', 'filters'].forEach(key => {
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container', calsync: 'sidebar-calsync-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section', calsync: 'sidebar-calsync-header' };
+    ['lists', 'tags', 'filters', 'calsync'].forEach(key => {
         const c = document.getElementById(containers[key]);
         if (c) c.classList.toggle('hidden', !!sectionCollapsed[key]);
         const h = document.getElementById(headers[key]);
@@ -346,8 +392,8 @@ function applySectionCollapse() {
 }
 // 编辑某分区时强制展开（不影响已保存的折叠状态）
 function ensureSectionVisible(key) {
-    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
-    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container', calsync: 'sidebar-calsync-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section', calsync: 'sidebar-calsync-header' };
     const c = document.getElementById(containers[key]);
     if (c) c.classList.remove('hidden');
     const h = document.getElementById(headers[key]);
@@ -868,7 +914,7 @@ function updateTaskListSelect() {
     const select = document.getElementById('task-list');
     if (select) {
         select.innerHTML = '';
-        lists.filter(l => !l.archived && !l.isFolder).forEach(list => {
+        lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).forEach(list => {
             const option = document.createElement('option');
             option.value = list.id;
             option.textContent = list.name;
@@ -881,7 +927,7 @@ function updateSettingsListSelect() {
     const select = document.getElementById('settings-default-list');
     if (select) {
         select.innerHTML = '';
-        lists.filter(l => !l.archived && !l.isFolder).forEach(list => {
+        lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).forEach(list => {
             const option = document.createElement('option');
             option.value = list.id;
             option.textContent = list.name;
@@ -1344,7 +1390,7 @@ function createFilterEditForm(existingFilter) {
     form.setAttribute('data-edit-form', 'filter');
 
     const c = existingFilter ? (existingFilter.conditions || {}) : {};
-    const activeLists = lists.filter(l => !l.archived && !l.isFolder);
+    const activeLists = lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l));
     const allTags = settings.tags || [];
 
     form.innerHTML = `

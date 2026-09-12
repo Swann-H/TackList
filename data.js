@@ -726,6 +726,10 @@ const DEFAULT_SETTINGS = {
     defaultUrgent: false,
     defaultDuration: 30,
     defaultView: 'task',
+    // 外部日历订阅(ICS)：详见《外部日历订阅同步需求说明书.md》4.1
+    calendarSubscriptions: [],
+    // 离线版「显示外部日历」开关：关闭时隐藏侧边栏外部日历分组，并过滤各视图中的外部任务；在线版始终显示（开关仅离线版设置面板提供）
+    showExternalCalendars: true,
     // 视图自定义：六视图的顺序与显隐；顺序即显示顺序，enabled=false 表示隐藏该视图
     viewOrder: [
         { id: 'task', enabled: true },
@@ -817,7 +821,7 @@ const DEFAULT_SETTINGS = {
     },
     // 四象限视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
     quadrantConfig: {
-        showDetails: true       // 显示任务详情（备注/子任务，原始终显示，现可开关）
+        showDetails: true      // 显示任务详情（备注/子任务，原始终显示，现可开关）
     }
 };
 

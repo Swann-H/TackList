@@ -2,9 +2,10 @@
 
 ## 环境要求
 
-- 操作系统：银河麒麟 V10（或其他 Linux 发行版）
+- 操作系统：银河麒麟 V10 SP1（或其它 Linux 发行版）、统信 UOS
 - Python：3.8 或更高版本
 - 浏览器：Firefox 或 Chromium（系统自带即可）
+- 可选依赖 `icalendar`：**只有「外部日历订阅」功能需要**，详见下文《可选：安装 icalendar》。内网/离线环境用户请跳过，不影响任何其它功能。
 
 ## 安装步骤
 
@@ -73,13 +74,87 @@ cd ~/TackList
 ./tacklist.sh open      # 启动服务并打开浏览器
 ```
 
+## 可选：安装 icalendar（仅「外部日历订阅」需要）
+
+> **这是可选项，请先判断是否需要，不需要就不要安装。**
+
+### 这个依赖是干什么的？
+
+它只服务于一个功能：**外部日历订阅**（设置 → 外部日历订阅）——把滴答清单、Outlook 日历、Google 日历、iCloud 日历等外部日历的 `.ics` 订阅链接接入本系统，把外部日程拉取进来作为只读任务展示。
+
+**不安装的影响：** 只有点「立即同步」时会提示"缺少 icalendar 库"。任务、清单、日历视图、四象限、看板、番茄专注、倒计时、统计等**其它全部功能正常可用**，不报错、不影响数据。
+
+**安装前提：必须能访问互联网**（pip 需要从 PyPI 下载）。**信创内网 / 无外网环境的机器请直接跳过本节**——这是预期行为，不是故障，系统绝大部分功能照常使用。
+
+### 一键安装（推荐）
+
+```bash
+chmod +x install_icalendar.sh pack_icalendar_wheels.sh
+./install_icalendar.sh
+```
+
+脚本会在银河麒麟 V10 SP1、统信 UOS 及其它发行版上自动完成：
+
+1. 定位 `python3`（找不到则回退 `python`），检查版本
+2. 检查 pip，缺失时提示对应发行版的安装命令（麒麟/UOS：`sudo apt install python3-pip`；CentOS/RHEL：`sudo yum install python3-pip`），并尝试 `python3 -m ensurepip --user`
+3. 检测互联网连通性（curl / wget / python 三种方式任一）
+4. 优先使用同目录下的 `wheels/` 离线包；没有则联网安装
+5. 遇到 PEP 668（`externally-managed-environment`，Debian 12 / 较新的 UOS 会出现）自动加 `--break-system-packages` 重试
+6. 安装后 `import icalendar` 验证，并提示重启服务
+
+失败时会明确打印原因与处理建议，常见提示包括：
+
+| 提示 | 含义 / 处理 |
+|------|-------------|
+| 未找到 Python 3 | `sudo apt install python3` / `sudo yum install python3` |
+| Python 版本过低（< 3.7） | 升级 Python；3.7 装 5.0.x、3.8/3.9 装 6.3.x、3.10+ 装 7.x |
+| pip 不可用 | `sudo apt install python3-pip`（麒麟/UOS）或 `sudo yum install python3-pip` |
+| 无法访问 PyPI | 无外网 / 走内网镜像：请改用离线包（见下），或先配置 pip 镜像源 |
+| 无 sudo 权限 | 脚本默认 `--user` 安装到 `~/.local`，一般不需要 sudo |
+| PEP 668 受限 | 已自动加 `--break-system-packages`；仍失败可改用 `sudo apt install python3-icalendar` |
+
+手动安装等价命令（需要与启动服务的是**同一个 python3**）：
+
+```bash
+python3 -m pip install --user icalendar
+python3 -c "import icalendar; print(icalendar.__version__)"
+./tacklist.sh restart
+```
+
+若系统里装了多个 Python、自动检测挑错了版本，可显式指定：
+
+```bash
+PYTHON=/usr/bin/python3.8 ./install_icalendar.sh
+```
+
+也可以用系统源里的包（版本较旧但可用，二选一即可）：
+
+```bash
+sudo apt install python3-icalendar    # 银河麒麟 / 统信 UOS / Debian / Ubuntu
+sudo yum install python3-icalendar    # CentOS / RHEL
+```
+
+### 离线 / 内网环境怎么装（推荐做法）
+
+1. 在一台**能上网**的机器上执行 `./pack_icalendar_wheels.sh`，生成 `wheels/` 目录。若目标机 Python 版本与本机不同，可指定版本打包，例如：
+
+```bash
+./pack_icalendar_wheels.sh 3.8    # 为 Python 3.8 的麒麟 V10 SP1 打包
+./pack_icalendar_wheels.sh 3.7    # 为 Python 3.7 的统信 UOS 打包
+```
+
+2. 把 `wheels/` 目录拷贝到目标机，与 `install_icalendar.sh` 放在同一目录。
+3. 在目标机执行 `./install_icalendar.sh`，脚本自动识别 `wheels/` 走离线安装，全程不联网。
+
+> icalendar 及其依赖（python-dateutil、six、tzdata）都是纯 Python 包，wheel 与 CPU 架构无关，x86_64 / 飞腾 / 鲲鹏 / 龙芯 平台通用。
+
 ## 离线使用说明
 
 本系统支持完全离线运行：
 
 - 应用包含 `index_offline.html`，无需网络即可使用全部功能
 - 所有数据存储在本地 `data.json` 文件中
-- 无需安装任何第三方 Python 包
+- 系统运行无需任何第三方 Python 包；唯一的可选依赖 `icalendar` 只用于「外部日历订阅」功能（见上文），不安装也不影响离线使用
 
 ## 常见问题
 

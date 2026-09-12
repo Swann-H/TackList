@@ -6,6 +6,11 @@ let summaryPriority = 'all';
 let summaryList = 'all';
 let summaryStatus = 'all';
 
+// 摘要视图任务源：离线版「显示外部日历」关闭时排除外部订阅任务（与 filterTasks 数据管线口径一致）
+function getSummaryTaskSource() {
+    return shouldHideExternalTasks() ? tasks.filter(t => !t.extSourceId) : tasks;
+}
+
 function renderSummaryView(container) {
     // 重新渲染前停止旧的彗星动画
     stopSummaryCometAnimation();
@@ -72,7 +77,7 @@ function renderSummaryView(container) {
 
                     <select id="summary-list" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
                         <option value="all" ${summaryList === 'all' ? 'selected' : ''}>所有清单</option>
-                        ${lists.filter(l => !l.archived && !l.isFolder).map(list => `<option value="${list.id}" ${summaryList === list.id ? 'selected' : ''}>${list.name}</option>`).join('')}
+                        ${lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).map(list => `<option value="${list.id}" ${summaryList === list.id ? 'selected' : ''}>${list.name}</option>`).join('')}
                     </select>
 
                     <select id="summary-status" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
@@ -163,7 +168,7 @@ function getTodayCompletionData(dateOffset = 0) {
     today.setHours(0, 0, 0, 0);
     today.setDate(today.getDate() + dateOffset);
 
-    const todayTasks = tasks.filter(task => {
+    const todayTasks = getSummaryTaskSource().filter(task => {
         // 清单筛选
         if (summaryList !== 'all' && task.listId !== summaryList) return false;
         // 排除已归档清单
@@ -197,7 +202,7 @@ function getTodayCompletionData(dateOffset = 0) {
     // 今日新增任务数（按 createdAt 统计，仅受清单筛选影响）
     const todayKey = today.getTime();
     let newCount = 0;
-    tasks.forEach(task => {
+    getSummaryTaskSource().forEach(task => {
         if (summaryList !== 'all' && task.listId !== summaryList) return;
         const taskList = lists.find(l => l.id === task.listId);
         if (taskList && taskList.archived) return;
@@ -535,6 +540,8 @@ function getCompletionTrendData() {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const today = new Date(now);
+    // 任务源在 map 外取一次：离线版「显示外部日历」关闭时排除外部订阅任务
+    const taskSource = getSummaryTaskSource();
 
     let dates = [];
     let labels = [];
@@ -600,7 +607,7 @@ function getCompletionTrendData() {
         let dueCount = 0;
         let completedOfDue = 0;
 
-        tasks.forEach(task => {
+        taskSource.forEach(task => {
             // 清单筛选
             if (summaryList !== 'all' && task.listId !== summaryList) return;
             // 排除已归档清单
@@ -918,7 +925,7 @@ function filterTasksForSummary() {
             break;
     }
 
-    return tasks.filter(task => {
+    return getSummaryTaskSource().filter(task => {
         // 过滤已归档清单的任务
         const taskList = lists.find(l => l.id === task.listId);
         if (taskList && taskList.archived) return false;
@@ -991,7 +998,7 @@ function generateListBasedContent(filteredTasks) {
     }
 
     const listGroups = {};
-    const allLists = [...lists].filter(l => !l.archived && !l.isFolder);
+    const allLists = [...lists].filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l));
     if (summaryList === 'all') {
         allLists.forEach(list => {
             listGroups[list.id] = { name: list.name, tasks: [] };
@@ -1044,6 +1051,7 @@ function formatTaskListHtml(taskList) {
         html += '<div class="flex items-baseline gap-2 py-0.5 text-theme-primary">' +
             '<span class="text-theme-muted flex-shrink-0">' + (idx + 1) + '.</span>' +
             '<span class="text-theme-secondary flex-shrink-0">[' + displayDate + ']</span>' +
+            _extTaskIconHtml(task) +
             '<span>' + (task.title || '未命名任务') + '</span>' +
             '</div>';
     });
@@ -1078,7 +1086,7 @@ function copySummaryText() {
         }
     } else {
         const listGroups = {};
-        const allLists = [...lists].filter(l => !l.archived && !l.isFolder);
+        const allLists = [...lists].filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l));
         if (summaryList === 'all') {
             allLists.forEach(list => {
                 listGroups[list.id] = { name: list.name, tasks: [] };

@@ -464,6 +464,7 @@ function buildTaskListGroups() {
         currentFilter || '', currentListId || '',
         (currentTagIds || []).join(','), currentFilterId || '',
         tasks.length, lists.length, dateSig,
+        shouldHideExternalTasks() ? '1' : '0',  // 离线「显示外部日历」开关变化须失效重建
         tvc.noDateTaskPosition,
         tvc.showCompleted ? '1' : '0',
         tvc.groupBy + '|' + tvc.sortBy + '|' + tvc.sortDir + '|' + tvc.groupCollapseStrategy,
@@ -588,6 +589,9 @@ function buildTaskListItemHtml(task, useShortTime) {
     const list = _getListsByIdMap().get(task.listId);
     const listColor = list ? list.color : '#9ca3af';
     const listName = list ? list.name : '';
+    // 外部订阅任务视觉标识（3.3.1）：色条改用订阅色，标题前加日历图标（复用 utils.js 共享工具）
+    const barColor = _extTaskBarColor(task, listColor);
+    const extIcon = _extTaskIconHtml(task);
     const focusMinutes = getTaskFocusMinutes(task.id);
     const timeDisplay = useShortTime ? formatTaskListTimeShort(task) : formatTaskListTime(task, { withAllDayTag: false });
     const progress = task.progress || 0;
@@ -610,10 +614,10 @@ function buildTaskListItemHtml(task, useShortTime) {
              data-list-id="${task.listId || 'default'}"
              onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
              >
-            <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, listColor)};"></div>
+            <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, barColor)};"></div>
             ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
             <div class="flex-1 min-w-0 flex flex-col">
-                <span class="${tvcShowDetails ? 'font-medium' : 'text-sm'} ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${task.title || '新任务'}</span>
+                <span class="${tvcShowDetails ? 'font-medium' : 'text-sm'} ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0 flex items-center">${extIcon}${task.title || '新任务'}</span>
                 ${taskDetailsLine ? `<div>${taskDetailsLine}</div>` : ''}
             </div>
             ${renderFocusButton(task.id, getTaskViewConfig().showFocusButton)}
@@ -1176,12 +1180,12 @@ function buildScheduleDayCardHtml(date, dayTasks) {
         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
 
         return `
-            <div class="schedule-task-item task-row group flex items-start gap-4 mb-3 task-item ${taskIndex > 0 ? 'pt-3' : ''} ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" ondragstart="handleScheduleDragStart(event, '${task.id}')">
+            <div class="schedule-task-item task-row group flex items-start gap-4 mb-2.5 task-item ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" ondragstart="handleScheduleDragStart(event, '${task.id}')">
                 <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
                     ${renderTaskCheckbox(task, { taskId: task.id })}
                     ${renderFocusButton(task.id, getScheduleConfig().showFocusButton)}
                 </div>
-                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${getTaskBarColor(task, list && list.color ? list.color : '#9ca3af')}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                <div class="${colors.bg} rounded-r-lg p-2.5 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${getTaskBarColor(task, list && list.color ? list.color : '#9ca3af')}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
                         <span class="${timeTextClass}">${timeDisplay}</span>
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>${list.name}</span>` : ''}
@@ -1199,7 +1203,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
     };
 
     const noDateCompletedHtml = noDateCompleted.length > 0 ? `
-        <button onclick="toggleScheduleTodayNoDateCompleted(event)" class="flex items-center gap-1.5 mb-3 text-xs text-theme-muted hover:text-theme-primary transition">
+        <button onclick="toggleScheduleTodayNoDateCompleted(event)" class="flex items-center gap-1.5 mb-2.5 text-xs text-theme-muted hover:text-theme-primary transition">
             <i class="fas fa-chevron-${_scheduleTodayNoDateCompletedExpanded ? 'down' : 'right'} text-xs"></i>已完成未排期任务 ${noDateCompleted.length}
         </button>
         <div data-schedule-nodate-completed-wrap class="${_scheduleTodayNoDateCompletedExpanded ? '' : 'hidden'}">
@@ -1318,7 +1322,7 @@ function getScheduleGroupedTasks() {
     const scfg = getScheduleConfig();
     const showNoDate = scfg.showNoDateTasks !== false; // 「显示无日期任务」开关：关时不注入今天分组
     const noDateMode = showNoDate ? (scfg.noDateTaskPosition || 'last') : 'none';
-    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey + '|' + (noDateMode === 'first' ? 'f' : (noDateMode === 'none' ? 'n' : 'l')) + '|' + (scfg.showCompleted ? '1' : '0');
+    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey + '|' + (noDateMode === 'first' ? 'f' : (noDateMode === 'none' ? 'n' : 'l')) + '|' + (scfg.showCompleted ? '1' : '0') + '|' + (shouldHideExternalTasks() ? '1' : '0');
     if (_scheduleFilteredCache && _scheduleFilteredCache.sig === sig) {
         return _scheduleFilteredCache.grouped;
     }

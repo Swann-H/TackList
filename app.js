@@ -310,6 +310,9 @@ function openSettingsModal() {
     document.getElementById('settings-toast-duration').value = settings.toastDuration || 5;
     document.getElementById('settings-snooze-delay').value = settings.snoozeDelay || 15;
     document.getElementById('settings-refresh-interval').value = settings.refreshInterval || 30;
+    // 外部日历开关（仅离线版设置面板含此元素）
+    const _showExtCalEl = document.getElementById('settings-show-external-calendars');
+    if (_showExtCalEl) _showExtCalEl.checked = settings.showExternalCalendars !== false;
     updateNotificationPermButton();
     document.getElementById('settings-bg-opacity').value = settings.bgOpacity || 100;
     document.getElementById('bg-opacity-value').textContent = settings.bgOpacity || 100;

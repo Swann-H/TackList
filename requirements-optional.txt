@@ -1,0 +1,33 @@
+# ============================================================
+# 可选依赖清单 —— 仅「外部日历订阅（ICS 同步）」功能需要
+# ------------------------------------------------------------
+# 是否需要安装？
+#   需要   → 你要把滴答清单 / Outlook 日历 / Google 日历 / iCloud 日历
+#            等外部日历的 .ics 订阅链接接入本系统（设置 → 外部日历订阅）。
+#   不需要 → 只使用任务、清单、日历视图、四象限、看板、番茄专注、
+#            倒计时、统计等内置功能，或处在企业内网 / 无外网环境。
+#
+# 不安装会怎样？
+#   除「外部日历订阅 → 立即同步」会提示“缺少 icalendar 库”外，
+#   系统其余全部功能正常可用，不报错、不影响数据、不影响性能。
+#
+# 安装前提：需要访问互联网（pip 从 PyPI 下载）。
+#   内网 / 离线环境请跳过安装，或先用 pack_icalendar_wheels 打包离线包。
+#
+# 用法（推荐改用一键脚本，会自动判断 Python 版本与离线包）：
+#   Windows : install_icalendar.bat
+#   Linux   : ./install_icalendar.sh
+#   手动    : python3 -m pip install --user -r requirements-optional.txt
+# ============================================================
+
+# icalendar：按 Python 版本自动选择兼容版本
+#   Python >= 3.10 → 7.x ；Python 3.8 / 3.9 → 6.3.x ；Python 3.7 → 5.0.x
+icalendar>=5.0,<6 ; python_version == "3.7"
+icalendar>=6.0,<7 ; python_version >= "3.8" and python_version < "3.10"
+icalendar>=6.0 ; python_version >= "3.10"
+
+# icalendar 的运行时依赖（pip 通常会自动安装，显式列出便于离线打包完整）
+python-dateutil>=2.8
+six>=1.5
+tzdata>=2024.1
+typing-extensions>=4.10 ; python_version < "3.13"

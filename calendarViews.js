@@ -136,16 +136,19 @@ function buildMonthGridTaskItemHtml(task) {
     const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}` : '');
     const isOverdue = isTaskOverdue(task);
     const titleClass = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : '');
+    // 外部任务色条改订阅色（统一标识 3.3.1）
+    const barColor = _extTaskBarColor(task, list?.color || '#3b82f6');
+    const extIcon = _extTaskIconHtml(task).replace('text-xs', 'text-[10px]');
     return `
         <div draggable="true" data-task-id="${task.id}"
              ondragstart="handleTaskDragStart(event, '${task.id}')"
              ondragend="handleTaskDragEnd(event)"
              onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
              class="text-xs p-1 rounded-r cursor-pointer truncate task-item month-task-item task-row ${task.completed ? 'opacity-55' : 'hover:bg-theme-tertiary'} flex items-center justify-between gap-1"
-             style="background-color: ${list?.color}15; border-left: 2px solid ${list?.color || '#3b82f6'}">
+             style="background-color: ${list?.color}15; border-left: 2px solid ${barColor}">
             <div class="flex items-center gap-1 min-w-0 flex-1">
                 ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                <span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
+                ${extIcon}<span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
             </div>
             ${timeStr ? `<span class="flex-shrink-0 text-theme-muted">${timeStr}</span>` : ''}
         </div>
@@ -157,15 +160,18 @@ function buildWeekAllDayTaskItemHtml(task) {
     const list = lists.find(l => l.id === task.listId);
     const isOverdue = isTaskOverdue(task);
     const titleClass = task.completed ? 'opacity-55 text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
+    // 外部任务色条改订阅色 + 标题前图标（统一标识 3.3.1）
+    const barColor = _extTaskBarColor(task, list?.color || '#3b82f6');
+    const extIcon = _extTaskIconHtml(task).replace('text-xs', 'text-[10px]');
     return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer task-row ${titleClass} flex items-center gap-1 min-w-0"
-                 style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${list?.color || '#3b82f6'};"
+                 style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${barColor};"
                  title="${escapeHtml(task.title || '新任务')}"
                  onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
                  draggable="true"
                  ondragstart="handleTaskDragStart(event, '${task.id}')"
                  ondragend="handleTaskDragEnd(event)">
                  ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                 <span class="truncate">${task.title || '新任务'}</span>
+                 ${extIcon}<span class="truncate">${task.title || '新任务'}</span>
              </div>`;
 }
 
@@ -295,6 +301,9 @@ function renderWeekView(container) {
                 ${columnTasks.map(taskLayout => {
                     const list = lists.find(l => l.id === taskLayout.task.listId);
                     const color = list?.color || '#3b82f6';
+                    // 外部任务色条改订阅色 + 标题前图标（统一标识 3.3.1）
+                    const _extBarColor = _extTaskBarColor(taskLayout.task, color);
+                    const _extIcon = _extTaskIconHtml(taskLayout.task).replace('text-xs', 'text-[10px]');
                     const topPx = taskLayout.top;
                     const heightPx = Math.max(taskLayout.height, 20);
                     const widthPercent = taskLayout.width;
@@ -303,14 +312,14 @@ function renderWeekView(container) {
                     const titleClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
 
                     return `<div class="absolute rounded-r px-1 py-0.5 overflow-hidden cursor-pointer task-item week-task-item ${taskLayout.task.completed ? 'opacity-55' : ''}"
-                                 style="top: ${topPx}px; height: ${heightPx}px; width: ${widthPercent}%; left: ${leftPercent}%; background-color: ${color}20; border-left: 3px solid ${color}; z-index: 5;"
+                                 style="top: ${topPx}px; height: ${heightPx}px; width: ${widthPercent}%; left: ${leftPercent}%; background-color: ${color}20; border-left: 3px solid ${_extBarColor}; z-index: 5;"
                                  onclick="event.stopPropagation(); openTaskDetailPanel('${taskLayout.task.id}')"
                                  draggable="true"
                                  ondragstart="handleTaskDragStart(event, '${taskLayout.task.id}')"
                                  ondragend="handleTaskDragEnd(event)">
                         <div class="flex items-center gap-1 min-w-0">
                             ${renderTaskCheckbox(taskLayout.task, { taskId: taskLayout.task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                            <div class="text-xs font-medium truncate ${titleClass}" title="${escapeHtml(taskLayout.task.title || '新任务')}">${taskLayout.task.title || '新任务'}</div>
+                            ${_extIcon}<div class="text-xs font-medium truncate ${titleClass}" title="${escapeHtml(taskLayout.task.title || '新任务')}">${taskLayout.task.title || '新任务'}</div>
                         </div>
                         ${heightPx > 30 ? `<div class="text-xs text-theme-muted truncate pl-5">${formatTime(taskLayout.task.startTime)}${taskLayout.task.endTime ? ' - ' + formatTime(taskLayout.task.endTime) : ''}</div>` : ''}
                     </div>`;
@@ -879,7 +888,7 @@ function openMonthDayPopover(dateStr) {
                     ${renderTaskCheckbox(task, { taskId: task.id })}
                     ${renderFocusButton(task.id)}
                 </div>
-                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${getTaskBarColor(task, list && list.color ? list.color : '#9ca3af')}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${_extTaskBarColor(task, getTaskBarColor(task, list && list.color ? list.color : '#9ca3af'))}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary flex-wrap">
                         ${timeDisplay ? `<span class="${timeTextClass}">${timeDisplay}</span>` : ''}
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>${list.name}</span>` : ''}
@@ -887,8 +896,8 @@ function openMonthDayPopover(dateStr) {
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
                     </div>
-                    <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
-                        ${escapeHtml(task.title || '新任务')}
+                    <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} flex items-center">
+                        ${_extTaskIconHtml(task)}${escapeHtml(task.title || '新任务')}
                     </div>
                     ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '')}
                 </div>
@@ -1160,11 +1169,12 @@ function renderMonthViewMobile(container) {
         const titleCls = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
         const checked = task.completed ? 'checked' : '';
         return `
-            <div class="task-row flex items-center gap-3 py-2.5 border-b border-theme/50 last:border-b-0 ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
+            <div class="task-row flex items-center gap-2 py-2.5 border-b border-theme/50 last:border-b-0 ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
+                <span class="flex-shrink-0 w-1 h-4 rounded-full" style="background-color:${_extTaskBarColor(task, list?.color || '#9ca3af')}"></span>
                 <label class="flex-shrink-0" onclick="event.stopPropagation()">
                     <input type="checkbox" ${checked} onchange="toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded border-theme accent-color">
                 </label>
-                <span class="flex-1 min-w-0 truncate text-sm ${titleCls}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
+                ${_extTaskIconHtml(task)}<span class="flex-1 min-w-0 truncate text-sm ${titleCls}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
                 ${timeStr ? `<span class="flex-shrink-0 text-xs text-theme-muted">${timeStr}</span>` : ''}
             </div>
         `;

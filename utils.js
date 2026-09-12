@@ -83,6 +83,40 @@ function isDarkThemeActive() {
     return document.documentElement.getAttribute('data-theme') === 'dark';
 }
 
+// ==================== 全屏浮层判定（详情面板「点击外部关闭」与四象限过渡共用） ====================
+// 选择器覆盖：.modal-overlay = 所有居中弹窗（新增任务/设置/正念小事/答案之书/番茄补录/移动端侧边栏遮罩等）；
+// #pomodoro-page = 番茄专注全屏页；#command-palette-overlay = 命令面板（动态创建，存在即打开）。
+// 注意不能只用 :not(.hidden) 判定：部分浮层（如 #sidebar-overlay）以 display:none 隐藏而不带 hidden 类，
+// 会被误判为「已打开」，故统一走 _isOverlayVisible 的可见性判定。
+const OPEN_OVERLAY_SELECTOR = '.modal-overlay, #pomodoro-page, #command-palette-overlay';
+
+// 浮层是否真正可见（display/visibility 双判；元素数量为个位数，开销可忽略）
+function _isOverlayVisible(el) {
+    if (!el) return false;
+    try {
+        if (el.classList && el.classList.contains('hidden')) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+    } catch (e) { return false; }
+}
+
+// 是否存在任意已打开的全屏浮层
+function isAnyOverlayOpen() {
+    if (typeof document === 'undefined') return false;
+    try {
+        const els = document.querySelectorAll(OPEN_OVERLAY_SELECTOR);
+        for (let i = 0; i < els.length; i++) { if (_isOverlayVisible(els[i])) return true; }
+    } catch (e) {}
+    return false;
+}
+
+// 点击事件是否落在已打开的全屏浮层内部（用于区分「点击外部」与「浮层内交互」）
+function isEventInsideOpenOverlay(e) {
+    const t = e && e.target;
+    if (!t || typeof t.closest !== 'function') return false;
+    try { return _isOverlayVisible(t.closest(OPEN_OVERLAY_SELECTOR)); } catch (err) { return false; }
+}
+
 // 方案A：子任务逐行列表展示（最多3行，超出显示"……(已完成/总数)"）
 // colorMode: 'theme'（默认，跟随主题）| 'dark'（深色背景，如 Toast）
 function renderSubtaskListDisplay(task, colorMode = 'theme') {
@@ -696,6 +730,104 @@ function getTaskBarColor(task, fallbackColor) {
     return '#9ca3af';
 }
 
+// ==================== 外部日历订阅任务工具（共享层，双入口生效）====================
+// 详见《外部日历订阅同步需求说明书.md》3.3 / 4.1 / 附录 A-1
+const _CAL_SUB_COLOR_HEX = {
+    blue: '#3b82f6', green: '#10b981', red: '#ef4444', purple: '#8b5cf6',
+    orange: '#f59e0b', teal: '#14b8a6', pink: '#ec4899', gray: '#9ca3af'
+};
+
+function isExternalTask(task) {
+    return !!(task && task.extSourceId);
+}
+
+// 外部任务色条色（订阅色）；非外部任务返回 fallbackColor
+function _extTaskBarColor(task, fallbackColor) {
+    if (!isExternalTask(task)) return fallbackColor;
+    return (typeof getCalendarSubscriptionColorHex === 'function')
+        ? getCalendarSubscriptionColorHex(task.extSourceId)
+        : fallbackColor;
+}
+
+// 外部任务标题前图标 HTML（fa-calendar-day 染订阅色）；非外部任务返回空串
+function _extTaskIconHtml(task) {
+    if (!isExternalTask(task)) return '';
+    const hex = (typeof getCalendarSubscriptionColorHex === 'function')
+        ? getCalendarSubscriptionColorHex(task.extSourceId)
+        : '#9ca3af';
+    const name = (typeof getCalendarSubscriptionName === 'function')
+        ? getCalendarSubscriptionName(task.extSourceId)
+        : '外部日历';
+    return `<i class="fas fa-calendar-day text-xs mr-1 flex-shrink-0" style="color:${hex}" title="来自 ${escapeHtml(name)}"></i>`;
+}
+
+// 离线版「显示外部日历」关闭时，视图数据管线须过滤外部任务；在线版始终显示（见 DEFAULT_SETTINGS 注释）
+function shouldHideExternalTasks() {
+    return window._WEB_VERSION !== 'online' && !!(settings && settings.showExternalCalendars === false);
+}
+
+// 清单级判定：订阅专属清单（带 extSourceId 标记）在各清单入口（侧边栏/下拉/看板列等）始终隐藏，
+// 订阅入口由"外部日历"分组统一承载，避免同一订阅源在"清单"分组中重复出现
+function shouldHideExternalList(list) {
+    return !!(list && list.extSourceId);
+}
+
+// 开关：是否在侧边栏显示外部日历分组（离线版设置面板提供；默认 true）
+function toggleShowExternalCalendars(checked) {
+    if (!settings) return;
+    settings.showExternalCalendars = !!checked;
+    // 关闭时若正停留在订阅聚合视图（__extsrc__:）或订阅专属清单（extlist_），其任务已全部被过滤且清单入口隐藏，重置回全部任务避免空视图
+    const _curList = (typeof getList === 'function' && currentListId) ? getList(currentListId) : null;
+    if (!checked && currentListId && (currentListId.indexOf('__extsrc__:') === 0 || !!(_curList && _curList.extSourceId))) {
+        currentListId = null;
+        currentTagIds = [];
+        currentFilter = '';
+        currentFilterId = null;
+    }
+    if (typeof saveData === 'function') saveData();
+    if (typeof renderLists === 'function') renderLists();  // 立即生效：侧边栏显隐切换
+    if (typeof renderView === 'function') renderView();    // 立即生效：各视图外部任务显隐（分组缓存签名含本开关）
+}
+
+function getCalendarSubscription(id) {
+    if (!settings || !Array.isArray(settings.calendarSubscriptions)) return null;
+    return settings.calendarSubscriptions.find(function (s) { return s.id === id; }) || null;
+}
+
+function getCalendarSubscriptionColorHex(id) {
+    const sub = getCalendarSubscription(id);
+    if (!sub) return '#9ca3af';
+    return _CAL_SUB_COLOR_HEX[sub.color] || sub.color || '#3b82f6';
+}
+
+function getCalendarSubscriptionName(id) {
+    const sub = getCalendarSubscription(id);
+    return (sub && sub.name) || '外部日历';
+}
+
+// 删除外部任务时写黑名单（详见 3.3.3 / 附录 A-2）；由共享层 deleteTask 调用
+function recordExternalTaskDeletion(task) {
+    if (!task || !task.extSourceId || !task.extEventUid) return;
+    if (!settings || !Array.isArray(settings.calendarSubscriptions)) return;
+    const sub = settings.calendarSubscriptions.find(function (s) { return s.id === task.extSourceId; });
+    if (!sub) return;
+    if (!Array.isArray(sub.extDeletedUids)) sub.extDeletedUids = [];
+    // 去重：兼容旧字符串格式和新对象格式
+    const exists = sub.extDeletedUids.some(function (d) {
+        const uid = typeof d === 'string' ? d : (d && d.uid);
+        return uid === task.extEventUid;
+    });
+    if (!exists) {
+        // 存对象快照（标题/时间/删除时刻），供展示浮层使用
+        sub.extDeletedUids.push({
+            uid: task.extEventUid,
+            title: task.title || '',
+            startTime: task.startTime || '',
+            deletedAt: new Date().toISOString()
+        });
+    }
+}
+
 // 工具函数
 // filterTasks：单次遍历合并所有条件，避免链式 .filter() 重复扫描与中间数组分配。
 // 取得某文件夹的全部子孙清单 id（递归，含嵌套文件夹），用于按文件夹筛选其下所有任务。
@@ -719,7 +851,12 @@ function getDescendantListIds(folderId) {
 // 各条件被预计算为闭包/集合，循环内一次判断全部通过才入结果数组。
 function filterTasks(taskList, opts) {
     // 预计算各筛选条件（在循环外完成，避免每任务重复计算）
-    const hasListFilter = !!currentListId;
+    // 订阅筛选视图（3.4）：currentListId 形如 __extsrc__:<subId>，按 task.extSourceId 聚合过滤（跨清单）
+    const _isExtSrcFilter = currentListId && currentListId.indexOf('__extsrc__:') === 0;
+    // 离线版「显示外部日历」关闭：过滤外部订阅任务（在线版始终显示；各视图均经由本管线取数）
+    const _hideExtTasks = shouldHideExternalTasks();
+    const _extSrcId = _isExtSrcFilter ? currentListId.slice('__extsrc__:'.length) : null;
+    const hasListFilter = !!currentListId && !_isExtSrcFilter;
     // 当前清单若为文件夹，则筛选范围扩展到其所有子孙清单（递归）
     let listFilterSet = null;
     if (hasListFilter) {
@@ -821,8 +958,13 @@ function filterTasks(taskList, opts) {
     for (let i = 0; i < taskList.length; i++) {
         const task = taskList[i];
 
-        // 清单筛选：普通清单精确匹配当前 currentListId；文件夹匹配其所有子孙清单集合
-        if (hasListFilter) {
+        // 离线版「显示外部日历」关闭：跳过外部订阅任务
+        if (_hideExtTasks && task.extSourceId) continue;
+
+        // 清单筛选：订阅聚合 / 普通清单 / 文件夹子孙集合
+        if (_isExtSrcFilter) {
+            if (task.extSourceId !== _extSrcId) continue;
+        } else if (hasListFilter) {
             if (listFilterSet) {
                 if (!listFilterSet.has(task.listId)) continue;
             } else if (task.listId !== currentListId) continue;
@@ -1415,15 +1557,34 @@ function formatMonthYear(date) {
     return `${date.getFullYear()}年${date.getMonth() + 1}月`;
 }
 
-// 计算任务在第二象限（重要不紧急）的停留天数
+// 第二象限（重要不紧急）逾期判定阈值
+// 7 天：卡片开始显示「逾期 N 天」徽章；30 天：进视图时弹出提醒（避免新导入数据一进视图就弹）
+const QUADRANT_STAGNATION_DAYS = 7;
+const QUADRANT_STAGNATION_ALERT_DAYS = 30;
+
+// 计算任务在第二象限（重要不紧急）的逾期天数
+// 基准取 startTime 与 createdAt 中「较晚」的一个：若直接用 startTime，
+// 日程日期早于创建时间的任务（如 8 月创建、排期在 1 月）会被算成已逾期数百天
 function getQuadrantStagnationDays(task) {
     if (!task.important || task.urgent || task.completed) return 0;
-    // 使用 createdAt 或 startTime 作为起始时间
-    const startDate = task.startTime ? new Date(task.startTime) : (task.createdAt ? new Date(task.createdAt) : null);
-    if (!startDate) return 0;
-    const now = new Date();
-    const diffMs = now.getTime() - startDate.getTime();
+    const startTs = task.startTime ? new Date(task.startTime).getTime() : null;
+    const createdTs = task.createdAt ? new Date(task.createdAt).getTime() : null;
+    let baseTs;
+    if (startTs === null && createdTs === null) return 0;
+    else if (startTs === null) baseTs = createdTs;
+    else if (createdTs === null) baseTs = startTs;
+    else baseTs = Math.max(startTs, createdTs);
+    const diffMs = new Date().getTime() - baseTs;
     return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
+// 逾期档位：0=未达阈值 1=7~30 天 2=30~90 天 3=超过 90 天
+function getQuadrantStagnationLevel(task) {
+    const days = getQuadrantStagnationDays(task);
+    if (days <= QUADRANT_STAGNATION_DAYS) return 0;
+    if (days <= 30) return 1;
+    if (days <= 90) return 2;
+    return 3;
 }
 
 function formatWeekday(date) {
