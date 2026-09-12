@@ -487,8 +487,8 @@ function invalidateTaskListGroupsCache() {
 function _buildTaskListGroupsUncached() {
     const filtered = filterTasks(tasks, { includeCompleted: getTaskViewConfig().showCompleted !== false });
 
-    // 最近7天筛选视图：按天分组
-    if (currentFilter === 'recent7days') {
+    // 时间窗筛选视图（今天/明天/最近3天/最近7天）：按天分组
+    if (isSpecialTimeFilter()) {
         const b = getDateBounds();
 
         const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
@@ -954,8 +954,8 @@ function refreshTaskListItemForToggle(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return false;
 
-    // 最近7天视图：完成态切换必然跨分组（→已完成），走全量渲染
-    if (currentFilter === 'recent7days') {
+    // 时间窗筛选视图（今天/明天/最近3天/最近7天）：完成态切换必然跨分组（→已完成），走全量渲染
+    if (isSpecialTimeFilter()) {
         invalidateTaskListGroupsCache();
         return false;
     }
