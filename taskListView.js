@@ -612,7 +612,7 @@ function buildTaskListItemHtml(task, useShortTime) {
     return `
         <div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
              data-list-id="${task.listId || 'default'}"
-             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
+             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)"
              >
             <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, barColor)};"></div>
             ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
@@ -790,11 +790,16 @@ function renderTaskListView(container) {
     if (groups.length === 0) {
         _teardownTaskListVirtualScroll();
         container.innerHTML = `
-            <div class="flex flex-col items-center justify-center py-20 text-theme-muted">
+            <div class="flex flex-col items-center justify-center py-16 text-theme-muted">
                 <i class="fas fa-clipboard-list text-6xl mb-4 opacity-30"></i>
-                <p class="text-lg">欢迎使用日程管理！</p>
-                <p class="text-sm mt-2">点击右上角"+"来添加任务</p>
-                <p class="text-sm mt-1">或使用快捷键Ctrl + Alt + N呼出命令面板快速添加任务</p>
+                <p class="text-lg text-theme-primary">欢迎使用日程管理！</p>
+                <div class="flex flex-wrap items-center justify-center gap-3 mt-6">
+                    <button onclick="openAddTaskModal()" class="px-4 py-2 rounded-lg border-2 border-purple-500 text-purple-500 hover:bg-purple-500 hover:text-white transition text-sm font-medium">＋ 添加第一个任务</button>
+                    <button onclick="openCommandPalette()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">命令面板快速添加</button>
+                    <button onclick="event.stopPropagation(); showAddListInput()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">新建清单</button>
+                    <button onclick="if (typeof startOnboarding === 'function') startOnboarding(true)" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">重看新手引导</button>
+                </div>
+                <p class="text-xs mt-5">提示：Ctrl + Alt + N 可随时呼出命令面板，一句话创建任务</p>
             </div>
         `;
         updateToggleAllGroupsButton(groups);
@@ -868,6 +873,9 @@ function renderTaskListView(container) {
 
     // 启动虚拟滚动：立即填充视口附近分组，远端分组懒加载
     _setupTaskListVirtualScroll(container, groups, useShortTime);
+
+    // 计划面板共享折叠态：筛选/清单切换会重置折叠策略，同步计划面板避免两侧不一致
+    if (typeof syncPlanPanelGroupCollapse === 'function') syncPlanPanelGroupCollapse();
 
     updateToggleAllGroupsButton(groups);
 }
@@ -998,7 +1006,10 @@ function refreshTaskListItemForToggle(taskId) {
 // 切换任意分组的折叠状态（今天/明天/最近7天/更远/已完成 等通用）
 // 局部更新：仅修改该分组的 DOM（图标/显隐 + 懒加载注入内容），不触发全量 renderView，
 // 避免虚拟滚动已填充的分组被重置、滚动位置丢失。
-function toggleTaskListGroup(groupKey) {
+// groupKey 折叠切换。opts.skipRender=true 时，任务视图未渲染该分组也不回退全量渲染
+// （计划面板与任务视图共享折叠态，从计划面板触发时当前视图可能不是任务视图）。
+function toggleTaskListGroup(groupKey, opts) {
+    opts = opts || {};
     const nowCollapsed = !taskListGroupCollapsed[groupKey];
     taskListGroupCollapsed[groupKey] = nowCollapsed;
     // per-list 折叠态持久化：防抖写入 localStorage
@@ -1008,8 +1019,10 @@ function toggleTaskListGroup(groupKey) {
 
     const contentEl = document.querySelector(`[data-task-group-content="${groupKey}"]`);
     if (!contentEl) {
-        // DOM 中找不到（如视图未在任务视图），回退全量渲染
-        renderView();
+        // DOM 中找不到（如当前非任务视图，或由计划面板触发）：仅同步计划面板折叠态，
+        // 避免无谓的全量重渲染（重渲染会丢失滚动位置）
+        if (typeof syncPlanPanelGroupCollapse === 'function') syncPlanPanelGroupCollapse(groupKey);
+        if (!opts.skipRender) renderView();
         return;
     }
 
@@ -1051,6 +1064,9 @@ function toggleTaskListGroup(groupKey) {
         }
     }
 
+    // 与计划面板共享折叠态：同步计划面板中同 key 的分组
+    if (typeof syncPlanPanelGroupCollapse === 'function') syncPlanPanelGroupCollapse(groupKey);
+
     // 同步顶部"全部展开/收起"按钮状态
     const groups = _taskListVirtualState ? _taskListVirtualState.groups : buildTaskListGroups();
     updateToggleAllGroupsButton(groups);
@@ -1068,6 +1084,8 @@ function toggleAllTaskListGroups() {
         groups.forEach(g => { delete taskListGroupCollapsed[g.key]; });
     }
     renderView();
+    // 计划面板共享折叠态：全部展开/收起后同步其分组显隐
+    if (typeof syncPlanPanelGroupCollapse === 'function') syncPlanPanelGroupCollapse();
 }
 
 // 同步顶部"全部展开/收起"按钮的图标与标题，反映当前分组折叠状态
@@ -1180,7 +1198,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
 
         return `
-            <div class="schedule-task-item task-row group flex items-start gap-4 mb-2.5 task-item ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" ondragstart="handleScheduleDragStart(event, '${task.id}')">
+            <div class="schedule-task-item task-row group flex items-start gap-4 mb-2.5 task-item ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)" draggable="true" ondragstart="handleScheduleDragStart(event, '${task.id}')">
                 <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
                     ${renderTaskCheckbox(task, { taskId: task.id })}
                     ${renderFocusButton(task.id, getScheduleConfig().showFocusButton)}

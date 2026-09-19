@@ -18,6 +18,7 @@ function getQuadrantConfig() {
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
     if (typeof c.showDetails !== 'boolean') c.showDetails = true;
+    if (typeof c.compact !== 'boolean') c.compact = false;
     // per-list 回退链
     const listPrefs = _getCurrentListViewPrefs('quadrant');
     if (listPrefs) return Object.assign({}, c, listPrefs);
@@ -260,7 +261,7 @@ function _qThumbRowHtml(task, key) {
     return `
         <div class="task-row flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-r-lg bg-theme-tertiary cursor-pointer group ${task.completed ? 'opacity-55' : ''} hover:opacity-80 transition"
              style="border-left: 3px solid ${barColor};"
-             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" data-task-id="${task.id}"
+             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)" draggable="true" data-task-id="${task.id}"
              ondragstart="handleTaskDragStart(event, '${task.id}')"
              ondragover="handleTaskDragOver(event)"
              ondrop="handleTaskDrop(event, '${task.id}', '${key}')">
@@ -318,6 +319,60 @@ function _setupQThumbLazyIO(container) {
         entries.forEach(en => { if (en.isIntersecting) _loadQThumbBatch(en.target); });
     }, { rootMargin: '300px 0px' });
     sentinels.forEach(s => _qThumbLazyIO.observe(s));
+}
+
+// 紧凑显示模式下的任务卡片：复用任务视图（buildTaskListItemHtml）的横向单行布局，
+// 但沿用四象限自身的 showDetails / showFocusButton 配置，并保留象限专属徽章
+// （如「重要不紧急」象限的「逾期 N 天」），与确认的方案一致。
+function quadrantCompactTaskHtml(task, key, cfg) {
+    const list = lists.find(l => l.id === task.listId);
+    const listColor = list ? list.color : '#9ca3af';
+    const listName = list ? list.name : '';
+    const barColor = _extTaskBarColor(task, listColor);
+    const extIcon = _extTaskIconHtml(task);
+    const timeDisplay = formatTaskListTimeShort(task);
+    const isOverdue = isTaskOverdue(task);
+    const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
+    const focusMinutes = getTaskFocusMinutes(task.id);
+    const progress = task.progress || 0;
+    const tagCapsules = renderTagCapsules(task, 2, 'right');
+    // 第二象限逾期档位徽章（保留并融合进任务视图卡片样式）
+    const stagnationDays = getQuadrantStagnationDays(task);
+    const stagLevel = getQuadrantStagnationLevel(task);
+    const stagBadge = (stagLevel > 0 && key === 'important-not-urgent')
+        ? `<span class="flex items-center gap-1 ${QUADRANT_STAGNATION_COLORS[stagLevel]}"><i class="fas fa-hourglass-half"></i>逾期${stagnationDays}天</span>`
+        : '';
+    // 详情行：沿用四象限自身的「显示任务详情」开关
+    let detailsLine = '';
+    if (cfg.showDetails !== false) {
+        const subtaskHtml = renderSubtaskListDisplay(task);
+        detailsLine = subtaskHtml
+            ? subtaskHtml
+            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '');
+    }
+    return `
+        <div class="task-list-item task-row relative flex items-center gap-3 py-2 px-3 rounded-r-lg bg-theme-tertiary hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
+             style="border-left: 4px solid ${barColor}; border-top-left-radius: 0; border-bottom-left-radius: 0;"
+             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)" draggable="true" data-task-id="${task.id}"
+             ondragstart="handleTaskDragStart(event, '${task.id}')"
+             ondragover="handleTaskDragOver(event)"
+             ondrop="handleTaskDrop(event, '${task.id}', '${key}')">
+            ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
+            <div class="flex-1 min-w-0 flex flex-col">
+                <span class="${getTaskViewConfig().showDetails ? 'font-medium' : 'text-sm'} ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0 flex items-center">${extIcon}${task.title || '新任务'}</span>
+                ${detailsLine ? `<div>${detailsLine}</div>` : ''}
+            </div>
+            ${renderFocusButton(task.id, cfg.showFocusButton !== false)}
+            <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
+                ${tagCapsules}
+                ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
+                ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
+                ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span>${listName}</span>` : ''}
+                ${stagBadge}
+            </div>
+            ${timeDisplay ? `<span class="flex-shrink-0 text-xs ${timeTextClass} whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
+        </div>
+    `;
 }
 
 function renderQuadrantView(container) {
@@ -453,13 +508,14 @@ function renderQuadrantView(container) {
                         <span>当前核心焦虑源过多（${urgentImportantIncomplete}个），建议拆解或降级部分任务。</span>
                     </div>
                 ` : ''}
-                <div class="flex-1 min-h-0 overflow-y-auto${isThumb ? ' q-thumb-list space-y-1' : ' space-y-2'} quadrant-drop-zone"
+                <div class="flex-1 min-h-0 overflow-y-auto${isThumb ? ' q-thumb-list space-y-1' : (quadrantCfg.compact ? '' : ' space-y-2')} quadrant-drop-zone"
                      ondragover="handleTaskDragOver(event)"
                      ondrop="handleTaskDrop(event, null, '${key}')">
                     ${q.tasks.length === 0 ? (isThumb
                         ? `<div class="text-center py-3 text-theme-muted text-xs border-2 border-dashed border-theme rounded-lg">暂无任务</div>`
                         : `<div class="text-center py-6 text-theme-muted text-sm border-2 border-dashed border-theme rounded-lg">暂无任务（拖拽任务到此处）</div>`)
                     : (isThumb ? renderThumbTasks(q, key) : q.tasks.map(task => {
+                        if (quadrantCfg.compact) return quadrantCompactTaskHtml(task, key, quadrantCfg);
                         const list = lists.find(l => l.id === task.listId);
                         const timeDisplay = formatTaskTimeLabel(task, false);
                         const listColor = list ? list.color : '#9ca3af';
@@ -472,7 +528,7 @@ function renderQuadrantView(container) {
                         const isOverdue = isTaskOverdue(task);
                         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
                         return `
-                            <div class="task-row flex items-start gap-3 mb-3 group ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')" draggable="true" data-task-id="${task.id}"
+                            <div class="task-row flex items-start gap-3 mb-3 group ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)" draggable="true" data-task-id="${task.id}"
                                  ondragstart="handleTaskDragStart(event, '${task.id}')"
                                  ondragover="handleTaskDragOver(event)"
                                  ondrop="handleTaskDrop(event, '${task.id}', '${key}')">
@@ -666,6 +722,8 @@ function openQuadrantConfig() {
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
     if (sdEl) sdEl.checked = cfg.showDetails !== false;
+    const cpEl = document.getElementById('qc-compact');
+    if (cpEl) cpEl.checked = cfg.compact === true;
     openViewConfigPanel('quadrant', (forSwitch) => {
         saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
         if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
@@ -682,6 +740,8 @@ function onQuadrantConfigChange() {
     if (scEl) target.showCompleted = scEl.checked;
     if (sfEl) target.showFocusButton = sfEl.checked;
     if (sdEl) target.showDetails = sdEl.checked;
+    const cpEl = document.getElementById('qc-compact');
+    if (cpEl) target.compact = cpEl.checked;
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
@@ -693,7 +753,7 @@ function resetQuadrantViewConfig() {
         openQuadrantConfig();
         showToast('已恢复该清单的四象限视图配置（继承全局）', 'success');
     } else {
-        _resetViewConfigToDefault('quadrantConfig', { showCompleted: true, showFocusButton: true });
+        _resetViewConfigToDefault('quadrantConfig', { showCompleted: true, showFocusButton: true, compact: false });
         saveData();
         renderView();
         openQuadrantConfig();

@@ -27,7 +27,7 @@ python --version
 C:\Users\你的用户名\TODO
 ```
 
-> 注意：路径中避免使用中文或空格
+> 中文与含空格的路径均可正常工作（快捷方式经环境变量传参创建，不受系统代码页影响）；路径仍建议尽量简洁，便于日后排查问题。
 
 ### 3. 运行安装脚本
 
@@ -60,6 +60,16 @@ start.bat           # 启动服务
 start.bat stop      # 停止服务
 start.bat restart   # 重启服务
 ```
+
+## 指定 Python 版本
+
+系统会自动选择可用的最高版本 Python（≥ 3.8）运行，并把结果缓存到应用目录的 `python.conf`，日常启动无需重复探测（更快）。需要固定某个版本时：
+
+1. 用记事本打开应用目录下的 `python.conf`
+2. 写入想用的命令，例如 `py -3.9`；或解释器完整路径（路径含空格时整体加双引号），例如 `"C:\Python39\python.exe"`
+3. 保存后重新双击快捷方式即可
+
+若缓存中的命令失效（如 Python 升级、卸载），`start.bat` 会自动回退到实时探测并重写缓存。
 
 ## 可选：安装 icalendar（仅「外部日历订阅」需要）
 
@@ -116,12 +126,6 @@ powershell -ExecutionPolicy Bypass -File install_icalendar.ps1 -PythonPath "C:\P
 ```cmd
 powershell -ExecutionPolicy Bypass -File install_icalendar.ps1 -DryRun
 ```
-
-### 离线 / 内网环境怎么装
-
-1. 在一台**能上网**的机器上双击 `pack_icalendar_wheels.bat`，生成 `wheels/` 目录。
-2. 把 `wheels/` 拷贝到内网机，与 `install_icalendar.bat` 放在同一目录。
-3. 在内网机运行 `install_icalendar.bat`，脚本自动识别 `wheels/` 走离线安装，全程不联网。
 
 ## 文件说明
 

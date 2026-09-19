@@ -525,12 +525,16 @@ function importData(file) {
                 settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
 
                 quadrantOrder = data.quadrantOrder || quadrantOrder;
-                pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || []);
+                // 旧版备份把超出保留上限的专注记录存于 pomodoroArchive 扩展字段（按月），
+                // 导入时并入主列表，保证历史记录/专注概况可见；离线回退路径同样生效
+                const archiveMonths = (data.pomodoroArchive && typeof data.pomodoroArchive === 'object') ? data.pomodoroArchive : {};
+                const archiveRecords = [].concat(...Object.values(archiveMonths).filter(Array.isArray));
+                pomodoroHistory = deduplicatePomodoroHistory([...(data.pomodoroHistory || []), ...archiveRecords]);
 
                 applySettings(settings);
                 // 先确保数据写入服务端，再重新初始化（避免 init 的 loadData 读到旧数据）
                 // /api/import 会把主体写入 data.json，并还原扩展字段：
-                // pomodoroArchive（归档专注历史，按月合并去重写回 pomodoro_archive/）
+                // pomodoroArchive（归档专注历史，按 startedAt+taskId 去重合并进主列表）
                 // holidayData（节假日数据，写入 holiday_data.json）
                 try {
                     const importPayload = Object.assign({}, data, { taskLists: lists, tasks: tasks, settings: settings });
@@ -728,8 +732,8 @@ const DEFAULT_SETTINGS = {
     defaultView: 'task',
     // 外部日历订阅(ICS)：详见《外部日历订阅同步需求说明书.md》4.1
     calendarSubscriptions: [],
-    // 离线版「显示外部日历」开关：关闭时隐藏侧边栏外部日历分组，并过滤各视图中的外部任务；在线版始终显示（开关仅离线版设置面板提供）
-    showExternalCalendars: true,
+    // 离线版「显示外部日历」开关：关闭时隐藏侧边栏外部日历分组，并过滤各视图中的外部任务；在线版始终显示（开关仅在线版设置面板提供）
+    showExternalCalendars: false,
     // 视图自定义：六视图的顺序与显隐；顺序即显示顺序，enabled=false 表示隐藏该视图
     viewOrder: [
         { id: 'task', enabled: true },
@@ -758,6 +762,8 @@ const DEFAULT_SETTINGS = {
     cmdRemoveTimeText: true,
     defaultTaskDate: 'today',
     easterEggEnabled: true,
+    // 首次使用引导：0=未看过（首次启动且无任务时自动弹出），>0=已看过/已跳过的引导版本号
+    onboardingVersion: 0,
     showHolidayCountdown: true,
     priorityTaskBg: true,
     priorityDisplayMode: 'checkbox',
@@ -787,6 +793,8 @@ const DEFAULT_SETTINGS = {
     bgImage: '',
     bgOpacity: 100,
     bgBlur: 10,
+    // 背景图填充方式：cover 填充裁剪 | contain 完整适应 | tile 平铺（单张/轮播模式共用）
+    bgFillMode: 'cover',
     backupEnabled: false,
     backupInterval: 7,
     retentionPeriod: 30,
@@ -1163,6 +1171,9 @@ function updateThemeButtons() {
 function updateBgOpacity() {
     const opacity = document.getElementById('settings-bg-opacity').value;
     document.getElementById('bg-opacity-value').textContent = opacity;
+    // 实时同步到 settings：轮播换图时 applyBackgroundImage 会重读该值，
+    // 避免未点「保存设置」时换图把透明度弹回旧值（PRD 视觉延续性）
+    settings.bgOpacity = parseInt(opacity) || 100;
     const bgImage = document.getElementById('background-image');
     bgImage.style.opacity = opacity / 100;
 }
@@ -1170,6 +1181,8 @@ function updateBgOpacity() {
 function updateBgBlur() {
     const blur = document.getElementById('settings-bg-blur').value;
     document.getElementById('bg-blur-value').textContent = blur;
+    // 同上：实时同步，换图不重置毛玻璃强度
+    settings.bgBlur = parseInt(blur);
     document.documentElement.style.setProperty('--bg-blur', blur + 'px');
     // 方案A：blur=0 时彻底关闭 backdrop-filter 并提升底色不透明度。
     // backdrop-filter: blur(0px) 在多数浏览器仍会创建合成层并触发 backdrop 采样，
@@ -1181,13 +1194,60 @@ function updateBgBlur() {
     }
 }
 
+// 背景图填充方式（PRD 4.2）：cover 填充裁剪 / contain 完整适应 / tile 平铺
+function applyBgFillMode() {
+    const bgImage = document.getElementById('background-image');
+    if (!bgImage) return;
+    const mode = settings.bgFillMode || 'cover';
+    if (mode === 'contain') {
+        bgImage.style.backgroundSize = 'contain';
+        bgImage.style.backgroundPosition = 'center';
+        bgImage.style.backgroundRepeat = 'no-repeat';
+    } else if (mode === 'tile') {
+        bgImage.style.backgroundSize = 'auto';
+        bgImage.style.backgroundPosition = 'center top';
+        bgImage.style.backgroundRepeat = 'repeat';
+    } else {
+        bgImage.style.backgroundSize = 'cover';
+        bgImage.style.backgroundPosition = 'center';
+        bgImage.style.backgroundRepeat = 'no-repeat';
+    }
+}
+
+// 设置面板「背景图填充方式」切换按钮：即时应用，随「保存设置」持久化
+function setBgFillMode(mode) {
+    if (['cover', 'contain', 'tile'].indexOf(mode) === -1) mode = 'cover';
+    settings.bgFillMode = mode;
+    applyBgFillMode();
+    updateBgFillModeButtons();
+}
+
+// 同步填充方式切换按钮高亮（active=accent，与背景图模式 Tab 同风格）
+function updateBgFillModeButtons() {
+    const mode = settings.bgFillMode || 'cover';
+    ['cover', 'contain', 'tile'].forEach(function (m) {
+        const btn = document.getElementById('bg-fill-' + m);
+        if (!btn) return;
+        if (m === mode) {
+            btn.classList.add('border-accent', 'bg-accent-soft', 'text-accent-dark');
+            btn.classList.remove('border-theme', 'text-theme-secondary', 'hover:bg-theme-secondary');
+        } else {
+            btn.classList.remove('border-accent', 'bg-accent-soft', 'text-accent-dark');
+            btn.classList.add('border-theme', 'text-theme-secondary', 'hover:bg-theme-secondary');
+        }
+    });
+}
+
 function applyBackgroundImage() {
     const bgImage = document.getElementById('background-image');
     if (!bgImage) return;
 
-    if (settings.bgImage) {
-        bgImage.style.backgroundImage = `url(${settings.bgImage})`;
+    // 生效背景：轮播模式取服务端轮播图，否则取单张图片设置
+    const src = _getEffectiveBgImageSrc();
+    if (src) {
+        bgImage.style.backgroundImage = `url(${src})`;
         bgImage.style.opacity = (settings.bgOpacity || 100) / 100;
+        applyBgFillMode();
         bgImage.classList.remove('hidden');
         document.body.classList.add('has-bg-image');
         const blurVal = settings.bgBlur ?? 10;
@@ -1232,6 +1292,10 @@ function handleBgImageUpload(event) {
         reader.onload = function(e) {
             const imageDataUrl = e.target.result;
             settings.bgImage = imageDataUrl;
+            // 上传单张图即为「单张图片」模式：确保轮播已关闭（正常流程 Tab 切换已关闭，此处兜底）
+            if (bgCarouselState && bgCarouselState.enabled) {
+                bgCarouselUpdateConfig({ enabled: false });
+            }
             applyBackgroundImage();
             saveData();
 
@@ -1264,46 +1328,7 @@ function clearBgImage() {
         _bgImageDeleteConfirming = false;
         if (_bgImageDeleteTimer) { clearTimeout(_bgImageDeleteTimer); _bgImageDeleteTimer = null; }
         _resetBgImageDeleteBtn(btn);
-
-        // 保留当前深色/浅色模式（按用户要求：删除背景图时不切换主题）
-        // 背景图取色方案（vibrant/muted/steady，含旧版遗留 'dark' 键）失效后，
-        // 自动切换到与原强调色色相最接近的内置配色（星夜/春野/夕照）；
-        // 内置配色与自定义强调色（custom:xxx）与背景图无关，保持不变
-        const BG_PALETTE_KEYS = ['vibrant', 'muted', 'steady', 'dark'];
-        const palette = settings.themePalette;
-        if (palette && BG_PALETTE_KEYS.indexOf(palette) !== -1) {
-            selectThemePalette(findClosestBuiltinPalette(palette));
-        }
-
-        // 清除背景图取色数据及其编辑记录（customPalettes），
-        // 避免残留旧图颜色污染下一次设置背景图时的取色与预览
-        settings.themePaletteColors = null;
-        if (settings.customPalettes) {
-            BG_PALETTE_KEYS.forEach(function (k) { delete settings.customPalettes[k]; });
-            if (Object.keys(settings.customPalettes).length === 0) {
-                settings.customPalettes = null;
-            }
-        }
-
-        settings.bgImage = '';
-        applyBackgroundImage();
-        saveData();
-
-        // 隐藏预览
-        const previewContainer = document.getElementById('bg-image-preview');
-        if (previewContainer) previewContainer.classList.add('hidden');
-
-        // 重置文件输入
-        const fileInput = document.getElementById('bg-image-upload');
-        if (fileInput) fileInput.value = '';
-
-        // 隐藏取色预览区域
-        const paletteContainer = document.getElementById('palette-preview-container');
-        const paletteHint = document.getElementById('palette-hint-text');
-        if (paletteContainer) paletteContainer.classList.add('hidden');
-        if (paletteHint) paletteHint.classList.add('hidden');
-
-        showToast('背景图片已清除', 'info');
+        _doClearBgImage();
         return;
     }
 
@@ -1326,4 +1351,278 @@ function _resetBgImageDeleteBtn(btn) {
     btn.classList.remove('bg-red-500', 'border-red-500', 'text-white');
     btn.classList.add('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
     btn.title = '删除背景图片';
+}
+
+// 清空单张背景设置并进入「无背景图片」状态（单张/轮换删除按钮共用）：
+// 保留当前深浅模式 + 恢复最接近的内置配色 + 清空取色数据 + 隐藏预览
+function _doClearBgImage() {
+    // 保留当前深色/浅色模式（按用户要求：删除背景图时不切换主题）
+    // 背景图取色方案（vibrant/muted/steady，含旧版遗留 'dark' 键）失效后，
+    // 自动切换到与原强调色色相最接近的内置配色（星夜/春野/夕照）；
+    // 内置配色与自定义强调色（custom:xxx）与背景图无关，保持不变
+    const BG_PALETTE_KEYS = ['vibrant', 'muted', 'steady', 'dark'];
+    const palette = settings.themePalette;
+    if (palette && BG_PALETTE_KEYS.indexOf(palette) !== -1) {
+        selectThemePalette(findClosestBuiltinPalette(palette));
+    }
+
+    // 清除背景图取色数据及其编辑记录（customPalettes），
+    // 避免残留旧图颜色污染下一次设置背景图时的取色与预览
+    settings.themePaletteColors = null;
+    if (settings.customPalettes) {
+        BG_PALETTE_KEYS.forEach(function (k) { delete settings.customPalettes[k]; });
+        if (Object.keys(settings.customPalettes).length === 0) {
+            settings.customPalettes = null;
+        }
+    }
+
+    settings.bgImage = '';
+    applyBackgroundImage();
+    saveData();
+
+    // 隐藏预览
+    const previewContainer = document.getElementById('bg-image-preview');
+    if (previewContainer) previewContainer.classList.add('hidden');
+
+    // 重置文件输入
+    const fileInput = document.getElementById('bg-image-upload');
+    if (fileInput) fileInput.value = '';
+
+    // 隐藏取色预览区域
+    const paletteContainer = document.getElementById('palette-preview-container');
+    const paletteHint = document.getElementById('palette-hint-text');
+    if (paletteContainer) paletteContainer.classList.add('hidden');
+    if (paletteHint) paletteHint.classList.add('hidden');
+
+    showToast('背景图片已清除', 'info');
+}
+
+// 清除轮播目录并停留「轮换图片」模式（二次确认，交互与单张图片「删除背景图片」一致）
+let _bgCarouselDeleteConfirming = false;
+let _bgCarouselDeleteTimer = null;
+function clearBgCarousel() {
+    const btn = document.getElementById('bg-carousel-delete-btn');
+
+    if (_bgCarouselDeleteConfirming) {
+        // 第二次点击：确认清除。仅清空目录并停留在「轮换图片」模式（方便重新输入目录路径，
+        // 而非切换到单张模式）；服务端进入 no_directory 空目录提示态、回退默认背景
+        _bgCarouselDeleteConfirming = false;
+        if (_bgCarouselDeleteTimer) { clearTimeout(_bgCarouselDeleteTimer); _bgCarouselDeleteTimer = null; }
+        _resetBgCarouselDeleteBtn(btn);
+        bgCarouselUpdateConfig({ directory: '' }).then(state => {
+            if (state && state.success !== false) {
+                showToast('背景图目录已清除', 'info');
+            }
+        });
+        return;
+    }
+
+    // 第一次点击：进入确认状态
+    _bgCarouselDeleteConfirming = true;
+    if (btn) {
+        btn.classList.add('bg-red-500', 'border-red-500', 'text-white');
+        btn.classList.remove('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
+        btn.title = '再次点击确认删除';
+    }
+    if (_bgCarouselDeleteTimer) clearTimeout(_bgCarouselDeleteTimer);
+    _bgCarouselDeleteTimer = setTimeout(() => {
+        _bgCarouselDeleteConfirming = false;
+        _resetBgCarouselDeleteBtn(btn);
+    }, 3000);
+}
+
+function _resetBgCarouselDeleteBtn(btn) {
+    if (!btn) return;
+    btn.classList.remove('bg-red-500', 'border-red-500', 'text-white');
+    btn.classList.add('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
+    btn.title = '删除背景图片';
+}
+
+// ==================== 背景图目录自动轮播（客户端被动接收） ====================
+// 文档：《背景图目录自动轮播功能 PRD 需求说明书.md》5.2
+// 零预加载：仅加载当前展示的图片（先经 Image 对象预载、成功后无缝替换 DOM）。
+// 换图不重置透明度/毛玻璃/主题配色；深浅模式与背景图取色按新图重新计算。
+let bgCarouselState = null;           // 服务端轮播状态缓存（poll /api/bg-carousel）
+let _bgCarouselAppliedKey = null;     // 已应用到 DOM 的状态指纹 'enabled:switchId'
+let _bgCarouselToastedErrorId = 0;     // 已 Toast 提示过的 errorId（跨轮询去重）
+let _bgCarouselLoadFailures = 0;      // 当前图连续加载失败次数（换下一张重试的上限）
+
+// 当前生效的背景图地址：轮播模式 → 轮播图 URL（错误态为空=回退系统默认背景）；
+// 单张模式 → settings.bgImage
+function _getEffectiveBgImageSrc() {
+    if (bgCarouselState && bgCarouselState.enabled) {
+        return _bgCarouselImageUrl() || '';
+    }
+    return settings.bgImage || '';
+}
+
+// 轮播当前图片 URL（携带 v=switchId：换图后地址变化，天然绕过浏览器缓存）
+function _bgCarouselImageUrl() {
+    if (!bgCarouselState || !bgCarouselState.enabled || !bgCarouselState.currentFile) return null;
+    return '/api/bg-carousel/image?v=' + bgCarouselState.switchId;
+}
+
+// 启动时拉取一次轮播状态（2.5s 超时；失败静默降级为单张图片模式）
+async function initBgCarousel() {
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 2500);
+        const resp = await fetch('/api/bg-carousel', { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!resp.ok) return;
+        const state = await resp.json();
+        if (!state || typeof state !== 'object') return;
+        bgCarouselState = state;
+        _bgCarouselAppliedKey = (state.enabled ? '1' : '0') + ':' + state.switchId;
+        _bgCarouselToastedErrorId = state.errorId || 0;
+        // 启动即按当前轮播图同步深浅模式与取色（页面关闭期间可能已换过图）
+        if (state.enabled && state.currentFile) {
+            _onBgCarouselImageApplied();
+        }
+    } catch (e) {
+        // 服务端不可用：保持单张图片模式
+    }
+}
+
+// 轮询入口（与通知轮询同拍，5s 一次）：switchId/enabled 变化时应用新图
+function checkBgCarouselUpdate() {
+    fetch('/api/bg-carousel').then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(state => {
+        _applyBgCarouselState(state);
+    }).catch(() => {
+        // 网络断开 / 服务端宕机：保持当前背景不变，静默重试
+    });
+}
+
+// 应用服务端轮播状态（含设置面板触发的 config/next 响应）
+function _applyBgCarouselState(state) {
+    if (!state || typeof state !== 'object') return;
+    const key = (state.enabled ? '1' : '0') + ':' + state.switchId;
+    const changed = key !== _bgCarouselAppliedKey;
+    bgCarouselState = state;
+    if (changed) {
+        _bgCarouselAppliedKey = key;
+        // 错误提示去重（PRD 6）：仅「目录已配置但无有效图片」(empty_directory) 时 Toast；
+        // no_directory（尚未配置目录）属配置中状态，由设置面板空目录提示引导，不在首次启用时打扰
+        if ((state.errorId || 0) > _bgCarouselToastedErrorId) {
+            _bgCarouselToastedErrorId = state.errorId;
+            if (state.error === 'empty_directory') {
+                showToast('自动轮播失败，指定目录下无有效图片', 'error', 6000);
+            }
+        }
+        if (state.enabled && state.currentFile) {
+            _bgCarouselSwapImage();
+        } else {
+            // 错误态回退默认背景 / 切回单张图片模式
+            applyBackgroundImage();
+        }
+    }
+    if (typeof updateBgCarouselStatusUI === 'function') updateBgCarouselStatusUI();
+}
+
+// 零预加载换图：仅创建当前图 Image 对象，加载完成后替换 DOM 背景（无缝直换）
+function _bgCarouselSwapImage() {
+    const src = _bgCarouselImageUrl();
+    const el = document.getElementById('background-image');
+    if (!el || !src) { applyBackgroundImage(); return; }
+    const img = new Image();
+    img.onload = function () {
+        _bgCarouselLoadFailures = 0;
+        // 预载期间状态又变（快速连续切换）：丢弃过期结果
+        if (_bgCarouselImageUrl() === src) {
+            applyBackgroundImage();
+            _onBgCarouselImageApplied();
+        }
+    };
+    img.onerror = function () {
+        _handleBgCarouselImageError();
+    };
+    img.src = src;
+}
+
+// 图片加载失败（PRD 6）：请求服务端换下一张；连续失败达上限则保持当前背景并提示
+function _handleBgCarouselImageError() {
+    _bgCarouselLoadFailures++;
+    if (_bgCarouselLoadFailures >= 3) {
+        showToast('背景图加载失败，已暂停自动轮播', 'error', 6000);
+        return;
+    }
+    fetch('/api/bg-carousel/next', { method: 'POST' }).then(r => r.json()).then(state => {
+        if (state && state.success) _applyBgCarouselState(state);
+    }).catch(() => {});
+}
+
+// 新背景图应用后的联动（PRD 5.3）：
+// 1. 按亮度均值自动切换深色/浅色模式（与上传背景图流程同口径）
+// 2. 透明度/毛玻璃/主题配色保持不动；若当前配色为背景图取色方案（vibrant/muted/steady），
+//    按新图重新取色后沿用同一风格
+function _onBgCarouselImageApplied() {
+    const src = _bgCarouselImageUrl();
+    if (!src) return;
+    extractThemePalettes(src, function (palettes) {
+        if (!palettes) return;
+        settings.themePaletteColors = palettes;
+        const brightness = (typeof palettes._brightness === 'number') ? palettes._brightness : bgImageBrightness;
+        const detectedTheme = brightness < 0.45 ? 'dark' : 'light';
+        if (settings.theme !== detectedTheme) {
+            setTheme(detectedTheme);
+        }
+        const paletteKey = settings.themePalette;
+        // 与单张上传一致：取色后展示取色方案供用户选择（设置面板已渲染该 UI 时）
+        //（周期性换图不弹 Toast，避免打扰；设置面板内可见方案列表刷新即足够）
+        const container = document.getElementById('palette-preview-container');
+        const hint = document.getElementById('palette-hint-text');
+        if (container) container.classList.remove('hidden');
+        if (hint) hint.classList.remove('hidden');
+        if (typeof _renderPalettePreviews === 'function') _renderPalettePreviews(palettes);
+        // 已选背景图取色方案：沿用同一风格按新图重应用（PRD 5.3）
+        if (paletteKey === 'vibrant' || paletteKey === 'muted' || paletteKey === 'steady') {
+            applyThemePalette(paletteKey);
+        }
+        // 持久化新调色板（保证刷新/多标签页一致；节流保存）
+        saveData();
+    });
+}
+
+// 设置面板「下一张」手动调试：通知服务器立即切换
+function bgCarouselNext() {
+    fetch('/api/bg-carousel/next', { method: 'POST' }).then(r => r.json()).then(state => {
+        if (state && state.success) {
+            _applyBgCarouselState(state);
+        } else if (state && state.reason === 'not_enabled') {
+            showToast('请先切换到「轮换图片」模式', 'warning', 3000);
+        }
+    }).catch(() => {
+        showToast('服务端不可用，无法切换背景图', 'error', 3000);
+    });
+}
+
+// 设置面板更新轮播配置（立即生效，POST 到服务端）
+function bgCarouselUpdateConfig(config, onError) {
+    return fetch('/api/bg-carousel/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    }).then(r => r.json()).then(state => {
+        if (!state || state.success === false) {
+            if (state && state.reason === 'directory_not_found') {
+                showToast('目录不存在，请检查路径', 'error', 4000);
+            }
+            if (typeof onError === 'function') onError(state);
+            if (state) _applyBgCarouselState(state);
+            return state;
+        }
+        _applyBgCarouselState(state);
+        return state;
+    }).catch(() => {
+        showToast('服务端不可用，轮播设置未保存', 'error', 4000);
+        return null;
+    });
+}
+
+// 设置面板弹出系统目录选择对话框（在服务器所在机器上）
+function bgCarouselPickDirectory() {
+    return fetch('/api/bg-carousel/pick-directory', { method: 'POST' }).then(r => r.json());
 }

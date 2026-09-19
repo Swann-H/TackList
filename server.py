@@ -31,7 +31,6 @@ DATA_FILE = os.path.join(DIRECTORY, 'data.json')
 LOCK_FILE = os.path.join(DIRECTORY, '.data.lock')
 ARCHIVE_DIR = os.path.join(DIRECTORY, 'pomodoro_archive')
 BACKUP_DIR = os.path.join(DIRECTORY, 'backups')
-POMODORO_HISTORY_LIMIT = 500
 
 DEFAULT_DATA = {
     "taskLists": [{"id": "default", "name": "默认", "color": "#3b82f6"}],
@@ -214,54 +213,78 @@ def save_data_to_file(data):
     finally:
         release_file_lock(lock_fd)
 
-def archive_pomodoro_history(history_list):
-    """将超出上限的旧历史记录归档到 pomodoro_archive/ 目录，按月存储，不丢失数据。"""
-    if len(history_list) <= POMODORO_HISTORY_LIMIT:
-        return
-    overflow = history_list[:-POMODORO_HISTORY_LIMIT]
-    if not overflow:
-        return
-    os.makedirs(ARCHIVE_DIR, exist_ok=True)
-    # 按月分组归档
-    monthly = {}
-    for entry in overflow:
-        date_str = entry.get('date', entry.get('startedAt', ''))
+def _bump_data_version():
+    """服务端写盘后抬高 _data_version。
+
+    客户端全量 PUT /api/data 依据版本号做冲突检测；若服务端自行写盘
+    （番茄历史、连续番茄数等）不抬高版本号，携带旧版本号的客户端 PUT
+    会通过一致性检查，用内存里的旧 pomodoroHistory 直接覆盖服务端刚
+    写入的专注记录（丢更新），且其他标签页因版本号未变跳过刷新，
+    永远看不到新记录。"""
+    global _data_version
+    _data_version += 1
+
+def _migrate_pomodoro_archive_into_main(data):
+    """一次性迁移：把旧机制 pomodoro_archive/ 目录中的归档专注记录并回 data.json 主列表。
+
+    旧机制在专注记录超过 500 条时把更早的记录移入按月归档文件，但应用界面
+    （历史记录/专注概况）从不读取归档，等于旧记录"看不见"。现专注记录全量
+    持久化于 data.json，启动时执行本迁移，按与主列表一致的 startedAt+taskId
+    组合去重合并；合并成功的归档文件随即删除（data.json 即唯一持久化载体，
+    导出/备份天然包含全部记录）。仅在 main() 启动阶段单线程调用。"""
+    if not os.path.isdir(ARCHIVE_DIR):
+        return 0
+    try:
+        archive_files = [f for f in os.listdir(ARCHIVE_DIR)
+                        if f.startswith('pomodoro_archive_') and f.endswith('.json')]
+    except Exception as e:
+        print("List pomodoro archive error: %s" % str(e))
+        return 0
+    if not archive_files:
+        return 0
+    history = data.setdefault('pomodoroHistory', [])
+    existing_keys = set((h.get('startedAt', ''), h.get('taskId')) for h in history)
+    merged = 0
+    for fname in archive_files:
+        fp = os.path.join(ARCHIVE_DIR, fname)
         try:
-            month_key = date_str[:7]  # "YYYY-MM"
-        except Exception:
-            month_key = 'unknown'
-        monthly.setdefault(month_key, []).append(entry)
-    for month_key, entries in monthly.items():
-        archive_file = os.path.join(ARCHIVE_DIR, 'pomodoro_archive_%s.json' % month_key.replace('-', ''))
-        existing = []
-        if os.path.exists(archive_file):
-            try:
-                with open(archive_file, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
-            except Exception:
-                existing = []
-        # 合并去重
-        existing_started = set(e.get('startedAt', '') for e in existing)
-        for entry in entries:
-            if entry.get('startedAt', '') not in existing_started:
-                existing.append(entry)
-                existing_started.add(entry.get('startedAt', ''))
-        try:
-            with open(archive_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
+            with open(fp, 'r', encoding='utf-8') as f:
+                entries = json.load(f)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                key = (entry.get('startedAt', ''), entry.get('taskId'))
+                if key in existing_keys:
+                    continue
+                history.append(entry)
+                existing_keys.add(key)
+                merged += 1
+            # 该文件所有记录已并入主列表（或本就是重复记录），删除避免重复迁移
+            os.remove(fp)
         except Exception as e:
-            print("Archive pomodoro history error: %s" % str(e))
-    # 截断主列表，只保留最近记录
-    history_list[:] = history_list[-POMODORO_HISTORY_LIMIT:]
+            print("Migrate pomodoro archive error (%s): %s" % (fname, str(e)))
+    if merged > 0:
+        # 按开始时间恢复时间序（归档记录比主列表现有记录更早，append 会打乱顺序）
+        history.sort(key=lambda h: h.get('startedAt') or '')
+        try:
+            save_data_to_file(data)
+        except Exception as e:
+            print("Save migrated pomodoro history error: %s" % str(e))
+        print("Migrated %d archived pomodoro records into main history" % merged)
+    return merged
 
 def collect_extended_backup_fields():
-    """收集导出/备份所需的扩展数据：归档专注历史 + 节假日数据。
+    """收集导出/备份所需的扩展数据：归档专注历史 + 节假日数据 + 背景轮播配置。
 
     返回 dict，可直接合并进导出对象：
     - pomodoroArchive: { "YYYYMM": [entries...] }（无归档时为 {}）
     - holidayData: 节假日数据（无文件时为 {}）
+    - bgCarousel: 背景图轮播用户配置（enabled/directory/interval/intervalUnit/order，
+      不含服务端运行时进度；无配置时为 {}）
     """
-    result = {'pomodoroArchive': {}, 'holidayData': {}}
+    result = {'pomodoroArchive': {}, 'holidayData': {}, 'bgCarousel': {}}
     # 归档专注历史（按月文件）
     try:
         if os.path.isdir(ARCHIVE_DIR):
@@ -286,42 +309,48 @@ def collect_extended_backup_fields():
                 result['holidayData'] = {k: v for k, v in data.items() if not k.startswith('_')}
     except Exception as e:
         print("Collect holiday data error: %s" % str(e))
+    # 背景图轮播配置（独立持久化于 bg_carousel.json，不在 data.json 内）
+    try:
+        with bg_carousel_lock:
+            for key in ('enabled', 'directory', 'interval', 'intervalUnit', 'order'):
+                if key in bg_carousel_state:
+                    result['bgCarousel'][key] = bg_carousel_state[key]
+    except Exception as e:
+        print("Collect bg carousel config error: %s" % str(e))
     return result
 
 def restore_extended_backup_fields(data):
-    """还原导出/备份中的扩展数据：归档专注历史按月合并去重写回归档目录，节假日数据写回独立文件。
+    """还原导出/备份中的扩展数据：归档专注历史合并回 data.json 主列表，节假日数据写回独立文件，
+    背景轮播配置写回 bg_carousel.json。
 
-    - pomodoroArchive: 与现有归档文件按 startedAt 去重合并（导入不覆盖、不丢本地已有记录）
+    - pomodoroArchive: 旧版备份的扩展字段（超出保留上限的归档记录），现全量
+      保存在主列表，导入时与现有主列表按 startedAt+taskId 去重合并
+      （导入不覆盖、不丢本地已有记录），保证界面可见
     - holidayData: 整体写入 holiday_data.json（节假日数据以导入文件为准）
+    - bgCarousel: 用户配置写入轮播状态表（旧备份无此字段时保持现状不动）。
+      目录路径不做存在性校验（备份可能来自另一台机器，目录缺失时由轮播
+      状态机进入 empty_directory 错误态并在设置面板提示，用户可重新选择）
     """
     # 归档专注历史
     archive = data.get('pomodoroArchive')
     if isinstance(archive, dict) and archive:
-        os.makedirs(ARCHIVE_DIR, exist_ok=True)
-        for month_key, entries in archive.items():
-            if not isinstance(entries, list) or not entries:
-                continue
-            # 文件名仅允许 YYYYMM 格式，防路径注入
-            if not isinstance(month_key, str) or not month_key.replace('.', '').isdigit() or '.' in month_key:
-                continue
-            archive_file = os.path.join(ARCHIVE_DIR, 'pomodoro_archive_%s.json' % month_key)
-            existing = []
-            if os.path.exists(archive_file):
-                try:
-                    with open(archive_file, 'r', encoding='utf-8') as f:
-                        existing = json.load(f)
-                except Exception:
-                    existing = []
-            existing_started = set(e.get('startedAt', '') for e in existing)
-            for entry in entries:
-                if isinstance(entry, dict) and entry.get('startedAt', '') not in existing_started:
-                    existing.append(entry)
-                    existing_started.add(entry.get('startedAt', ''))
-            try:
-                with open(archive_file, 'w', encoding='utf-8') as f:
-                    json.dump(existing, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                print("Restore pomodoro archive error: %s" % str(e))
+        try:
+            file_data = load_data_from_file()
+            history = file_data.setdefault('pomodoroHistory', [])
+            existing_keys = set((h.get('startedAt', ''), h.get('taskId')) for h in history)
+            for month_key, entries in archive.items():
+                if not isinstance(entries, list) or not entries:
+                    continue
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    key = (entry.get('startedAt', ''), entry.get('taskId'))
+                    if key not in existing_keys:
+                        history.append(entry)
+                        existing_keys.add(key)
+            save_data_to_file(file_data)
+        except Exception as e:
+            print("Restore pomodoro archive error: %s" % str(e))
     # 节假日数据
     holiday = data.get('holidayData')
     if isinstance(holiday, dict) and holiday:
@@ -331,23 +360,55 @@ def restore_extended_backup_fields(data):
                 json.dump(holiday, f, ensure_ascii=False, indent=4)
         except Exception as e:
             print("Restore holiday data error: %s" % str(e))
+    # 背景图轮播配置
+    carousel = data.get('bgCarousel')
+    if isinstance(carousel, dict) and carousel:
+        try:
+            with bg_carousel_lock:
+                if 'directory' in carousel:
+                    bg_carousel_state['directory'] = str(carousel.get('directory') or '').strip()
+                if 'enabled' in carousel:
+                    bg_carousel_state['enabled'] = bool(carousel.get('enabled'))
+                if 'interval' in carousel:
+                    try:
+                        bg_carousel_state['interval'] = max(1, min(365, int(carousel.get('interval', 30))))
+                    except (TypeError, ValueError):
+                        bg_carousel_state['interval'] = 30
+                if carousel.get('intervalUnit') in BG_CAROUSEL_UNIT_SECONDS:
+                    bg_carousel_state['intervalUnit'] = carousel['intervalUnit']
+                if carousel.get('order') in ('sequential', 'random'):
+                    bg_carousel_state['order'] = carousel['order']
+                if bg_carousel_state.get('enabled') and bg_carousel_state.get('directory'):
+                    # 启用态导入：立即从导入目录选图并起播（运行时进度不跨机器还原）
+                    _bg_carousel_advance_locked()
+                else:
+                    _bg_carousel_save_locked()
+        except Exception as e:
+            print("Restore bg carousel config error: %s" % str(e))
 
 def _save_pomodoro_history_entry(history_entry):
-    """保存单条番茄历史记录（去重：startedAt+taskId组合唯一）。"""
+    """保存单条番茄历史记录（去重：startedAt+taskId组合唯一）。
+
+    必须持 data_lock 完成整个读改写事务：与客户端全量 PUT /api data 的
+    "版本检查+写盘"互斥，防止交错覆盖。调用方均持有 pomodoro_lock，
+    锁序固定为 pomodoro_lock → data_lock（PUT 处理器为先 data_lock 后
+    pomodoro_lock 的顺序获取、非嵌套，不构成死锁）。写盘成功后抬高
+    版本号，理由见 _bump_data_version。"""
     try:
-        file_data = load_data_from_file()
-        history_list = file_data.setdefault('pomodoroHistory', [])
-        started_at = history_entry.get('startedAt', '')
-        task_id = history_entry.get('taskId')
-        # 拆分记录的startedAt相同但taskId不同，使用组合去重
-        is_duplicate = any(
-            h.get('startedAt') == started_at and h.get('taskId') == task_id
-            for h in history_list
-        )
-        if not is_duplicate:
-            history_list.append(history_entry)
-            archive_pomodoro_history(history_list)
-            save_data_to_file(file_data)
+        with data_lock:
+            file_data = load_data_from_file()
+            history_list = file_data.setdefault('pomodoroHistory', [])
+            started_at = history_entry.get('startedAt', '')
+            task_id = history_entry.get('taskId')
+            # 拆分记录的startedAt相同但taskId不同，使用组合去重
+            is_duplicate = any(
+                h.get('startedAt') == started_at and h.get('taskId') == task_id
+                for h in history_list
+            )
+            if not is_duplicate:
+                history_list.append(history_entry)
+                save_data_to_file(file_data)
+                _bump_data_version()
     except Exception as e:
         print("Save pomodoro history error: %s" % str(e))
 
@@ -367,10 +428,12 @@ def _do_pomodoro_complete(split_info=None):
         # 持久化 continuousTomatoCount 到数据文件（防止服务器重启丢失）
         today_str = datetime.now().strftime('%Y-%m-%d')
         try:
-            file_data = load_data_from_file()
-            file_data['continuousTomatoCount'] = pomodoro_state['continuousTomatoCount']
-            file_data['continuousTomatoCountDate'] = today_str
-            save_data_to_file(file_data)
+            with data_lock:
+                file_data = load_data_from_file()
+                file_data['continuousTomatoCount'] = pomodoro_state['continuousTomatoCount']
+                file_data['continuousTomatoCountDate'] = today_str
+                save_data_to_file(file_data)
+                _bump_data_version()
         except Exception as e:
             print("Save continuousTomatoCount error: %s" % str(e))
 
@@ -937,6 +1000,262 @@ def _do_calendar_sync():
     return {'added': total_added, 'updated': total_updated, 'removed': total_removed, 'results': results}
 
 
+# ==================== 背景图目录自动轮播 ====================
+# 文档：《背景图目录自动轮播功能 PRD 需求说明书.md》
+# 架构：服务端计时 + 客户端被动接收。配置与运行时状态持久化于独立文件 bg_carousel.json，
+# 与 data.json 完全隔离（避免客户端全量 PUT 覆盖服务端运行时状态，也避免每次换图抬高 _data_version）。
+BG_CAROUSEL_FILE = os.path.join(DIRECTORY, 'bg_carousel.json')
+BG_CAROUSEL_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+BG_CAROUSEL_UNIT_SECONDS = {'minutes': 60, 'hours': 3600, 'days': 86400}
+BG_CAROUSEL_MIME = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+    '.gif': 'image/gif', '.webp': 'image/webp',
+}
+
+# 轮播状态表：config 为用户配置（前端 POST 修改），runtime 为服务端维护的运行时进度
+# 默认值单列成常量：设置「重置数据」时以它整体还原（config + runtime 全部归零）
+_BG_CAROUSEL_DEFAULTS = {
+    # ---- config ----
+    'enabled': False,          # 轮播模式总开关（false=单张图片模式）
+    'directory': '',           # 壁纸目录绝对路径
+    'interval': 30,            # 轮播间隔数值
+    'intervalUnit': 'minutes', # minutes | hours | days
+    'order': 'sequential',     # sequential 顺序循环 | random 随机抽取
+    # ---- runtime ----
+    'currentIndex': 0,          # 当前图片在扫描列表中的索引（顺序模式）
+    'currentFile': '',          # 当前图片绝对路径
+    'nextSwitchAt': 0.0,       # 下次切换时间戳（epoch 秒）；重启后据此恢复节奏
+    'switchId': 0,             # 切换计数器：客户端据此判断是否需要换图
+    'imageCount': 0,           # 最近一次扫描的有效图片数
+    'error': '',                # '' | no_directory | empty_directory
+    'errorId': 0,              # 错误流水号：客户端据此去重 Toast
+}
+bg_carousel_state = dict(_BG_CAROUSEL_DEFAULTS)
+bg_carousel_lock = threading.Lock()
+
+
+def _bg_carousel_reset_locked():
+    """恢复出厂状态（调用方需已持有 bg_carousel_lock）。
+
+    「重置数据」专用：config 与 runtime 一并归零——只清 config 会残留
+    currentFile/nextSwitchAt 等运行时进度，重新启用轮播时状态卡会先闪现旧图。"""
+    bg_carousel_state.clear()
+    bg_carousel_state.update(_BG_CAROUSEL_DEFAULTS)
+    _bg_carousel_save_locked()
+
+
+def _bg_carousel_load():
+    """启动时从 bg_carousel.json 恢复状态（幂等：文件缺失/损坏时回退默认）"""
+    global bg_carousel_state
+    try:
+        if os.path.exists(BG_CAROUSEL_FILE):
+            with open(BG_CAROUSEL_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            merged = dict(bg_carousel_state)
+            for key in bg_carousel_state:
+                if key in saved:
+                    merged[key] = saved[key]
+            bg_carousel_state = merged
+    except Exception as e:
+        print("Error loading bg_carousel.json: %s" % str(e))
+
+
+def _bg_carousel_save_locked():
+    """持久化轮播状态（调用方需已持有 bg_carousel_lock）"""
+    try:
+        with open(BG_CAROUSEL_FILE, 'w', encoding='utf-8') as f:
+            json.dump(bg_carousel_state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("Error saving bg_carousel.json: %s" % str(e))
+
+
+def _bg_carousel_interval_seconds_locked():
+    unit = bg_carousel_state.get('intervalUnit', 'minutes')
+    mult = BG_CAROUSEL_UNIT_SECONDS.get(unit, 60)
+    try:
+        val = int(bg_carousel_state.get('interval', 30))
+    except (TypeError, ValueError):
+        val = 30
+    return max(1, val) * mult
+
+
+def _bg_image_valid(filepath):
+    """轻量校验：非空文件且魔数与扩展名匹配（损坏/截断图片直接跳过，不做全量解码）"""
+    try:
+        if os.path.getsize(filepath) <= 0:
+            return False
+        with open(filepath, 'rb') as f:
+            head = f.read(12)
+        if not head:
+            return False
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in ('.jpg', '.jpeg'):
+            return head[0:2] == b'\xFF\xD8'
+        if ext == '.png':
+            return head[0:8] == b'\x89PNG\r\n\x1a\n'
+        if ext == '.gif':
+            return head[0:6] in (b'GIF87a', b'GIF89a')
+        if ext == '.webp':
+            return head[0:4] == b'RIFF' and head[8:12] == b'WEBP'
+        return False
+    except Exception:
+        return False
+
+
+def _bg_carousel_scan_locked():
+    """扫描目录，返回按文件名排序的有效图片列表（仅扩展名合法且魔数通过）"""
+    directory = bg_carousel_state.get('directory', '')
+    if not directory or not os.path.isdir(directory):
+        return []
+    try:
+        names = sorted(os.listdir(directory))
+    except Exception:
+        return []
+    result = []
+    for name in names:
+        if os.path.splitext(name)[1].lower() in BG_CAROUSEL_EXTENSIONS:
+            fp = os.path.join(directory, name)
+            if os.path.isfile(fp) and _bg_image_valid(fp):
+                result.append(fp)
+    return result
+
+
+def _bg_carousel_advance_locked(keep_current=False):
+    """计算并应用下一张图片：更新 currentFile/currentIndex/switchId/nextSwitchAt。
+    keep_current=True 时若当前图仍有效则原样重发（用于重新启用轮播，仅 bump switchId 让客户端重新应用）。
+    目录为空时进入 error 态并清空当前图（客户端回退默认背景）；图片恢复后自动解除。"""
+    images = _bg_carousel_scan_locked()
+    bg_carousel_state['imageCount'] = len(images)
+    now = time.time()
+    if not images:
+        # 目录为空 / 被删除：回退默认背景（清空当前图），保持节奏继续扫描以便自动恢复
+        bg_carousel_state['error'] = 'empty_directory' if bg_carousel_state.get('directory') else 'no_directory'
+        bg_carousel_state['errorId'] += 1
+        bg_carousel_state['currentFile'] = ''
+        bg_carousel_state['currentIndex'] = 0
+        bg_carousel_state['switchId'] += 1
+        bg_carousel_state['nextSwitchAt'] = now + _bg_carousel_interval_seconds_locked()
+        _bg_carousel_save_locked()
+        return
+    if bg_carousel_state.get('error'):
+        bg_carousel_state['error'] = ''
+        bg_carousel_state['errorId'] += 1
+    order = bg_carousel_state.get('order', 'sequential')
+    current = bg_carousel_state.get('currentFile', '')
+    if keep_current and current in images:
+        pick = images.index(current)
+    elif order == 'random':
+        import random as _random
+        if len(images) == 1:
+            pick = 0
+        else:
+            # 随机抽取但避免与当前图片相同
+            cur_idx = images.index(current) if current in images else -1
+            choices = [i for i in range(len(images)) if i != cur_idx]
+            pick = _random.choice(choices) if choices else 0
+    else:
+        # 顺序循环：基于当前文件定位，目录内容变动时索引自动回环修正；
+        # 首次启用/错误恢复后 current 为空 → 从第一张开始
+        try:
+            idx = images.index(current)
+        except ValueError:
+            idx = -1
+        pick = (idx + 1) % len(images) if idx >= 0 else 0
+    bg_carousel_state['currentFile'] = images[pick]
+    bg_carousel_state['currentIndex'] = pick
+    bg_carousel_state['switchId'] += 1
+    bg_carousel_state['nextSwitchAt'] = now + _bg_carousel_interval_seconds_locked()
+    _bg_carousel_save_locked()
+
+
+def _bg_carousel_public_state_locked():
+    """输出给客户端的状态（不含绝对路径，仅文件名）"""
+    current = bg_carousel_state.get('currentFile', '')
+    return {
+        'enabled': bool(bg_carousel_state.get('enabled')),
+        'directory': bg_carousel_state.get('directory', ''),
+        'directoryExists': os.path.isdir(bg_carousel_state.get('directory', '')),
+        'interval': bg_carousel_state.get('interval', 30),
+        'intervalUnit': bg_carousel_state.get('intervalUnit', 'minutes'),
+        'order': bg_carousel_state.get('order', 'sequential'),
+        'currentFile': os.path.basename(current) if current else '',
+        'currentIndex': bg_carousel_state.get('currentIndex', 0),
+        'imageCount': bg_carousel_state.get('imageCount', 0),
+        'nextSwitchAt': bg_carousel_state.get('nextSwitchAt', 0),
+        'switchId': bg_carousel_state.get('switchId', 0),
+        'error': bg_carousel_state.get('error', ''),
+        'errorId': bg_carousel_state.get('errorId', 0),
+    }
+
+
+def bg_carousel_loop():
+    """轮播守护线程：秒级检查。休眠唤醒后 now>=nextSwitchAt 时仅切换一次并重启节奏。"""
+    while True:
+        try:
+            with bg_carousel_lock:
+                if bg_carousel_state.get('enabled') and bg_carousel_state.get('directory', ''):
+                    now = time.time()
+                    current = bg_carousel_state.get('currentFile', '')
+                    if now >= bg_carousel_state.get('nextSwitchAt', 0):
+                        _bg_carousel_advance_locked()
+                    elif current and not os.path.isfile(current):
+                        # 当前图片被删除（服务运行期间）：立即换下一张
+                        _bg_carousel_advance_locked()
+        except Exception as e:
+            print("Bg carousel loop error: %s" % str(e))
+        time.sleep(1)
+
+
+def _bg_pick_directory_dialog():
+    """在服务器所在机器上弹出系统目录选择对话框，返回所选路径（取消/不可用返回 None）。
+    优先 tkinter；不可用时 Windows 回退 PowerShell FolderBrowserDialog，Linux 回退 zenity。"""
+    # tkinter
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        root.focus_force()
+        path = filedialog.askdirectory(parent=root, title='选择壁纸目录')
+        root.destroy()
+        if path:
+            return path
+        return None
+    except Exception:
+        pass
+    if IS_WINDOWS:
+        try:
+            ps_script = (
+                "Add-Type -AssemblyName System.Windows.Forms;"
+                "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
+                "$d.Description = '选择壁纸目录';"
+                "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
+                "{ Write-Output $d.SelectedPath }"
+            )
+            result = subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', ps_script],
+                capture_output=True, text=True, timeout=600,
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
+            )
+            path = (result.stdout or '').strip()
+            return path if path else None
+        except Exception:
+            return None
+    else:
+        try:
+            result = subprocess.run(
+                ['zenity', '--file-selection', '--directory', '--title=选择壁纸目录'],
+                capture_output=True, text=True, timeout=600
+            )
+            if result.returncode == 0:
+                path = (result.stdout or '').strip()
+                return path if path else None
+            return None
+        except Exception:
+            return None
+
+
 def check_task_reminders():
     global notified_task_ids
     try:
@@ -1342,6 +1661,38 @@ class TodoHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # 背景图轮播：当前轮播状态（客户端 5s 轮询，switchId 变化时应用新图）
+        if path == '/api/bg-carousel':
+            with bg_carousel_lock:
+                resp = _bg_carousel_public_state_locked()
+            self.send_json_response(resp)
+            return
+
+        # 背景图轮播：当前图片字节流（URL 携带 ?v=switchId，切换后地址变化天然绕过缓存）
+        if path == '/api/bg-carousel/image':
+            with bg_carousel_lock:
+                current = bg_carousel_state.get('currentFile', '')
+            if not current or not os.path.isfile(current):
+                self.send_error_json("No carousel image", 404)
+                return
+            ext = os.path.splitext(current)[1].lower()
+            content_type = BG_CAROUSEL_MIME.get(ext, 'application/octet-stream')
+            try:
+                with open(current, 'rb') as f:
+                    content = f.read()
+            except Exception:
+                self.send_error_json("Read carousel image failed", 500)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(content)))
+            self.send_cors_headers()
+            # 图片内容随 v 参数寻址，可长缓存（换图后 URL 改变）
+            self.send_header('Cache-Control', 'public, max-age=604800')
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
         if path == '/api/autostart':
             if IS_WINDOWS:
                 try:
@@ -1482,6 +1833,16 @@ class TodoHandler(BaseHTTPRequestHandler):
                         conflict_data = load_data_from_file()
                         conflict_data['_version'] = _data_version
                     else:
+                        # 客户端全量数据只含 5 个主体键，不含服务端自管的顶层键
+                        # （continuousTomatoCount / continuousTomatoCountDate），
+                        # 直接整文件覆盖会抹掉刚持久化的连续番茄数，写盘前补齐
+                        try:
+                            existing = load_data_from_file()
+                            for _srv_key in ('continuousTomatoCount', 'continuousTomatoCountDate'):
+                                if _srv_key in existing:
+                                    data[_srv_key] = existing[_srv_key]
+                        except Exception:
+                            pass
                         save_data_to_file(data)
                         _data_version += 1
                 if conflict_data is not None:
@@ -1687,15 +2048,18 @@ class TodoHandler(BaseHTTPRequestHandler):
                         autostart_file = os.path.join(autostart_dir, 'schedule-manager.desktop')
                         if enabled:
                             os.makedirs(autostart_dir, exist_ok=True)
+                            # Exec 经 bash 解释执行：与 install.sh 生成的自启动项口径
+                            # 一致（noexec 挂载点可用）；Icon 用已安装的图标名
+                            # （install.sh 安装到 hicolor；.ico 绝对路径多数 Linux DE 不渲染）
                             desktop_content = (
                                 "[Desktop Entry]\n"
                                 "Type=Application\n"
                                 "Name=Schedule Manager\n"
-                                "Exec=\"%s/autostart.sh\"\n"
-                                "Icon=%s/favicon.ico\n"
+                                "Exec=bash \"%s/autostart.sh\"\n"
+                                "Icon=schedule-manager\n"
                                 "Terminal=false\n"
                                 "Categories=Utility;\n"
-                            ) % (DIRECTORY, DIRECTORY)
+                            ) % (DIRECTORY,)
                             with open(autostart_file, 'w', encoding='utf-8') as f:
                                 f.write(desktop_content)
                         else:
@@ -1766,6 +2130,114 @@ class TodoHandler(BaseHTTPRequestHandler):
                 send_notify_send(title, body_text, task_id=task_id)
                 play_notification_sound()
                 self.send_json_response({"status": "ok"})
+                return
+
+            # 背景图轮播：更新配置（立即生效）。body 可含 enabled/directory/interval/
+            # intervalUnit/order 任意子集，响应始终携带最新完整状态。
+            if path == '/api/bg-carousel/config':
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length)
+                try:
+                    data = json.loads(body.decode('utf-8'))
+                except Exception:
+                    self.send_error_json("Invalid JSON", 400)
+                    return
+                with bg_carousel_lock:
+                    # 重置数据专用：整表还原默认（enabled=false、目录/间隔/顺序清零、
+                    # 运行时进度归零），优先于其余字段处理
+                    if data.get('reset'):
+                        _bg_carousel_reset_locked()
+                        resp = _bg_carousel_public_state_locked()
+                        resp['success'] = True
+                        self.send_json_response(resp)
+                        return
+                    directory_changed = False
+                    enabled_changed = False
+                    interval_changed = False
+                    if 'directory' in data:
+                        new_dir = str(data.get('directory') or '').strip()
+                        if new_dir and not os.path.isdir(new_dir):
+                            resp = _bg_carousel_public_state_locked()
+                            resp['success'] = False
+                            resp['reason'] = 'directory_not_found'
+                            self.send_json_response(resp)
+                            return
+                        if new_dir != bg_carousel_state.get('directory', ''):
+                            bg_carousel_state['directory'] = new_dir
+                            directory_changed = True
+                    if 'enabled' in data:
+                        new_enabled = bool(data.get('enabled'))
+                        if new_enabled != bool(bg_carousel_state.get('enabled')):
+                            bg_carousel_state['enabled'] = new_enabled
+                            enabled_changed = True
+                    if 'interval' in data:
+                        try:
+                            new_interval = max(1, min(365, int(data.get('interval', 30))))
+                        except (TypeError, ValueError):
+                            new_interval = 30
+                        if new_interval != bg_carousel_state.get('interval'):
+                            bg_carousel_state['interval'] = new_interval
+                            interval_changed = True
+                    if 'intervalUnit' in data:
+                        new_unit = data.get('intervalUnit')
+                        if new_unit in BG_CAROUSEL_UNIT_SECONDS and new_unit != bg_carousel_state.get('intervalUnit'):
+                            bg_carousel_state['intervalUnit'] = new_unit
+                            interval_changed = True
+                    if 'order' in data:
+                        new_order = data.get('order')
+                        if new_order in ('sequential', 'random'):
+                            bg_carousel_state['order'] = new_order
+
+                    now = time.time()
+                    if directory_changed:
+                        if bg_carousel_state.get('enabled'):
+                            # 新目录：立即换图（从新目录第一张/随机一张开始）
+                            _bg_carousel_advance_locked()
+                        else:
+                            # 禁用状态下变更/清空目录（删除按钮）：仅持久化，不换图、不报错
+                            _bg_carousel_save_locked()
+                    elif enabled_changed and bg_carousel_state.get('enabled'):
+                        if bg_carousel_state.get('directory'):
+                            # 重新启用：当前图仍有效则原样重发，否则重新选图
+                            _bg_carousel_advance_locked(keep_current=True)
+                        else:
+                            # 尚未配置目录：保持 no_directory 状态，由面板空目录提示引导
+                            _bg_carousel_save_locked()
+                    elif enabled_changed and not bg_carousel_state.get('enabled'):
+                        _bg_carousel_save_locked()
+                    elif interval_changed and bg_carousel_state.get('enabled'):
+                        # 间隔变更：以新间隔重启节奏
+                        bg_carousel_state['nextSwitchAt'] = now + _bg_carousel_interval_seconds_locked()
+                        _bg_carousel_save_locked()
+                    else:
+                        _bg_carousel_save_locked()
+                    resp = _bg_carousel_public_state_locked()
+                    resp['success'] = True
+                self.send_json_response(resp)
+                return
+
+            # 背景图轮播：手动调试「下一张」（立即切换，节奏从头计）
+            if path == '/api/bg-carousel/next':
+                with bg_carousel_lock:
+                    if not bg_carousel_state.get('enabled'):
+                        resp = _bg_carousel_public_state_locked()
+                        resp['success'] = False
+                        resp['reason'] = 'not_enabled'
+                        self.send_json_response(resp)
+                        return
+                    _bg_carousel_advance_locked()
+                    resp = _bg_carousel_public_state_locked()
+                    resp['success'] = True
+                self.send_json_response(resp)
+                return
+
+            # 背景图轮播：弹出系统目录选择对话框（在服务器所在机器上）
+            if path == '/api/bg-carousel/pick-directory':
+                path_picked = _bg_pick_directory_dialog()
+                if path_picked:
+                    self.send_json_response({'success': True, 'path': path_picked})
+                else:
+                    self.send_json_response({'success': False})
                 return
 
             if path == '/api/shutdown':
@@ -1868,6 +2340,23 @@ class TodoHandler(BaseHTTPRequestHandler):
                     pomodoro_state['taskName'] = ''
                     pomodoro_state['lastTickTime'] = None
                     pomodoro_state['timeLeft'] = 0
+                    # 「重置数据」专用端点：同步清零 data.json 中持久化的连续番茄数。
+                    # 不写盘的话，重启后会从 data.json 复活旧计数；且客户端紧随其后的
+                    # 全量 PUT 会从现有文件补齐该键（见 do_PUT），旧值会立即写回。
+                    # 持 data_lock 与 PUT 的"读文件补齐+写盘"互斥即可：两请求虽并发
+                    # 在途，任一串行顺序的最终落盘值都是 0。刻意不抬 _data_version——
+                    # 抬升会让重置标签页正在途的 PUT 判为版本冲突，触发冲突合并把
+                    # 服务器旧任务/清单合并回来，反而破坏重置。
+                    # 锁序 pomodoro_lock → data_lock 与 _save_pomodoro_history_entry
+                    # 一致（PUT 处理器为顺序获取、不嵌套，无死锁）。
+                    try:
+                        with data_lock:
+                            file_data = load_data_from_file()
+                            file_data['continuousTomatoCount'] = 0
+                            file_data['continuousTomatoCountDate'] = datetime.now().strftime('%Y-%m-%d')
+                            save_data_to_file(file_data)
+                    except Exception as e:
+                        print("Reset continuousTomatoCount error: %s" % str(e))
                 self.send_json_response({"status": "ok"})
                 return
 
@@ -2064,12 +2553,14 @@ class TodoHandler(BaseHTTPRequestHandler):
                                 }
                                 _save_pomodoro_history_entry(history_entry)
                     pomodoro_state['continuousTomatoCount'] = 0
-                    # 同步持久化重置
+                    # 同步持久化重置（持锁 + 抬版本，防止被旧版本号的全量 PUT 覆盖）
                     try:
-                        file_data = load_data_from_file()
-                        file_data['continuousTomatoCount'] = 0
-                        file_data['continuousTomatoCountDate'] = datetime.now().strftime('%Y-%m-%d')
-                        save_data_to_file(file_data)
+                        with data_lock:
+                            file_data = load_data_from_file()
+                            file_data['continuousTomatoCount'] = 0
+                            file_data['continuousTomatoCountDate'] = datetime.now().strftime('%Y-%m-%d')
+                            save_data_to_file(file_data)
+                            _bump_data_version()
                     except Exception:
                         pass
                     pomodoro_state['running'] = False
@@ -2256,26 +2747,6 @@ class TodoHandler(BaseHTTPRequestHandler):
                 self.send_json_response(resp)
                 return
 
-            if path == '/api/import':
-                content_length = int(self.headers.get('Content-Length', 0))
-                if content_length > 30 * 1024 * 1024:
-                    self.send_error_json("Data too large", 413)
-                    return
-                body = self.rfile.read(content_length)
-                try:
-                    data = json.loads(body.decode('utf-8'))
-                except Exception:
-                    self.send_error_json("Invalid JSON", 400)
-                    return
-
-                if not (data.get('lists') or data.get('tasks')):
-                    self.send_error_json("Invalid data format", 400)
-                    return
-
-                save_data_to_file(data)
-                self.send_json_response({"status": "ok"})
-                return
-
             if path == '/api/migrate':
                 content_length = int(self.headers.get('Content-Length', 0))
                 body = self.rfile.read(content_length)
@@ -2288,7 +2759,7 @@ class TodoHandler(BaseHTTPRequestHandler):
                 self.send_json_response({"status": "ok"})
                 return
 
-            # 完整数据导入：data.json 主体 + 扩展字段（归档专注历史/节假日数据）
+            # 完整数据导入：data.json 主体 + 扩展字段（归档专注历史/节假日数据/背景轮播配置）
             if path == '/api/import':
                 content_length = int(self.headers.get('Content-Length', 0))
                 if content_length > 64 * 1024 * 1024:
@@ -2300,12 +2771,19 @@ class TodoHandler(BaseHTTPRequestHandler):
                 except Exception:
                     self.send_error_json("Invalid JSON", 400)
                     return
-                if not isinstance(data, dict) or 'tasks' not in data:
+                if not isinstance(data, dict) or not (data.get('tasks') or data.get('taskLists') or data.get('lists')):
                     self.send_error_json("Invalid data format", 400)
                     return
-                # 剥离扩展字段后写入 data.json；扩展字段单独还原到各自文件/目录
-                main_data = {k: v for k, v in data.items() if k not in ('pomodoroArchive', 'holidayData')}
-                save_data_to_file(main_data)
+                # 剥离扩展字段后写入 data.json；扩展字段单独还原到各自文件/目录。
+                # 同时剔除导出时附加的元数据键（version/exportDate），避免污染 data.json
+                main_data = {k: v for k, v in data.items()
+                             if k not in ('pomodoroArchive', 'holidayData', 'bgCarousel',
+                                          'version', 'exportDate')}
+                # 持锁写盘并抬高版本号：与其他标签页的版本检查互斥，防止导入后
+                # 被携带旧版本号的全量 PUT 覆盖（与 PUT /api data 的锁序一致）
+                with data_lock:
+                    save_data_to_file(main_data)
+                    _bump_data_version()
                 restore_extended_backup_fields(data)
                 self.send_json_response({"status": "ok"})
                 return
@@ -2594,6 +3072,9 @@ def main():
     os.chdir(DIRECTORY)
 
     data = load_data_from_file()
+    # 一次性迁移：旧机制把超过 500 条的专注记录移入 pomodoro_archive/（界面不读取），
+    # 现专注记录全量持久化于 data.json，启动时把历史归档并回主列表
+    _migrate_pomodoro_archive_into_main(data)
     s = data.get('settings', {})
     with pomodoro_lock:
         pomodoro_state['focusDuration'] = s.get('focusDuration', 25)
@@ -2665,6 +3146,11 @@ def main():
 
     pomodoro_thread = threading.Thread(target=pomodoro_checker_loop, daemon=True)
     pomodoro_thread.start()
+
+    # 背景图轮播：恢复持久化状态（含 nextSwitchAt，重启不重置倒计时）并启动守护线程
+    _bg_carousel_load()
+    bg_carousel_thread = threading.Thread(target=bg_carousel_loop, daemon=True)
+    bg_carousel_thread.start()
 
     def cleanup_loop():
         while True:

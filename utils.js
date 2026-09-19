@@ -616,13 +616,14 @@ function flushPendingNotifications() {
 
 let bgImageBrightness = 0.5;
 function analyzeBgImageBrightness() {
-    if (!settings.bgImage) {
+    const src = _getEffectiveBgImageSrc();
+    if (!src) {
         bgImageBrightness = 0.5;
         updateBgTextAdaptation();
         return;
     }
     const img = new Image();
-    if (!settings.bgImage.startsWith('data:')) {
+    if (!src.startsWith('data:')) {
         img.crossOrigin = 'anonymous';
     }
     img.onload = function() {
@@ -650,7 +651,7 @@ function analyzeBgImageBrightness() {
         bgImageBrightness = 0.5;
         updateBgTextAdaptation();
     };
-    img.src = settings.bgImage;
+    img.src = src;
 }
 
 function isDarkMode() {
@@ -659,7 +660,7 @@ function isDarkMode() {
 
 function shouldUseLightText() {
     if (isDarkMode()) return true;
-    if (settings.bgImage && bgImageBrightness < 0.45) return true;
+    if (typeof _getEffectiveBgImageSrc === 'function' && _getEffectiveBgImageSrc() && bgImageBrightness < 0.45) return true;
     return false;
 }
 
@@ -696,7 +697,11 @@ function getPriorityDisplayMode() {
 // opts.forceBg=true 时强制使用优先级底色（供计划面板等不响应模式的视图使用）
 function getQuadrantColorClass(task, opts) {
     const isDark = isDarkMode();
-    const hasBg = !!settings.bgImage;
+    // 有无背景图按「当前生效背景」判断（轮播模式取轮播图，单张模式取 settings.bgImage），
+    // 避免轮播模式下误走无图分支导致浅色模式卡片使用不透明 bg-gray-50
+    const hasBg = (typeof _getEffectiveBgImageSrc === 'function')
+        ? !!_getEffectiveBgImageSrc()
+        : !!settings.bgImage;
     // 底色仅在 'bg' 模式启用；forceBg 可强制开启（计划面板等保持现状的视图）
     const usePriority = (opts && opts.forceBg) || getPriorityDisplayMode() === 'bg';
     // 有背景图时，中性底色跟随图片明暗（复用 shouldUseLightText 的亮度分析），

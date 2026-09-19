@@ -417,9 +417,11 @@ document.addEventListener('touchstart', function (e) {
     const item = e.target.closest('.task-list-item, .schedule-task-item, .plan-task-item, .month-task-item, .quadrant-drop-zone .task-item, .quadrant-drop-zone > div[onclick]');
     if (!item) return;
     const onclickAttr = item.getAttribute('onclick') || '';
-    const m = onclickAttr.match(/openTaskDetailPanel\('([^']+)'\)/);
-    if (!m) return;
-    const taskId = m[1];
+    // 只匹配到 id 为止：onclick 现为 openTaskDetailPanel('id', readOnly, fromClick)
+    const m = onclickAttr.match(/openTaskDetailPanel\('([^']+)'/);
+    // 计划面板任务项已不再挂 onclick（单击不呼出详情面板），回退读 data-task-id
+    const taskId = m ? m[1] : (item.dataset.taskId || '');
+    if (!taskId) return;
     const startX = e.touches[0].clientX, startY = e.touches[0].clientY;
     if (_mobileLongPressTimer) clearTimeout(_mobileLongPressTimer);
     _mobileLongPressTimer = setTimeout(function () {
@@ -459,7 +461,8 @@ document.addEventListener('touchstart', function (e) {
             const m = (cb.getAttribute('onclick') || '').match(/toggleTaskComplete\('([^']+)'\)/);
             if (m) return m[1];
         }
-        const m = (item.getAttribute('onclick') || '').match(/openTaskDetailPanel\('([^']+)'\)/);
+        // 只匹配到 id 为止：onclick 现为 openTaskDetailPanel('id', readOnly, fromClick)
+        const m = (item.getAttribute('onclick') || '').match(/openTaskDetailPanel\('([^']+)'/);
         return m ? m[1] : null;
     }
 

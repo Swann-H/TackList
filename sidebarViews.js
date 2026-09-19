@@ -221,10 +221,13 @@ function renderListNode(node, depth, container, uncompletedMap) {
         const nameHtml = editingListId === node.id && node.id !== 'default'
             ? inlineNameInput('new-list-name', node.name || '', 'saveListInput()', 'editingListId=null; renderLists();')
             : `<span class="sidebar-text flex-1 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑清单集">${node.name || '未命名清单集'}</span>`;
+        const folderCount = folderUncompleted(uncompletedMap, node.id);
+        // 行尾：默认展示任务计数，悬停时替换为编辑图标（w-5 等宽，避免悬停引起布局抖动）
         row.innerHTML = `
             <i class="fas ${expanded ? 'fa-folder-open' : 'fa-folder'} w-3 text-center text-sm flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="color:${node.color || '#f59e0b'}" onclick="event.stopPropagation(); toggleFolder('${node.id}')" ondblclick="event.stopPropagation(); editList('${node.id}')" title="${expanded ? '收起' : '展开'}清单集（双击编辑）"></i>
             ${nameHtml}
-            ${folderUncompleted(uncompletedMap, node.id) > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${folderUncompleted(uncompletedMap, node.id)}</span>` : '<span class="sidebar-count w-5"></span>'}
+            ${folderCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right flex-shrink-0 group-hover:hidden">${folderCount}</span>` : '<span class="sidebar-count w-5 flex-shrink-0 group-hover:hidden"></span>'}
+            <i class="fas fa-pen text-xs text-theme-muted hidden group-hover:flex items-center justify-center w-5 h-5 rounded cursor-pointer hover:bg-theme-tertiary hover:text-accent transition flex-shrink-0" onclick="event.stopPropagation(); editList('${node.id}')" title="编辑清单集"></i>
         `;
         // 单击清单集整行 = 筛选其内部所有清单的任务（复用 selectList，与普通清单行为一致）；
         // 展开/收起仅由前面的文件夹图标触发（见上方 <i> 的 onclick，已 stopPropagation）。
@@ -771,7 +774,7 @@ function renderArchivedTaskCard(task) {
 
     return `
         <div class="archived-task-item task-row group flex items-start gap-4 mb-3 task-item ${task.completed ? 'opacity-55' : ''}"
-             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', true)">
+             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', true, true)">
             <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
                 ${renderTaskCheckbox(task)}
             </div>

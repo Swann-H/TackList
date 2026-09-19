@@ -2,6 +2,8 @@ async function init() {
     await loadData();
     easterEgg_init();
     applyTheme();
+    // 先拉取轮播状态再应用背景图：避免先渲染单张图又立刻换成轮播图造成闪变
+    await initBgCarousel();
     applyBackgroundImage();
     renderLists();
     renderTags();
@@ -28,7 +30,14 @@ async function init() {
     startDataRefreshTimer();
     requestNotificationPermission();
     detectPlatform();
-    setInterval(checkBrowserNotifications, 5000);
+
+    // 首次使用引导：未看过且当前无任务时自动启动
+    if (typeof maybeStartOnboarding === 'function') maybeStartOnboarding();
+    setInterval(function () {
+        checkBrowserNotifications();
+        // 背景轮播状态轮询与通知同拍（5s）：switchId 变化时被动应用新图
+        checkBgCarouselUpdate();
+    }, 5000);
 
     // 网页模式处理：离线版入口检测是否需要跳转到在线版
     initWebMode();
@@ -38,6 +47,7 @@ async function init() {
             refreshDataFromServer();
             syncPomodoroFromServer();
             checkBrowserNotifications();
+            checkBgCarouselUpdate();
             flushPendingNotifications();
         }
     });
@@ -397,7 +407,12 @@ function openSettingsModal() {
     } else {
         previewContainer.classList.add('hidden');
     }
-    
+
+    // 初始化背景图模式 Tab / 轮播设置区回填 / 填充方式（目录轮播 PRD 4.2/4.3）
+    updateBgImageModeTabs();
+    updateBgFillModeButtons();
+    updateBgCarouselStatusUI();
+
     updateSettingsListSelect();
     initVCTemp();
     renderViewCustomize();
@@ -428,6 +443,202 @@ function closeSettingsModal() {
     discardVCTemp();
     // 页面切换过渡动画：反向收起后再隐藏
     _fxCloseModal('settings-modal');
+}
+
+// ==================== 背景图目录轮播（设置面板 UI） ====================
+// 文档：《背景图目录自动轮播功能 PRD 需求说明书.md》4（用户界面）/ 6（边界处理）
+// 轮播配置全部由服务端持有并持久化（bg_carousel.json），此处仅乐观切换 + 提交 + 回填。
+const BG_EXTRACTED_PALETTE_KEYS = ['vibrant', 'muted', 'steady'];
+
+// Tab 视觉与区块显隐（mode 缺省时按服务端状态推导）
+function updateBgImageModeTabs(mode) {
+    if (!mode) mode = (bgCarouselState && bgCarouselState.enabled) ? 'carousel' : 'single';
+    const singleBtn = document.getElementById('bg-mode-single-btn');
+    const carouselBtn = document.getElementById('bg-mode-carousel-btn');
+    const singleSection = document.getElementById('bg-single-section');
+    const carouselSection = document.getElementById('bg-carousel-section');
+    if (!singleBtn || !carouselBtn || !singleSection || !carouselSection) return;
+    const isCarousel = mode === 'carousel';
+    _setBgModeTabActive(singleBtn, !isCarousel);
+    _setBgModeTabActive(carouselBtn, isCarousel);
+    singleSection.classList.toggle('hidden', isCarousel);
+    carouselSection.classList.toggle('hidden', !isCarousel);
+}
+
+function _setBgModeTabActive(btn, active) {
+    if (active) {
+        btn.classList.add('border-accent', 'bg-accent-soft', 'text-accent-dark');
+        btn.classList.remove('border-theme', 'text-theme-secondary', 'hover:bg-theme-secondary');
+    } else {
+        btn.classList.remove('border-accent', 'bg-accent-soft', 'text-accent-dark');
+        btn.classList.add('border-theme', 'text-theme-secondary', 'hover:bg-theme-secondary');
+    }
+}
+
+// Tab 点击：先乐观切换外观，POST 响应后由服务端真实状态纠正（服务端不可用/目录无效则回退）
+function switchBgImageMode(mode) {
+    const enable = mode === 'carousel';
+    updateBgImageModeTabs(enable ? 'carousel' : 'single');
+    bgCarouselUpdateConfig({ enabled: enable }).then(state => {
+        if (!state || state.success === false) {
+            updateBgImageModeTabs();
+            return;
+        }
+        // 切回单张模式：按单张背景图重新取色并自适应深浅（与换图口径一致，PRD 5.3）
+        if (!enable && settings.bgImage) {
+            _resyncPaletteForBgSrc(settings.bgImage);
+        }
+    });
+}
+
+// 按指定背景图重新取色：更新 themePaletteColors + 深浅模式自适应；
+// 当前为背景图取色方案时沿用同一风格重应用（切回单张模式时使用）
+function _resyncPaletteForBgSrc(src) {
+    if (!src) return;
+    extractThemePalettes(src, function (palettes) {
+        if (!palettes) return;
+        settings.themePaletteColors = palettes;
+        const brightness = (typeof palettes._brightness === 'number') ? palettes._brightness : bgImageBrightness;
+        const detectedTheme = brightness < 0.45 ? 'dark' : 'light';
+        if (settings.theme !== detectedTheme) {
+            setTheme(detectedTheme);
+        }
+        if (BG_EXTRACTED_PALETTE_KEYS.indexOf(settings.themePalette) !== -1) {
+            applyThemePalette(settings.themePalette);
+            const container = document.getElementById('palette-preview-container');
+            if (container && !container.classList.contains('hidden') && typeof _renderPalettePreviews === 'function') {
+                _renderPalettePreviews(palettes);
+            }
+        }
+        saveData();
+    });
+}
+
+// 轮播设置区状态刷新（轮询/配置响应后调用，幂等）。
+// 输入框聚焦时不覆盖用户正在输入的值，避免 5s 轮询打断编辑。
+function updateBgCarouselStatusUI() {
+    if (!document.getElementById('bg-mode-carousel-btn')) return;
+    updateBgImageModeTabs();
+    const state = bgCarouselState || {};
+    const dirInput = document.getElementById('bg-carousel-directory-input');
+    if (dirInput && document.activeElement !== dirInput) dirInput.value = state.directory || '';
+    const intervalInput = document.getElementById('bg-carousel-interval-input');
+    if (intervalInput && document.activeElement !== intervalInput) intervalInput.value = state.interval || 30;
+    const unitSel = document.getElementById('bg-carousel-interval-unit');
+    if (unitSel && document.activeElement !== unitSel) unitSel.value = state.intervalUnit || 'minutes';
+    const orderSel = document.getElementById('bg-carousel-order-select');
+    if (orderSel && document.activeElement !== orderSel) orderSel.value = state.order || 'sequential';
+
+    // 当前状态卡：缩略图 + 文件名 + 张数/顺序/下次切换倒计时
+    const statusCard = document.getElementById('bg-carousel-status');
+    const emptyHint = document.getElementById('bg-carousel-empty-hint');
+    if (state.enabled && state.currentFile) {
+        if (statusCard) {
+            statusCard.classList.remove('hidden');
+            const thumb = document.getElementById('bg-carousel-thumb');
+            const imgSrc = '/api/bg-carousel/image?v=' + state.switchId;
+            if (thumb && thumb.getAttribute('src') !== imgSrc) thumb.src = imgSrc;
+            const nameEl = document.getElementById('bg-carousel-filename');
+            if (nameEl) nameEl.textContent = state.currentFile;
+            const metaEl = document.getElementById('bg-carousel-meta');
+            if (metaEl) {
+                const parts = [(state.imageCount || 0) + ' 张'];
+                parts.push(state.order === 'random' ? '随机' : '顺序');
+                const remain = _bgCarouselRemainSeconds(state);
+                if (remain !== null) parts.push(_bgCarouselFormatCountdown(remain) + '后切换');
+                metaEl.textContent = parts.join(' · ');
+            }
+        }
+        if (emptyHint) emptyHint.classList.add('hidden');
+    } else {
+        if (statusCard) statusCard.classList.add('hidden');
+        if (emptyHint) emptyHint.classList.remove('hidden');
+    }
+
+    // 固定配色 + 轮播：低对比度图可读性风险提示（PRD 6）
+    const warn = document.getElementById('bg-carousel-contrast-warning');
+    if (warn) {
+        const usingExtracted = BG_EXTRACTED_PALETTE_KEYS.indexOf(settings.themePalette) !== -1;
+        warn.classList.toggle('hidden', !(state.enabled && !usingExtracted));
+    }
+}
+
+function _bgCarouselRemainSeconds(state) {
+    const nextAt = parseFloat(state && state.nextSwitchAt);
+    if (!isFinite(nextAt) || nextAt <= 0) return null;
+    return Math.max(0, Math.round(nextAt - Date.now() / 1000));
+}
+
+function _bgCarouselFormatCountdown(sec) {
+    if (sec < 60) return sec + ' 秒';
+    if (sec < 3600) return Math.floor(sec / 60) + ' 分钟';
+    if (sec < 86400) {
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        return m ? (h + ' 小时 ' + m + ' 分') : (h + ' 小时');
+    }
+    const d = Math.floor(sec / 86400);
+    const h2 = Math.floor((sec % 86400) / 3600);
+    return h2 ? (d + ' 天 ' + h2 + ' 小时') : (d + ' 天');
+}
+
+// 目录输入框 change/回车提交（目录无效时服务端拒绝并提示，状态回填为原值）
+function applyBgCarouselDirectory(value) {
+    const dir = (value || '').trim();
+    if (!dir) {
+        showToast('请输入或选择图片目录', 'warning', 3000);
+        return;
+    }
+    bgCarouselUpdateConfig({ directory: dir }).then(state => {
+        if (state && state.success !== false) {
+            showToast('轮播目录已更新', 'success', 2000);
+        }
+    });
+}
+
+// 「选择目录」：服务端弹出系统目录选择对话框（tkinter / PowerShell / zenity）
+async function bgCarouselSelectDirectory() {
+    const btn = document.getElementById('bg-carousel-pick-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>选择中...';
+    }
+    try {
+        const result = await bgCarouselPickDirectory();
+        if (result && result.success && result.path) {
+            const dirInput = document.getElementById('bg-carousel-directory-input');
+            if (dirInput) dirInput.value = result.path;
+            const state = await bgCarouselUpdateConfig({ directory: result.path });
+            if (state && state.success !== false) showToast('轮播目录已更新', 'success', 2000);
+        } else if (result && result.success === false) {
+            showToast('未选择目录', 'info', 2000);
+        }
+    } catch (e) {
+        showToast('目录选择服务不可用', 'error', 3000);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-folder-open mr-2"></i>选择目录';
+        }
+    }
+}
+
+// 切换间隔（数字 + 单位）：变更后以新间隔重启节奏（clamp 与服务端一致 1..365）
+function onBgCarouselIntervalChange() {
+    const input = document.getElementById('bg-carousel-interval-input');
+    const unitSel = document.getElementById('bg-carousel-interval-unit');
+    if (!input || !unitSel) return;
+    let val = parseInt(input.value, 10);
+    if (!isFinite(val) || val < 1) val = 1;
+    if (val > 365) val = 365;
+    input.value = val;
+    bgCarouselUpdateConfig({ interval: val, intervalUnit: unitSel.value });
+}
+
+function onBgCarouselOrderChange() {
+    const sel = document.getElementById('bg-carousel-order-select');
+    if (!sel) return;
+    bgCarouselUpdateConfig({ order: sel.value });
 }
 
 // ==================== 设置面板左侧快速导航 ====================
@@ -578,6 +789,16 @@ function doResetData() {
     settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
     quadrantOrder = ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
     saveDataImmediate();
+    // 背景轮播配置独立持久化于服务端 bg_carousel.json（不随 data.json 重置），
+    // 需单独通知服务端整体还原默认，否则重置后轮播背景图依旧生效
+    fetch('/api/bg-carousel/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: true })
+    }).catch(() => {});
+    // 本地轮播缓存同步清空，让背景立即回退默认（页面稍后自动刷新兜底）
+    bgCarouselState = null;
+    _bgCarouselAppliedKey = null;
     // 清除 IndexedDB 缓存
     if (typeof cacheToIndexedDB === 'function') {
         cacheToIndexedDB({ tasks: [], lists: [{ id: 'default', name: '默认', color: '#6366f1' }], settings: {}, pomodoroHistory: [] });
@@ -610,6 +831,9 @@ function doResetData() {
     updatePomodoroDisplay();
     updateMainViewBackground();
     clearMainContentBackground();
+    // 轮播缓存已清空 + settings.bgImage 已还原默认：立即重算生效背景，
+    // 避免 500ms 后刷新前页面仍显示旧轮播图
+    applyBackgroundImage();
     renderLists();
     renderTags();
     renderFilters();
@@ -738,6 +962,7 @@ function saveSettings(silent) {
     if (settings.refreshInterval > 300) settings.refreshInterval = 300;
     settings.bgOpacity = parseInt(document.getElementById('settings-bg-opacity').value) || 100;
     settings.bgBlur = parseInt(document.getElementById('settings-bg-blur').value) ?? 10;
+    // bgFillMode 由 setBgFillMode 即时写入 settings，此处仅随整体设置持久化，无需再读控件
     settings.bindAddress = document.getElementById('settings-bind-address').value;
     const portVal = parseInt(document.getElementById('settings-port').value);
     settings.port = (portVal >= 1024 && portVal <= 65535) ? portVal : 14438;
@@ -2083,8 +2308,11 @@ function _renderPaletteResetButtons() {
 
 // 高亮当前选中的调色板卡片（扫描所有 data-palette-key 属性的卡片）
 function _highlightActivePalette(name) {
+    // 'none'（恢复默认主题色）在视觉上等价于默认内置配色「星夜」(builtin:blue)：
+    // 点击重置后高亮星夜卡片
+    const active = (name === 'none') ? 'builtin:blue' : name;
     document.querySelectorAll('.palette-card[data-palette-key]').forEach(btn => {
-        btn.classList.toggle('palette-active', btn.dataset.paletteKey === name);
+        btn.classList.toggle('palette-active', btn.dataset.paletteKey === active);
     });
     const noneBtn = document.getElementById('palette-none-btn');
     if (noneBtn) {
@@ -2128,12 +2356,13 @@ function syncCustomAccentInputs(source) {
 }
 
 function generatePalettePreview(autoSwitchTheme) {
-    if (!settings.bgImage) {
+    const bgSrc = _getEffectiveBgImageSrc();
+    if (!bgSrc) {
         showToast('请先上传背景图片', 'warning', 3000);
         return;
     }
     showToast('正在提取主题色...', 'info', 2000);
-    extractThemePalettes(settings.bgImage, function(palettes) {
+    extractThemePalettes(bgSrc, function(palettes) {
         if (!palettes) {
             showToast('主题色提取失败，请检查背景图', 'error', 3000);
             return;
@@ -2161,7 +2390,8 @@ function generatePalettePreview(autoSwitchTheme) {
 
 // 重新生成调色板（带随机扰动，结果会有小幅变化）
 function regeneratePalettePreview() {
-    if (!settings.bgImage) {
+    const bgSrc = _getEffectiveBgImageSrc();
+    if (!bgSrc) {
         showToast('请先上传背景图片', 'warning', 3000);
         return;
     }
@@ -2170,7 +2400,7 @@ function regeneratePalettePreview() {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>生成中...';
     }
-    extractThemePalettes(settings.bgImage, function(palettes) {
+    extractThemePalettes(bgSrc, function(palettes) {
         if (btn) {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-dice mr-1"></i>重新生成配色';

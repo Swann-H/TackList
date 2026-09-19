@@ -339,6 +339,10 @@ function sortKanbanTasks(arr, cfg) {
 // - 完成勾选框置于卡片内左侧（色条右侧），随卡片内容 items-center 垂直居中；右侧信息列左对齐
 // - hover 统一为 opacity-80（与日程一致）；信息排布保持看板原有顺序：
 //   第1行 元信息(时间/清单/专注/进度) → 第2行 标题 → 第3行 详情(子任务/备注) → 第4行 标签
+// 卡片限高（方案 A）：元信息行 nowrap 不再折行；标题最多 2 行（line-clamp-2），
+// 备注最多 2 行（line-clamp-2）。截断部分在点开详情面板后仍可看到完整内容。
+// 注意：标题外层为 flex（承载外部日历图标），line-clamp 的 display:-webkit-box 需加在
+// 内层 span 上，直接加在外层会与 flex 冲突失效。
 // 「显示任务详情」开启时展示子任务列表（renderSubtaskListDisplay，参照日程视图）与备注文本；关闭时二者均不展示。
 // 完成圆环配色跟随「优先级显示方式」（getTaskCheckboxClass）。
 // 外层 kanban-task-row（含 task-row 语义类）保留：完成消失动画通过 closest('.task-row') 定位整行。
@@ -356,31 +360,31 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
         const subtaskHtml = renderSubtaskListDisplay(task);
         details = subtaskHtml
             ? subtaskHtml
-            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1 whitespace-pre-wrap break-words">${escapeHtml(task.notes)}</div>` : '');
+            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1 whitespace-pre-wrap break-words line-clamp-2">${escapeHtml(task.notes)}</div>` : '');
     }
     const listBadge = (showList && list)
-        ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color:${listColor}"></span>${escapeHtml(list.name)}</span>`
+        ? `<span class="flex items-center gap-1 min-w-0 max-w-[9rem]"><span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color:${listColor}"></span><span class="truncate">${escapeHtml(list.name)}</span></span>`
         : '';
     const tagHtml = renderTagCapsules(task, 3, 'left');
     const colors = getQuadrantColorClass(task);
     const meta = `
         ${listBadge}
-        ${timeDisplay ? `<span class="${timeTextClass} flex items-center gap-1"><i class="far fa-clock"></i>${timeDisplay}</span>` : ''}
-        ${focusMinutes > 0 ? `<span class="flex items-center gap-1 text-red-500/90"><i class="fas fa-stopwatch"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
-        ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1 text-accent"><i class="fas fa-flag"></i>${task.progress}%</span>` : ''}`;
+        ${timeDisplay ? `<span class="${timeTextClass} flex items-center gap-1 whitespace-nowrap"><i class="far fa-clock"></i>${timeDisplay}</span>` : ''}
+        ${focusMinutes > 0 ? `<span class="flex items-center gap-1 text-red-500/90 whitespace-nowrap"><i class="fas fa-stopwatch"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
+        ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1 text-accent whitespace-nowrap"><i class="fas fa-flag"></i>${task.progress}%</span>` : ''}`;
     return `
         <div class="kanban-task-row task-row flex mb-2.5">
             <div class="kanban-card group relative ${colors.bg} rounded-r-lg p-2.5 flex-1 min-w-0 cursor-pointer hover:opacity-80 transition flex items-center gap-2.5 ${task.completed ? 'opacity-55' : ''}"
                  style="border-left: 4px solid ${_extTaskBarColor(task, getTaskBarColor(task, listColor))};"
-                 onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
+                 onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)"
                  draggable="true" data-task-id="${task.id}"
                  ondragstart="handleTaskDragStart(event, '${task.id}')"
                  ondragover="handleTaskDragOver(event)">
                 ${renderTaskCheckbox(task, { taskId: task.id, draggable: true, extraClass: 'flex-shrink-0' })}
                 <div class="flex items-start gap-2 flex-1 min-w-0">
                     <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-1.5 flex-wrap text-xs text-theme-muted mb-1.5">${meta}</div>
-                        <div class="text-sm font-medium leading-snug break-words ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} flex items-center">${_extTaskIconHtml(task)}${escapeHtml(task.title || '新任务')}</div>
+                        <div class="flex items-center gap-1.5 flex-nowrap overflow-hidden text-xs text-theme-muted mb-1.5">${meta}</div>
+                        <div class="text-sm font-medium leading-snug ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} flex items-center">${_extTaskIconHtml(task)}<span class="line-clamp-2 break-words min-w-0">${escapeHtml(task.title || '新任务')}</span></div>
                         ${details ? `<div class="mt-1.5">${details}</div>` : ''}
                         ${tagHtml ? `<div class="mt-1.5">${tagHtml}</div>` : ''}
                     </div>

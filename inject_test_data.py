@@ -375,9 +375,7 @@ def main():
         new_pomo_history.extend(records)
 
     data['pomodoroHistory'].extend(new_pomo_history)
-    # 保留最近500条（与server.py的POMODORO_HISTORY_LIMIT一致）
-    if len(data['pomodoroHistory']) > 500:
-        data['pomodoroHistory'] = data['pomodoroHistory'][-500:]
+    # 专注记录现已全量持久化，无保留上限
     print('注入专注历史记录: %d 条' % len(new_pomo_history))
 
     # ========== 保存 ==========

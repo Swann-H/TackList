@@ -14,6 +14,7 @@
 import ctypes
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -60,6 +61,19 @@ def read_preferred_port():
 
 
 _no_proxy_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def port_connectable(port, timeout=0.3):
+    """快速判断端口是否有监听者（比 netstat 全表枚举快一个数量级）：
+    连接被拒 = 明确空闲（False）；连上 = 有监听（True）；超时等其它错误 = 无法判断（None）"""
+    try:
+        s = socket.create_connection(('127.0.0.1', port), timeout=timeout)
+        s.close()
+        return True
+    except ConnectionRefusedError:
+        return False
+    except OSError:
+        return None
 
 
 def http_alive(port, timeout=2):
@@ -272,6 +286,12 @@ def do_start(preferred):
     if file_port is not None:
         zombie_ports.add(file_port)
     for port in zombie_ports:
+        # 快速路径：连接被拒 = 端口空闲，直接跳过 netstat 全表枚举
+        # （冷启动常态，忙机器上每次省 0.5~3 秒）；只在"有监听但不健康"
+        # 或"无法判断"时才走 netstat 精确识别僵尸进程
+        connectable = port_connectable(port)
+        if connectable is False:
+            continue
         listeners = port_listener_pids(port)
         if not listeners or http_alive(port, timeout=2):
             continue

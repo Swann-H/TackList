@@ -143,7 +143,7 @@ function buildMonthGridTaskItemHtml(task) {
         <div draggable="true" data-task-id="${task.id}"
              ondragstart="handleTaskDragStart(event, '${task.id}')"
              ondragend="handleTaskDragEnd(event)"
-             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
+             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)"
              class="text-xs p-1 rounded-r cursor-pointer truncate task-item month-task-item task-row ${task.completed ? 'opacity-55' : 'hover:bg-theme-tertiary'} flex items-center justify-between gap-1"
              style="background-color: ${list?.color}15; border-left: 2px solid ${barColor}">
             <div class="flex items-center gap-1 min-w-0 flex-1">
@@ -166,7 +166,7 @@ function buildWeekAllDayTaskItemHtml(task) {
     return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer task-row ${titleClass} flex items-center gap-1 min-w-0"
                  style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${barColor};"
                  title="${escapeHtml(task.title || '新任务')}"
-                 onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')"
+                 onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)"
                  draggable="true"
                  ondragstart="handleTaskDragStart(event, '${task.id}')"
                  ondragend="handleTaskDragEnd(event)">
@@ -313,7 +313,7 @@ function renderWeekView(container) {
 
                     return `<div class="absolute rounded-r px-1 py-0.5 overflow-hidden cursor-pointer task-item week-task-item ${taskLayout.task.completed ? 'opacity-55' : ''}"
                                  style="top: ${topPx}px; height: ${heightPx}px; width: ${widthPercent}%; left: ${leftPercent}%; background-color: ${color}20; border-left: 3px solid ${_extBarColor}; z-index: 5;"
-                                 onclick="event.stopPropagation(); openTaskDetailPanel('${taskLayout.task.id}')"
+                                 onclick="event.stopPropagation(); openTaskDetailPanel('${taskLayout.task.id}', false, true)"
                                  draggable="true"
                                  ondragstart="handleTaskDragStart(event, '${taskLayout.task.id}')"
                                  ondragend="handleTaskDragEnd(event)">
@@ -975,7 +975,7 @@ function openMonthDayPopover(dateStr) {
 
 // 浮层内点击任务：直接打开新详情（切换前的保存已由 openTaskDetailPanel 内部统一处理），浮层保持打开
 function _openTaskDetailFromMonthPopover(taskId) {
-    openTaskDetailPanel(taskId);
+    openTaskDetailPanel(taskId, false, true);
 }
 
 function closeMonthDayPopover() {
@@ -1169,7 +1169,7 @@ function renderMonthViewMobile(container) {
         const titleCls = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
         const checked = task.completed ? 'checked' : '';
         return `
-            <div class="task-row flex items-center gap-2 py-2.5 border-b border-theme/50 last:border-b-0 ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}')">
+            <div class="task-row flex items-center gap-2 py-2.5 border-b border-theme/50 last:border-b-0 ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)">
                 <span class="flex-shrink-0 w-1 h-4 rounded-full" style="background-color:${_extTaskBarColor(task, list?.color || '#9ca3af')}"></span>
                 <label class="flex-shrink-0" onclick="event.stopPropagation()">
                     <input type="checkbox" ${checked} onchange="toggleTaskComplete('${task.id}')" class="w-5 h-5 rounded border-theme accent-color">

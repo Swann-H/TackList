@@ -38,6 +38,9 @@ cp -r /path/to/TackList ~/TackList
 cd ~/TackList
 ```
 
+> **解压分发包时**：优先使用 `.tar.gz` 包（文件名编码与执行权限都能正确保留）。
+> 若拿到的是 Windows 上制作的 `.zip` 包，其中的中文文件名可能乱码，请用 `unzip -O gbk 包名.zip` 解压（需要 unzip 6.0+）。应用目录本身的路径包含中文不受影响。
+
 ### 3. 赋予执行权限
 
 ```bash
@@ -73,6 +76,19 @@ cd ~/TackList
 ./tacklist.sh restart   # 重启服务
 ./tacklist.sh open      # 启动服务并打开浏览器
 ```
+
+## 指定 Python 版本
+
+`install.sh` 会自动探测 PATH 中所有 Python 3.x，选择 ≥ 3.8 的最高版本运行本系统，并写入应用目录的 `python.conf`。需要固定某个版本时，二选一：
+
+- 编辑 `python.conf`，写入解释器命令（如 `python3.9`，或绝对路径 `/usr/bin/python3.9`）
+- 或设置环境变量临时覆盖（优先级更高）：
+
+```bash
+TACKLIST_PYTHON=python3.9 ./tacklist.sh open
+```
+
+改完后执行 `./tacklist.sh restart` 生效。
 
 ## 可选：安装 icalendar（仅「外部日历订阅」需要）
 
@@ -133,20 +149,6 @@ PYTHON=/usr/bin/python3.8 ./install_icalendar.sh
 sudo apt install python3-icalendar    # 银河麒麟 / 统信 UOS / Debian / Ubuntu
 sudo yum install python3-icalendar    # CentOS / RHEL
 ```
-
-### 离线 / 内网环境怎么装（推荐做法）
-
-1. 在一台**能上网**的机器上执行 `./pack_icalendar_wheels.sh`，生成 `wheels/` 目录。若目标机 Python 版本与本机不同，可指定版本打包，例如：
-
-```bash
-./pack_icalendar_wheels.sh 3.8    # 为 Python 3.8 的麒麟 V10 SP1 打包
-./pack_icalendar_wheels.sh 3.7    # 为 Python 3.7 的统信 UOS 打包
-```
-
-2. 把 `wheels/` 目录拷贝到目标机，与 `install_icalendar.sh` 放在同一目录。
-3. 在目标机执行 `./install_icalendar.sh`，脚本自动识别 `wheels/` 走离线安装，全程不联网。
-
-> icalendar 及其依赖（python-dateutil、six、tzdata）都是纯 Python 包，wheel 与 CPU 架构无关，x86_64 / 飞腾 / 鲲鹏 / 龙芯 平台通用。
 
 ## 离线使用说明
 

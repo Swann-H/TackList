@@ -844,8 +844,18 @@ function _clearExtTaskDetailGuard() {
     }
 }
 
-function openTaskDetailPanel(taskId, readOnly = false) {
-    if (planPanelOpen && !detailOpenedFromPlan) {
+// 详情面板此刻是否正在展示指定任务。
+// 必须同时校验 currentDetailTaskId 与面板可见性：淡出动画期间 currentDetailTaskId 已置空但面板尚未加 hidden，
+// 只判可见性会误判为「展示中」。
+function isDetailPanelShowingTask(taskId) {
+    if (!taskId || currentDetailTaskId !== taskId) return false;
+    const panel = document.getElementById('task-detail-panel');
+    return !!panel && !panel.classList.contains('hidden');
+}
+
+function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
+    // 计划面板打开时，主视图点击任务一律先收起计划面板（计划面板内任务项已不再呼出详情面板）
+    if (planPanelOpen) {
         const detailPanel = document.getElementById('task-detail-panel');
         if (detailPanel && !detailPanel.classList.contains('hidden')) {
             closeTaskDetailPanel();
@@ -853,7 +863,13 @@ function openTaskDetailPanel(taskId, readOnly = false) {
         closePlanPanel();
         return;
     }
-    detailOpenedFromPlan = false;
+    // 再次单击同一任务 → 收起详情面板（再点一次重新呼出，如此往复）。
+    // fromClick 用于区分「视图内任务项单击」与程序化调用：新建任务后自动呼出、
+    // clearTaskTime/reopenTaskDetailPanelKeepTimeMenu 这类重开同一任务、通知点击跳转等一律不参与收起。
+    if (fromClick && isDetailPanelShowingTask(taskId)) {
+        closeTaskDetailPanel();
+        return;
+    }
     // 面板正展示其他任务时，先将当前任务尚未落盘的修改（重要/紧急、标题、备注、清单、提醒、重复等）保存到任务对象，避免直接切换丢失
     if (currentDetailTaskId && currentDetailTaskId !== taskId && !detailReadOnly) {
         const visiblePanel = document.getElementById('task-detail-panel');
@@ -2174,7 +2190,6 @@ function closeTaskDetailPanel() {
         detailReadOnly = false;
         hideDetailPanel();
         currentDetailTaskId = null;
-        detailOpenedFromPlan = false;
         if (_dataRefreshPending) {
             refreshDataFromServer();
         }
@@ -2201,7 +2216,6 @@ function closeTaskDetailPanel() {
                     renderView();
                     hideDetailPanel();
                     currentDetailTaskId = null;
-                    detailOpenedFromPlan = false;
                     if (planPanelOpen) renderPlanPanel();
                     return;
                 }
@@ -2224,7 +2238,6 @@ function closeTaskDetailPanel() {
     }
     hideDetailPanel();
     currentDetailTaskId = null;
-    detailOpenedFromPlan = false;
     // 关闭面板：跳过撤销快照与倒计时一并失效
     _detailSkipUndoSnapshot = null;
     _clearDetailSkipUndoTimer();
@@ -2465,7 +2478,6 @@ function saveTaskDetail() {
     }
     hideDetailPanel();
     currentDetailTaskId = null;
-    detailOpenedFromPlan = false;
     if (planPanelOpen) renderPlanPanel();
 
     // 修改日期可能导致今日任务清空，检查并触发"落日归山"彩蛋（仅在真实落盘时）
@@ -2479,7 +2491,6 @@ let detailImportantState = false;
 let detailUrgentState = false;
 
 let planPanelOpen = false;
-let detailOpenedFromPlan = false;
 
 function togglePlanPanel() {
     const panel = document.getElementById('plan-panel');
@@ -2498,40 +2509,39 @@ function closePlanPanel() {
         panel.classList.add('hidden');
     }
     planPanelOpen = false;
-    detailOpenedFromPlan = false;
+}
+
+// 同步计划面板分组折叠态（与任务视图共享 taskListGroupCollapsed）。
+// groupKey 为空时同步全部分组；用于任务视图侧折叠/展开、全部展开收起等场景。
+function syncPlanPanelGroupCollapse(groupKey) {
+    if (!planPanelOpen) return;
+    const root = document.getElementById('plan-panel-content');
+    if (!root) return;
+    root.querySelectorAll('[data-plan-group]').forEach(wrap => {
+        const key = wrap.getAttribute('data-plan-group');
+        if (groupKey && key !== groupKey) return;
+        const collapsed = !!(typeof taskListGroupCollapsed !== 'undefined' && taskListGroupCollapsed[key]);
+        const content = wrap.querySelector('[data-plan-group-content]');
+        if (content) {
+            content.classList.toggle('hidden', collapsed);
+            content.classList.toggle('fx-collapsed', collapsed);
+        }
+        const icon = wrap.querySelector('.plan-group-header i.fas');
+        if (icon) icon.className = `fas fa-chevron-${collapsed ? 'right' : 'down'} text-xs text-theme-muted mr-1`;
+    });
 }
 
 function renderPlanPanel() {
     const container = document.getElementById('plan-panel-content');
     if (!container) return;
 
-    const filtered = filterTasks(tasks);
-    const groups = {
-        overdue: { label: '已过期', tasks: [] },
-        nodate: { label: '无日期', tasks: [] },
-        today: { label: '今天', tasks: [] },
-        tomorrow: { label: '明天', tasks: [] },
-        recent7: { label: '最近7天', tasks: [] },
-        later: { label: '更远', tasks: [] }
-    };
+    // 分组/排序完全复用任务视图：同一套 getTaskViewConfig（含 per-list 覆盖）+ buildTaskListGroups，
+    // 因此分组依据、排序依据、排序方向、时间窗筛选下按天分组等均与任务视图一致。
+    // 仅剔除「已完成」组——计划面板用于把待办拖去排期，已完成任务不参与。
+    const groups = (typeof buildTaskListGroups === 'function' ? buildTaskListGroups() : [])
+        .filter(g => !g.isCompleted && g.tasks && g.tasks.length > 0);
 
-    filtered.forEach(task => {
-        if (task.completed) return;
-        const group = getTaskListGroup(task);
-        if (groups[group]) groups[group].tasks.push(task);
-    });
-
-    groups.overdue.tasks.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    groups.nodate.tasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    groups.today.tasks.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    groups.tomorrow.tasks.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    groups.recent7.tasks.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    groups.later.tasks.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-
-    const groupOrder = ['overdue', 'nodate', 'today', 'tomorrow', 'recent7', 'later'];
-    const hasAnyTasks = groupOrder.some(g => groups[g].tasks.length > 0);
-
-    if (!hasAnyTasks) {
+    if (groups.length === 0) {
         container.innerHTML = `
             <div class="flex flex-col items-center justify-center py-12 text-theme-muted">
                 <i class="fas fa-clipboard-check text-4xl mb-3 opacity-30"></i>
@@ -2542,16 +2552,21 @@ function renderPlanPanel() {
     }
 
     let html = '';
-    groupOrder.forEach(groupKey => {
-        const group = groups[groupKey];
-        if (group.tasks.length === 0) return;
+    groups.forEach(group => {
+        // 折叠态与任务视图共享：同一 groupKey 在两侧同步折叠/展开
+        const isCollapsed = !!(typeof taskListGroupCollapsed !== 'undefined' && taskListGroupCollapsed[group.key]);
+        const labelHtml = group.labelHtml
+            || `${group.label}<span class="ml-1 text-xs text-theme-muted font-normal">${group.count}</span>`;
 
         html += `
-            <div class="mb-5">
-                <div class="flex items-center gap-2 mb-2">
-                    <h4 class="text-sm font-semibold ${groupKey === 'overdue' ? 'text-red-500' : 'text-theme-primary'}">${group.label}</h4>
-                    <span class="text-xs text-theme-muted">(${group.tasks.length})</span>
+            <div class="mb-5 last:mb-0" data-plan-group="${group.key}">
+                <div class="plan-group-header flex items-center gap-2 mb-2 cursor-pointer select-none"
+                     onclick="toggleTaskListGroup('${group.key}', { skipRender: true })">
+                    <i class="fas fa-chevron-${isCollapsed ? 'right' : 'down'} text-xs text-theme-muted mr-1"></i>
+                    <h4 class="text-sm font-semibold ${group.overdue ? 'text-red-500' : 'text-theme-primary'}">${labelHtml}</h4>
                 </div>
+                <div class="fx-collapse ${isCollapsed ? 'hidden fx-collapsed' : ''}" data-plan-group-content="${group.key}">
+                    <div class="fx-collapse-inner">
         `;
 
         group.tasks.forEach(task => {
@@ -2561,12 +2576,15 @@ function renderPlanPanel() {
             const quadColors = getQuadrantColorClass(task, { forceBg: true });
             const timeDisplay = task.startTime ? formatTaskListTime(task, { withAllDayTag: false }) : '';
 
+            // 单击不呼出详情面板：计划面板仅作为拖拽源（拖到主视图排期）。
+            // data-task-id 供移动端长按动作面板取 id（onclick 已移除，无法再从 onclick 解析）。
             html += `
-                <div class="plan-task-item flex items-center gap-2 py-2 px-2.5 rounded-r-lg ${quadColors.bg} hover:brightness-95 transition cursor-pointer group mb-1"
+                <div class="plan-task-item flex items-center gap-2 py-2 px-2.5 rounded-r-lg ${quadColors.bg} hover:brightness-95 transition cursor-grab active:cursor-grabbing group mb-1"
+                     data-task-id="${task.id}"
+                     title="${(task.title || '新任务').replace(/"/g, '&quot;')}"
                      draggable="true"
                      ondragstart="handleTaskDragStart(event, '${task.id}')"
                      ondragend="handlePlanDragEnd(event)"
-                     onclick="event.stopPropagation(); detailOpenedFromPlan=true; openTaskDetailPanel('${task.id}')"
                      style="border-left: 3px solid ${listColor}; overflow: hidden;">
                     <span class="flex-1 text-sm text-theme-primary truncate min-w-0 group-hover:text-accent transition-colors duration-150">${task.title || '新任务'}</span>
                     <div class="flex items-center gap-1.5 flex-shrink-0 text-xs text-theme-secondary whitespace-nowrap">
@@ -2577,7 +2595,7 @@ function renderPlanPanel() {
             `;
         });
 
-        html += '</div>';
+        html += '</div></div></div>';
     });
 
     container.innerHTML = html;
@@ -3148,7 +3166,8 @@ function deleteTaskFromDetail() {
     if (deleteDetailConfirming) {
         // 彩蛋：断舍离检测（在DOM移除前获取位置）
         const taskEl = document.querySelector(`[onclick*="toggleTaskComplete('${currentDetailTaskId}')"]`) ||
-                       document.querySelector(`[onclick*="openTaskDetailPanel('${currentDetailTaskId}')"]`);
+                       // 只匹配到 id 为止：onclick 现为 openTaskDetailPanel('id', readOnly, fromClick)
+                       document.querySelector(`[onclick*="openTaskDetailPanel('${currentDetailTaskId}'"]`);
         easterEgg_onTaskDelete(taskEl);
 
         const deletedId = currentDetailTaskId;
@@ -3159,7 +3178,6 @@ function deleteTaskFromDetail() {
         saveData();
         hideDetailPanel();
         currentDetailTaskId = null;
-        detailOpenedFromPlan = false;
         deleteDetailConfirming = false;
         if (_detailSkipUndoSnapshot && _detailSkipUndoSnapshot.taskId === deletedId) {
             _detailSkipUndoSnapshot = null;
@@ -3763,7 +3781,8 @@ function deleteTask(taskId) {
     }
     // 彩蛋：断舍离检测（在DOM移除前获取位置）
     const taskEl = document.querySelector(`[onclick*="toggleTaskComplete('${taskId}')"]`) ||
-                   document.querySelector(`[onclick*="openTaskDetailPanel('${taskId}')"]`);
+                   // 只匹配到 id 为止：onclick 现为 openTaskDetailPanel('id', readOnly, fromClick)
+                   document.querySelector(`[onclick*="openTaskDetailPanel('${taskId}'"]`);
     easterEgg_onTaskDelete(taskEl);
 
     tasks = tasks.filter(t => t.id !== taskId);
@@ -3771,7 +3790,6 @@ function deleteTask(taskId) {
     if (currentDetailTaskId === taskId) {
         hideDetailPanel();
         currentDetailTaskId = null;
-        detailOpenedFromPlan = false;
     }
     if (_detailSkipUndoSnapshot && _detailSkipUndoSnapshot.taskId === taskId) {
         _detailSkipUndoSnapshot = null;

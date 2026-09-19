@@ -161,7 +161,9 @@
         /* 背景图片模式：主内容区和任务详情栏去掉底色，仅保留毛玻璃 */
         body.has-bg-image #main-content .bg-theme-secondary,
         body.has-bg-image #task-detail-panel .bg-theme-secondary,
-        body.has-bg-image #task-detail-panel.bg-theme-secondary {
+        body.has-bg-image #task-detail-panel.bg-theme-secondary,
+        body.has-bg-image #plan-panel .bg-theme-secondary,
+        body.has-bg-image #plan-panel.bg-theme-secondary {
             background-color: transparent !important;
             backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
@@ -189,7 +191,9 @@
             -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             color: white !important;
         }
-        body.has-bg-image #task-detail-panel {
+        /* 任务详情面板 / 计划面板：毛玻璃效果（两者底色处理保持一致） */
+        body.has-bg-image #task-detail-panel,
+        body.has-bg-image #plan-panel {
             background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.55) !important;
             backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
@@ -244,6 +248,7 @@
         html[data-blur="off"] body.has-bg-image .quadrant-card,
         html[data-blur="off"] body.has-bg-image .kanban-collapse-btn,
         html[data-blur="off"] body.has-bg-image #task-detail-panel,
+        html[data-blur="off"] body.has-bg-image #plan-panel,
         html[data-blur="off"] body.has-bg-image .week-header-sticky,
         html[data-blur="off"] body.has-bg-image .sidebar-tag-btn.bg-theme-tertiary,
         html[data-blur="off"] body.has-bg-image .sidebar-filter-btn.bg-theme-tertiary,
@@ -260,6 +265,8 @@
         html[data-blur="off"] body.has-bg-image #main-content .bg-theme-secondary,
         html[data-blur="off"] body.has-bg-image #task-detail-panel .bg-theme-secondary,
         html[data-blur="off"] body.has-bg-image #task-detail-panel.bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #plan-panel .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #plan-panel.bg-theme-secondary,
         html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-date-picker,
         html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-time-picker,
         html[data-blur="off"] body.has-bg-image #task-detail-panel #detail-task-end-date-picker,
@@ -273,7 +280,10 @@
         html[data-blur="off"] body.has-bg-image #main-content .bg-theme-secondary,
         html[data-blur="off"] body.has-bg-image #task-detail-panel .bg-theme-secondary,
         html[data-blur="off"] body.has-bg-image #task-detail-panel.bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #plan-panel .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #plan-panel.bg-theme-secondary,
         html[data-blur="off"] body.has-bg-image #task-detail-panel,
+        html[data-blur="off"] body.has-bg-image #plan-panel,
         html[data-blur="off"] body.has-bg-image .calendar-day,
         html[data-blur="off"] body.has-bg-image .quadrant-card,
         html[data-blur="off"] body.has-bg-image .kanban-collapse-btn,
@@ -3564,6 +3574,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 <li data-page-node-id="Me46wV8B6cik0IMpZGAN6M"><a data-target="settings-section-sidebar-items" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="yDhvmcrzJJGh85XHs9tBI2">侧边栏配置</a></li>
                                 <li data-page-node-id="H14aOZGbDt0PYc4kBB5PHa"><a data-target="settings-section-command" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="j1sdrn7sRnl2Ep1eABaStw">命令面板</a></li>
                                 <li data-page-node-id="eb3LLPVMneX6cCbfrKnW2Y"><a data-target="settings-section-shortcuts" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="dNoAthxEmJR6k1Ed8H2rFj">快捷键</a></li>
+                                <li data-page-node-id="ZEtBit3LJKGm6qjfxR25wS"><a data-target="settings-section-mindful" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="hngHaeqMf9l6Oh1lCxcdHW">正念小事</a></li>
                             </ul>
                         </div>
                         <div data-page-node-id="wEGoBiwDxdnMMGCNscmdhs">
@@ -3579,19 +3590,13 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 <li data-page-node-id="NbHhRohf8DZvw5wokKQKJ2"><a data-target="settings-section-holiday" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="mgu70SuqoessXSdRk6ZC4u">节假日与调休</a></li>
                             </ul>
                         </div>
-                        <div data-page-node-id="D95lFoMQFkO2EqvT9r0E0Y">
-                            <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2" data-page-node-id="grJFOUmvmIrOKnUxpCgDfE">辅助功能</div>
-                            <ul class="space-y-1" data-page-node-id="zZjyXbwmuQ8EfNur2moKOH">
-                                <li data-page-node-id="ZEtBit3LJKGm6qjfxR25wS"><a data-target="settings-section-mindful" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="hngHaeqMf9l6Oh1lCxcdHW">正念小事</a></li>
-                            </ul>
-                        </div>
                         <div data-page-node-id="jg8MQj5BBQd3WYVJ0Cx7KH">
                             <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2" data-page-node-id="BRCD6UjUveKzmMQGmmulU2">数据与系统</div>
                             <ul class="space-y-1" data-page-node-id="TCzfWvmLwF5X2Ho7ODHoxd">
-                                <li data-page-node-id="A4ZMlCFmD0KV5M7wB9ScKv"><a data-target="settings-section-calendarsync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="yTO7sksP0oDRBU9muYXoxf">外部日历订阅</a></li>
                                 <li data-page-node-id="dLly5BWj1EULH2ArmASv9I"><a data-target="settings-section-sync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="BCmvJaRvqIOYAouwGE2Rll">数据同步</a></li>
                                 <li data-page-node-id="ZQu2tr75LoxHxoFeK7XMOc"><a data-target="settings-section-network" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="ISFU8pifJrXxYnNGiUCFFc">网络配置</a></li>
                                 <li data-page-node-id="TqatHKf2UasQRbI9ivIGyR"><a data-target="settings-section-data" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="mlRw0N33aOSrD1dKCEK7ZC">数据管理</a></li>
+                                <li data-page-node-id="aboutNavOff"><a data-target="settings-section-about" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="aboutNavLinkOff">关于</a></li>
                             </ul>
                         </div>
                     </div>
@@ -3616,19 +3621,80 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
 
                             <div data-page-node-id="8NC6GKVUzZpa2ZGGsB25cE">
                                 <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="Au15yNPMJtDgqILJAguXtU">背景图片</label>
-                                <div class="flex gap-2" data-page-node-id="glm2qws5jKmXxpSWAxdRvB">
-                                    <label for="bg-image-upload" class="flex-1 px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary cursor-pointer hover:bg-theme-secondary transition text-center" data-page-node-id="ANazUNmjHdmKbUDDsuEE8X">
-                                        <i class="fas fa-upload mr-2" data-page-node-id="KFoUHnaavJ8bsgcnJqrqWv"></i>选择图片
-                                    </label>
-                                    <input type="file" id="bg-image-upload" accept="image/*" class="hidden" onchange="handleBgImageUpload(event)" data-page-node-id="UpPpDH3yJwk1FweVZTcmpO">
-                                    <button onclick="clearBgImage()" id="bg-image-delete-btn" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-red-50 hover:text-red-500 transition" title="删除背景图片" data-page-node-id="nK7deYqDHXbrKxYU1ExYFd">
-                                        <i class="fas fa-trash" data-page-node-id="laUabJuGfMsYk6hCfOFFf4"></i>
+                                <div class="flex gap-2 mb-3">
+                                    <button type="button" id="bg-mode-single-btn" onclick="switchBgImageMode('single')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">
+                                        <i class="fas fa-image mr-1"></i>单张图片
+                                    </button>
+                                    <button type="button" id="bg-mode-carousel-btn" onclick="switchBgImageMode('carousel')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">
+                                        <i class="fas fa-images mr-1"></i>轮换图片
                                     </button>
                                 </div>
-                                <p class="text-xs text-theme-muted mt-2" data-page-node-id="gA9RCX3hb6ma1jsRMBfeMn">支持 JPG、PNG、GIF 等图片格式</p>
-                                <div id="bg-image-preview" class="mt-3 hidden" data-page-node-id="8KhRc3nt2F2Cjgj46AWkxn">
-                                    <img id="bg-preview-img" class="max-h-32 w-full object-contain rounded-lg border border-theme" data-page-node-id="FK90ZmeARDnHSBqJlSdHbC" />
+                                <div id="bg-single-section">
+                                    <div class="flex gap-2" data-page-node-id="glm2qws5jKmXxpSWAxdRvB">
+                                        <label for="bg-image-upload" class="flex-1 px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary cursor-pointer hover:bg-theme-secondary transition text-center" data-page-node-id="ANazUNmjHdmKbUDDsuEE8X">
+                                            <i class="fas fa-upload mr-2" data-page-node-id="KFoUHnaavJ8bsgcnJqrqWv"></i>选择图片
+                                        </label>
+                                        <input type="file" id="bg-image-upload" accept="image/*" class="hidden" onchange="handleBgImageUpload(event)" data-page-node-id="UpPpDH3yJwk1FweVZTcmpO">
+                                        <button onclick="clearBgImage()" id="bg-image-delete-btn" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-red-50 hover:text-red-500 transition" title="删除背景图片" data-page-node-id="nK7deYqDHXbrKxYU1ExYFd">
+                                            <i class="fas fa-trash" data-page-node-id="laUabJuGfMsYk6hCfOFFf4"></i>
+                                        </button>
+                                    </div>
+                                    <p class="text-xs text-theme-muted mt-2" data-page-node-id="gA9RCX3hb6ma1jsRMBfeMn">支持 JPG、PNG、GIF 等图片格式</p>
+                                    <div id="bg-image-preview" class="mt-3 hidden" data-page-node-id="8KhRc3nt2F2Cjgj46AWkxn">
+                                        <img id="bg-preview-img" class="max-h-32 w-full object-contain rounded-lg border border-theme" data-page-node-id="FK90ZmeARDnHSBqJlSdHbC" />
+                                    </div>
                                 </div>
+                                <div id="bg-carousel-section" class="hidden space-y-3">
+                                    <div class="flex gap-2">
+                                        <button type="button" id="bg-carousel-pick-btn" onclick="bgCarouselSelectDirectory()" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap">
+                                            <i class="fas fa-folder-open mr-2"></i>选择目录
+                                        </button>
+                                        <input type="text" id="bg-carousel-directory-input" placeholder="输入图片目录路径" onchange="applyBgCarouselDirectory(this.value)" class="flex-1 min-w-0 px-3 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                        <button onclick="clearBgCarousel()" id="bg-carousel-delete-btn" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-red-50 hover:text-red-500 transition" title="删除背景图片">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label class="block text-xs text-theme-muted mb-1">切换间隔</label>
+                                            <div class="flex">
+                                                <input type="number" id="bg-carousel-interval-input" min="1" max="365" value="30" onchange="onBgCarouselIntervalChange()" class="w-full min-w-0 px-2 py-1.5 text-sm border border-theme rounded-l-lg bg-theme-tertiary text-theme-primary">
+                                                <select id="bg-carousel-interval-unit" onchange="onBgCarouselIntervalChange()" class="border border-l-0 border-theme rounded-r-lg bg-theme-tertiary text-theme-primary text-sm px-1">
+                                                    <option value="minutes">分钟</option>
+                                                    <option value="hours">小时</option>
+                                                    <option value="days">天</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-theme-muted mb-1">切换顺序</label>
+                                            <select id="bg-carousel-order-select" onchange="onBgCarouselOrderChange()" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                                <option value="sequential">顺序循环</option>
+                                                <option value="random">随机抽取</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div id="bg-carousel-status" class="hidden">
+                                        <div class="flex items-center gap-3 p-2 border border-theme rounded-lg bg-theme-tertiary">
+                                            <img id="bg-carousel-thumb" alt="当前背景图" class="w-14 h-10 object-cover rounded border border-theme shrink-0" />
+                                            <div class="flex-1 min-w-0">
+                                                <p id="bg-carousel-filename" class="text-xs font-medium text-theme-primary truncate"></p>
+                                                <p id="bg-carousel-meta" class="text-xs text-theme-muted truncate"></p>
+                                            </div>
+                                            <button type="button" onclick="bgCarouselNext()" class="px-3 py-1.5 text-xs border border-theme rounded-lg bg-theme-secondary text-theme-secondary hover:border-accent hover:text-accent-dark transition shrink-0">下一张</button>
+                                        </div>
+                                    </div>
+                                    <p id="bg-carousel-empty-hint" class="hidden text-xs text-theme-muted">目录为空或目录中没有有效图片（支持 JPG / PNG / GIF / WebP）</p>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="block text-xs text-theme-muted mb-1">背景填充方式</label>
+                                    <div class="flex gap-2">
+                                        <button type="button" id="bg-fill-cover" onclick="setBgFillMode('cover')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">铺满</button>
+                                        <button type="button" id="bg-fill-contain" onclick="setBgFillMode('contain')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">完整显示</button>
+                                        <button type="button" id="bg-fill-tile" onclick="setBgFillMode('tile')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">平铺</button>
+                                    </div>
+                                </div>
+                                <p id="bg-carousel-contrast-warning" class="hidden text-xs text-amber-500 mt-2"><i class="fas fa-exclamation-triangle mr-1"></i>当前为主题固定配色，低对比度轮播图可能影响文字可读性，建议改用「背景图取色」配色方案</p>
                             </div>
 
                             <div data-page-node-id="jsauHRnHZRxHVqAPItAehC">
@@ -3689,6 +3755,9 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                     <button onclick="regeneratePalettePreview()" id="palette-regenerate-btn" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition" data-page-node-id="SLoNgHVK3FgEsdM1Rp5xt1">
                                         <i class="fas fa-dice mr-1" data-page-node-id="ABeFByRxDhz6Jb0jfMlGLR"></i>重新生成配色
                                     </button>
+                                    <button onclick="selectThemePalette('none')" id="palette-none-btn" class="ml-auto px-3 py-1.5 text-sm text-theme-muted hover:text-accent transition whitespace-nowrap" data-page-node-id="jzJR0wWRAwfFRy7SMg6TQC">
+                                        <i class="fas fa-undo mr-1"></i>恢复默认主题色
+                                    </button>
                                 </div>
                                 <div id="palette-preview-container" class="grid grid-cols-3 gap-2 hidden" data-page-node-id="l5PNxyAgFRxQn9kptgdCf3">
                                     <button onmousedown="startPalettePreview('vibrant')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="vibrant" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer" data-page-node-id="9lG5lKF3X0p1DOOohJQoBs">
@@ -3714,7 +3783,6 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                     </button>
                                 </div>
                                 <p class="text-xs text-theme-muted mt-2 hidden" id="palette-hint-text" data-page-node-id="DtQsaGlMcPi1UvKpZpRakB">短按应用，长按预览（松开恢复）</p>
-                                <button onclick="selectThemePalette('none')" id="palette-none-btn" class="mt-2 text-xs text-theme-muted hover:text-accent transition" data-page-node-id="jzJR0wWRAwfFRy7SMg6TQC">恢复默认主题色</button>
                             </div>
 
                             <div data-page-node-id="D8ChS5LldAsKsmWW3TyymZ">
@@ -3969,7 +4037,18 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <!-- 动态生成 -->
                         </div>
                     </div>
-
+                    
+                    <div id="settings-section-mindful" data-page-node-id="rWSQtWmU8kPWXcIY4u0PoP">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="hXhRks1R9a0z0M1OOOPSwz">正念小事</h3>
+                        <div class="flex items-center justify-between" data-page-node-id="CdXsuaR6zJmTJXKu3883D9">
+                            <span class="text-sm text-theme-secondary" data-page-node-id="M5eAoTLVQ8EKzSYOKkHojA">接受后自动创建任务</span>
+                            <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="PCPjU6aPlACtCChitBp2hy">
+                                <input type="checkbox" id="settings-auto-create" class="sr-only peer" checked data-page-node-id="0oQQCqMHC2K5CmkgzNpJnj">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="3RuJlzhyGpkx7L7epZCAzy"></div>
+                            </label>
+                        </div>
+                    </div>
+                    
                     <div id="settings-section-pomodoro" data-page-node-id="M1XVphrppFDocDtBbYNd0a">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="bigemVKk8lLG8cGnaEYyzz">番茄计时设置</h3>
                         <div class="grid grid-cols-2 gap-4 mb-4" data-page-node-id="BGwkcZmHYaFEporFGICRKK">
@@ -4091,35 +4170,6 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                         </div>
                     </div>
 
-                    <div id="settings-section-mindful" data-page-node-id="rWSQtWmU8kPWXcIY4u0PoP">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="hXhRks1R9a0z0M1OOOPSwz">正念小事</h3>
-                        <div class="flex items-center justify-between" data-page-node-id="CdXsuaR6zJmTJXKu3883D9">
-                            <span class="text-sm text-theme-secondary" data-page-node-id="M5eAoTLVQ8EKzSYOKkHojA">接受后自动创建任务</span>
-                            <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="PCPjU6aPlACtCChitBp2hy">
-                                <input type="checkbox" id="settings-auto-create" class="sr-only peer" checked data-page-node-id="0oQQCqMHC2K5CmkgzNpJnj">
-                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="3RuJlzhyGpkx7L7epZCAzy"></div>
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- 外部日历订阅（离线版：仅提供"显示外部日历"开关，不提供跳转设置按钮） -->
-                    <div id="settings-section-calendarsync" data-page-node-id="xeCtTTjDG7qSlLrVEVuwzC">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="wFCWWTJsom7yasel4HlIR4">外部日历订阅</h3>
-                        <div class="space-y-3" data-page-node-id="wGWuPqZQ4iqpm5bgt0uIMI">
-                            <p class="text-sm text-theme-secondary" data-page-node-id="DzVHK3JgsD93cEHWq965IB">外部日历订阅管理仅在线版可用。离线版可在此控制是否在侧边栏显示外部日历分组。</p>
-                            <div class="flex items-center justify-between py-2 border-b border-theme" data-page-node-id="byUikATRHDLRYXTZI8pXNA">
-                                <div class="min-w-0 pr-3" data-page-node-id="4n61S3ZuiIh0zcG0MXfLPc">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="cevFgK2JBfloEFe0U54B6c">显示外部日历</label>
-                                    <p class="text-xs text-theme-muted" data-page-node-id="BLsKoX4ATOzyOlRoNnP2ZI">关闭后侧边栏将不显示外部日历分组及其任务</p>
-                                </div>
-                                <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="r5WA1g0O1EvaEpHmqAW5Vw">
-                                    <input type="checkbox" id="settings-show-external-calendars" onchange="toggleShowExternalCalendars(this.checked)" class="sr-only peer" data-page-node-id="J6EucRRtWmAggEzE4Bsb3y">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="cCQTnIS6j3DukpnBSAyR89"></div>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
                     <div id="settings-section-sync" data-page-node-id="pdFlB586uwXecoNZsa8YdS">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="SLCadYQz2EV0aiMgzngOAz">数据同步</h3>
                         <div class="space-y-4" data-page-node-id="nkkrmGmyU3K2mRiYb4qrx2">
@@ -4191,7 +4241,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     </div>
 
                     <div id="settings-section-data" data-page-node-id="Bz25b98UMpBdqNePtahncG">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="UqfDXLmNKOKtLx1ObVyctO">数据管理 <span class="text-xs font-normal text-theme-muted ml-2" data-page-node-id="6Kn8iH0pmgH32eilnp2Qov">v11.7.0</span></h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="UqfDXLmNKOKtLx1ObVyctO">数据管理</h3>
                         <div class="space-y-4" data-page-node-id="ZvgXzjx0oDJPbRkhkXZesj">
                             <div class="flex gap-3" data-page-node-id="GXmiNYIloS269I9qZ3BFz2">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer" data-page-node-id="dTLnSTkFTikkaM0ws75VaE">
@@ -4257,6 +4307,28 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- 关于 -->
+                    <div id="settings-section-about">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">关于</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
+                                <i class="fas fa-calendar-check text-accent text-3xl"></i>
+                                <div>
+                                    <p class="text-base font-semibold text-theme-primary">TackList  11.7.1</p>
+                                    <p class="text-sm text-theme-secondary">日程管理</p>
+                                </div>
+                            </div>
+                            <div>
+                                <p class="text-sm font-medium text-theme-primary mb-2">项目地址</p>
+                                <div class="text-sm text-theme-secondary space-y-1">
+                                    <p>https://github.com/Swann-H/TackList</p>
+                                    <p>https://gitee.com/swann-h/TackList</p>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-sm text-theme-secondary text-center mt-4">本项目仅限个人使用，禁止商用或售卖。</p>
                     </div>
                 </div>
                 </div>
@@ -4404,6 +4476,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
     <script src="tasks.js"></script>
     <script src="pomodoro.js"></script>
     <script src="commandPalette.js"></script>
+    <script src="onboarding.js"></script>
     <script src="easterEgg.js"></script>
     <script src="countdown.js"></script>
     <script src="holiday.js"></script>
@@ -4615,6 +4688,13 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="QJxudNsTqK6do6ykfaQScZ">
                     <input type="checkbox" id="qc-showdetails" aria-labelledby="qc-showdetails-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="9DRx4d48wv5HQ1pMoG9STT">
                     <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="t9OKxi5O0bpO7QMOhlB25J"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1" data-page-node-id="qCompactRow">
+                <span id="qc-compact-label" class="text-sm text-theme-primary" title="开启后该视图卡片改用任务视图的紧凑横向单行样式">紧凑显示</span>
+                <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="qCompactLbl">
+                    <input type="checkbox" id="qc-compact" aria-labelledby="qc-compact-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="qCompactInput">
+                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="qCompactDiv"></div>
                 </label>
             </div>
             <div class="pt-4 border-t border-theme space-y-2" data-page-node-id="J96eACKliDxAdJ3J0yfYDo">

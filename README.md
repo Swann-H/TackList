@@ -125,7 +125,7 @@
 **手动启动**（如不运行安装脚本）：
 
 ```cmd
-cd C:\Users\你的用户名\TackList
+cd [TackList项目所在路径]
 start.bat
 ```
 
@@ -153,11 +153,12 @@ chmod +x tacklist.sh install.sh autostart.sh
 ./install.sh
 ```
 
-3. 或手动启动：
+3. 手动启动：
 
 ```bash
 ./tacklist.sh start
 ```
+或单击桌面快捷方式启动，即可开始使用。
 
 **常用命令**：
 
@@ -170,63 +171,12 @@ chmod +x tacklist.sh install.sh autostart.sh
 
 ### 快速启动（任意平台）
 
-只要装了 Python，都可以直接运行：
-
-```bash
-python3 server.py
-```
-
-然后在浏览器打开 `http://localhost:14438` 即可。
+直接单击桌面快捷方式启动，或使用上述命令启动。在确认服务已经启动时，可直接输入访问地址在浏览器中访问。
 
 ### 访问地址
 
 启动后浏览器会自动打开。如需手动访问，默认地址是 `http://localhost:14438`。若端口被占用，系统会自动寻找下一个可用端口，可在 `server.log` 中查看实际使用的端口。
 
-## 可选依赖：icalendar（仅「外部日历订阅」需要）
-
-> **绝大多数用户不需要安装它，请先判断是否真的需要。**
-
-| 你的情况 | 是否需要安装 |
-|----------|--------------|
-| 想把滴答清单、Outlook 日历、Google 日历、iCloud 日历等外部日历的 `.ics` 订阅链接接入本系统，作为只读任务展示 | **需要**（对应功能：设置 → 外部日历订阅） |
-| 只使用任务、清单、日历视图、四象限、看板、番茄专注、倒计时、统计等内置功能 | **不需要** |
-| 处在企业内网 / 无外网环境，无法访问 PyPI | **不需要**，跳过即可 |
-
-**不安装会怎样？** 除了「外部日历订阅 」功能不可用之外，系统**其余全部功能正常可用**，不会报错、不会影响数据，也不会拖慢速度。
-
-### 安装前提
-
-- **安装过程需要访问互联网**（脚本 / pip 需要从 PyPI 下载安装包）。若处于企业内网且无法访问外网，**请不要进行安装**。
-- Python 版本决定能装哪个 icalendar 版本，一键安装脚本会自动判断：
-
-| Python 版本 | 安装的 icalendar 版本 |
-|-------------|----------------------|
-| 3.10 及以上 | 最新版（7.x） |
-| 3.8 / 3.9 | 6.3.x |
-| 3.7 | 5.0.x |
-
-### 一键安装（推荐）
-
-```bash
-# Linux（银河麒麟 V10 SP1 / 统信 UOS / 其它发行版）
-chmod +x install_icalendar.sh pack_icalendar_wheels.sh
-./install_icalendar.sh
-
-# Windows：双击运行，或在命令行执行
-install_icalendar.bat
-```
-
-脚本会依次检查 Python 版本、pip 是否可用、网络是否可达，并**优先使用同目录下的 `wheels/` 离线包**；任何一步失败都会打印明确的原因和处理建议（权限、代理、PEP 668、版本过旧等）。
-
-### 离线环境怎么装
-
-1. 在一台**能上网**的机器上执行打包脚本，生成 `wheels/` 目录：
-   - Linux：`./pack_icalendar_wheels.sh`（可加参数指定目标机 Python 版本，如 `./pack_icalendar_wheels.sh 3.8`）
-   - Windows：`pack_icalendar_wheels.bat`
-2. 把 `wheels/` 目录拷贝到目标机，与 `install_icalendar.sh` / `install_icalendar.bat` 放在**同一目录**。
-3. 在目标机运行一键安装脚本，脚本会自动识别 `wheels/` 并走离线安装，全程不需要联网。
-
-> 说明：icalendar 及其依赖（python-dateutil、six、tzdata）都是纯 Python 包，打出来的 wheel 与 CPU 架构无关，x86_64 / ARM（飞腾、鲲鹏）/ 龙芯 等平台通用。
 
 ## 离线使用
 
@@ -235,6 +185,10 @@ install_icalendar.bat
 - 项目自带 `index_offline.html` 离线版本，使用本地的样式和字体资源，无需联网。
 - 所有数据保存在本地的 `data.json` 文件中。
 - 系统运行不依赖任何第三方 Python 包；唯一的可选依赖 `icalendar` 仅用于「外部日历订阅」功能（见上文），不安装也不影响离线使用。
+
+## 可选依赖
+
+如需使用外部日历ICS订阅功能，请参阅项目中的《README_可选依赖icalendar安装.md》进行额外组件安装，该功能仅终端可联互联网时可用。
 
 ## 卸载
 
