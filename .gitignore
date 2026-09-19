@@ -30,8 +30,9 @@ documents/
 .DS_Store
 Thumbs.db
 
-# Agent workspace data
+# Agent workspace data (memory/logs all live under .workbuddy/)
 .workbuddy/
+.workbuddy-ai/
 
 # Local dev test scripts (not shipped)
 test-cp.js
