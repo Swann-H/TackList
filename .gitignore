@@ -4,12 +4,16 @@ server.pid
 server.port
 .data.lock
 launch.lock
+# Background carousel state (server-managed: user config + rotation progress)
+bg_carousel.json
 
 # User data
 data.json
 
 # Python
 __pycache__/
+# Cached interpreter path (written by install/start scripts; edit to pin a version)
+python.conf
 
 # Android
 android/
