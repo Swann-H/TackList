@@ -792,14 +792,14 @@ function renderTaskListView(container) {
         container.innerHTML = `
             <div class="flex flex-col items-center justify-center py-16 text-theme-muted">
                 <i class="fas fa-clipboard-list text-6xl mb-4 opacity-30"></i>
-                <p class="text-lg text-theme-primary">欢迎使用日程管理！</p>
+                <p class="text-lg text-theme-primary">欢迎使用TackList日程管理！</p>
                 <div class="flex flex-wrap items-center justify-center gap-3 mt-6">
                     <button onclick="openAddTaskModal()" class="px-4 py-2 rounded-lg border-2 border-purple-500 text-purple-500 hover:bg-purple-500 hover:text-white transition text-sm font-medium">＋ 添加第一个任务</button>
                     <button onclick="openCommandPalette()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">命令面板快速添加</button>
                     <button onclick="event.stopPropagation(); showAddListInput()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">新建清单</button>
                     <button onclick="if (typeof startOnboarding === 'function') startOnboarding(true)" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">重看新手引导</button>
                 </div>
-                <p class="text-xs mt-5">提示：Ctrl + Alt + N 可随时呼出命令面板，一句话创建任务</p>
+                <p class="text-xs mt-5">可使用Ctrl + Alt + N 呼出命令面板，一句话创建任务。</p>
             </div>
         `;
         updateToggleAllGroupsButton(groups);
@@ -1537,25 +1537,20 @@ function renderScheduleView(container) {
         }
     });
 
-    // 填充底部导航栏
-    const _navBar = document.getElementById('view-nav-bar');
-    if (_navBar) {
-        _navBar.innerHTML = `
-            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
-                <button onclick="navigateScheduleMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <h2 id="schedule-nav-month" class="text-xl font-bold text-theme-primary min-w-[240px] text-center">
-                    ${new Date().getFullYear()}年${new Date().getMonth() + 1}月
-                </h2>
-                <button onclick="navigateScheduleMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-            </div>
-        `;
-        // 初始锚点为今天（IO 异步触发前点击导航时使用，触发后由 IO 持续校正）
-        _scheduleNavMonthLabel = `${new Date().getFullYear()}-${(new Date().getMonth() + 1).toString().padStart(2, '0')}`;
-    }
+    // 填充底部导航栏（年月分段快速跳转，三视图共用同一渲染）。
+    // 初始标题：有待定位的跳转目标时用目标月（避免先闪今天再被 IO 纠正），否则用今天所在月。
+    const _navAnchor = /^\d{4}-\d{2}$/.test(_scheduleScrollTargetMonth || '')
+        ? _scheduleScrollTargetMonth
+        : `${new Date().getFullYear()}-${(new Date().getMonth() + 1).toString().padStart(2, '0')}`;
+    renderNavTimeBar({
+        year: parseInt(_navAnchor.substring(0, 4), 10),
+        month: parseInt(_navAnchor.substring(5), 10) - 1,
+        prev: 'navigateScheduleMonth(-1)',
+        next: 'navigateScheduleMonth(1)',
+        titleId: 'schedule-nav-month'
+    });
+    // 初始锚点（IO 异步触发前点击导航时使用，触发后由 IO 持续校正）
+    _scheduleNavMonthLabel = _navAnchor;
 
     // 顶部导航栏月份指示：使用 IntersectionObserver 替代 scroll 监听。
     // scroll 事件每秒可触发 60+ 次，原实现每次都遍历所有月份并调用 getBoundingClientRect()，
@@ -1623,7 +1618,21 @@ function renderScheduleView(container) {
                     const cardRect = todayCard.getBoundingClientRect();
                     scheduleScrollContainer.scrollTop += cardRect.top - containerRect.top - 20;
                 }
+                // 没能定位到指定月份（窗口内该月无任务、无外壳）：锚点同步回落到今天，
+                // 否则 _scheduleNavMonthLabel 会停留在「目标月」而实际显示的是今天所在月，
+                // 让上层（快速跳转的落地提示）误判成跳转成功。
+                const now = new Date();
+                _scheduleNavMonthLabel = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
             }
+        }
+        // 滚动恢复 / 自动定位完成后，用真实锚点校正标题：
+        // 上方两处分支已同步更新 _scheduleNavMonthLabel，这里补一次即可避免
+        // 「先显示今天、等 IO 异步回调再纠正」的一帧闪烁。
+        if (typeof updateNavTimeBar === 'function'
+            && typeof _scheduleNavMonthLabel === 'string'
+            && /^\d{4}-\d{2}$/.test(_scheduleNavMonthLabel)) {
+            updateNavTimeBar(parseInt(_scheduleNavMonthLabel.substring(0, 4), 10),
+                             parseInt(_scheduleNavMonthLabel.substring(5), 10) - 1);
         }
         const navMonth = document.getElementById('schedule-nav-month');
         const monthSections = scheduleScrollContainer.querySelectorAll('[data-schedule-month]');
@@ -1643,7 +1652,7 @@ function renderScheduleView(container) {
                         const monthLabel = entry.target.getAttribute('data-schedule-month');
                         if (monthLabel) {
                             const [y, m] = monthLabel.split('-');
-                            navMonth.textContent = `${y}年${parseInt(m)}月`;
+                            updateNavTimeBar(parseInt(y, 10), parseInt(m, 10) - 1);
                             _scheduleNavMonthLabel = monthLabel; // 维护锚点，供月份导航使用
                         }
                     }
@@ -1660,7 +1669,7 @@ function renderScheduleView(container) {
             const monthLabel = monthSections[0].getAttribute('data-schedule-month');
             if (monthLabel) {
                 const [y, m] = monthLabel.split('-');
-                navMonth.textContent = `${y}年${parseInt(m)}月`;
+                updateNavTimeBar(parseInt(y, 10), parseInt(m, 10) - 1);
                 _scheduleNavMonthLabel = monthLabel;
             }
         }

@@ -14,7 +14,7 @@
 
 const ONBOARDING_VERSION = 1;
 // 注意：~清单 与 #标签 之间必须空格分隔——NLP 的 ~(\S+) 会连着吞掉无空格分隔的后续 #token
-const OB_DEMO_TEXT = '明天下午5点团队会议 ~团队工作 #总结会!!!|记得提前准备会议资料';
+const OB_DEMO_TEXT = '明天下午5点团队会议 ~团队工作 #总结会 !!!|记得提前准备会议资料';
 
 let _onboardingActive = false;
 let _onboardingStep = 0;
@@ -210,8 +210,8 @@ function _obBuildSteps() {
             body: `
                 <p>把一个清单<b>拖拽</b>到另一个清单上，自动合并为清单集：</p>
                 <ul class="ob-ul text-sm">
-                    <li>单击清单集图标可展开 / 收起其中的子清单</li>
-                    <li>清单集内可继续放入更多清单</li>
+                    <li>单击清单集<b>图标</b>可展开 / 收起其中的子清单</li>
+                    <li>单击清单集<b>标题</b>可查看清单集内所有任务</li>
                 </ul>`
         },
         // 第 2 组 · 清单与清单集（编辑清单集：行尾编辑按钮）

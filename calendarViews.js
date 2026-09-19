@@ -175,19 +175,219 @@ function buildWeekAllDayTaskItemHtml(task) {
              </div>`;
 }
 
-function renderWeekView(container) {
-    const weekStart = new Date(currentDate);
-    const dayOffset = settings.weekStart === 'monday' ? 1 : 0;
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay() + dayOffset);
-    if (currentDate.getDay() === 0 && dayOffset === 1) weekStart.setDate(weekStart.getDate() - 7);
-    
+// ==================== 周视图数据层缓存（懒加载 + 相邻周预热） ====================
+// 设计要点：
+// 1. 以「周起始日」为 key，缓存该周 7 天的任务分组（全天/定时）与时间块布局结果。
+//    空周（0 任务）同样落缓存并带 hasAnyTasks=false —— 「无日程」是一等状态，
+//    而不是「取不到数据」。这正是旧实现出问题的根源：把空周当成「无需渲染」，
+//    直接丢弃整周网格，导致周视图一片空白。
+// 2. 缓存签名覆盖所有影响 getTasksForDate 结果的筛选/设置状态（清单、标签、
+//    过滤器、周起始日、显示已完成、隐藏外部日历、当天日期）；签名变化即整体丢弃。
+// 3. 任务数据的结构性变更（增删/改期/导入/多标签页同步/服务端刷新/版本冲突合并）
+//    由 invalidateWeekViewCache() 主动失效，与 invalidateScheduleFilterCache、
+//    invalidateTaskListGroupsCache 同一约定（见 data.js 各写入漏斗）。
+// 4. 渲染完成后延迟预热 ±1 周：只填充缓存、不触碰 DOM，用户翻页时直接命中；
+//    若用户在预热前就翻页，目标周按需计算，行为与预热前一致（无功能回退）。
+// 5. 缓存值只持有任务对象引用（不复制），单条开销极小；仍设上限并按插入顺序淘汰，
+//    避免长会话下跨周浏览导致 Map 无限增长。
+let _weekAggCache = new Map();   // weekStartStr -> 周聚合结果
+let _weekAggSig = null;          // 当前缓存对应的筛选签名
+let _weekPrewarmTimer = null;    // 相邻周预热定时器（重渲染前清除，避免定时器堆积）
+const WEEK_AGG_CACHE_MAX = 15;   // 缓存条目上限（约 ±7 周）
+
+// 周起始日：直接复用 data.js 的全局 getWeekStartDate(date, weekStartsOnMonday)
+// （pomodoro.js / tasks.js 亦共用），不在此另建同名函数，避免覆盖既有实现。
+// 签名与语义：周一起始时，周日归属「上一个周一」开始的周，与原内联算法一致。
+
+// 缓存签名：任一影响取数结果的状态变化都会改变签名，从而整体丢弃旧缓存
+function _getWeekAggSig() {
+    return [
+        currentListId || '',
+        (currentTagIds || []).join(','),
+        currentFilter || '',
+        currentFilterId || '',
+        settings.weekStart === 'monday' ? 'mon' : 'sun',
+        getWeekConfig().showCompleted !== false ? '1' : '0',
+        (typeof shouldHideExternalTasks === 'function' && shouldHideExternalTasks()) ? '1' : '0',
+        new Date().toDateString() // 跨零点后「今天」基准与特殊时间筛选边界变化
+    ].join('|');
+}
+
+// 失效周视图数据缓存（任务数据结构性变更时调用）
+function invalidateWeekViewCache() {
+    _weekAggCache.clear();
+    _weekAggSig = null;
+}
+
+// 取某周的聚合结果：7 天 × { 全天任务、定时任务、时间块布局 } + hasAnyTasks。
+// 命中缓存直接返回；未命中才做 7 次 getTasksForDate（O(7 × 任务数)，大数据量下
+// 是周视图渲染的主要开销）与 layoutDayTasks，并把结果（含空周）写入缓存。
+// 注意：时间块布局依赖 weekViewHourStart / hourHeight，二者为常量（6 / 60，全项目无赋值点），
+// 因此无需纳入签名；若将来做成可配置，必须一并加入 _getWeekAggSig。
+function getWeekAggregate(weekStartDate) {
+    const sig = _getWeekAggSig();
+    if (sig !== _weekAggSig) {
+        _weekAggCache.clear();
+        _weekAggSig = sig;
+    }
+
     const weekDays = [];
     for (let i = 0; i < 7; i++) {
-        const date = new Date(weekStart);
-        date.setDate(date.getDate() + i);
-        weekDays.push(date);
+        const d = new Date(weekStartDate);
+        d.setDate(d.getDate() + i);
+        weekDays.push(d);
     }
-    
+    const weekStartStr = formatDate(weekDays[0]);
+    const cached = _weekAggCache.get(weekStartStr);
+    if (cached) return cached;
+
+    const showCompleted = getWeekConfig().showCompleted !== false;
+    const hourHeight = 60;
+    const allDayTasks = {};
+    const timedTasks = {};
+    const layouts = {};
+    let hasAnyTasks = false;
+
+    weekDays.forEach(date => {
+        const dateStr = formatDate(date);
+        const dayAllTasks = getTasksForDate(date, { includeCompleted: showCompleted });
+        const allDay = dayAllTasks.filter(t => t.isAllDay || isMultiDayTask(t));
+        const timed = dayAllTasks.filter(t => !t.isAllDay && !isMultiDayTask(t) && t.startTime);
+        allDayTasks[dateStr] = allDay;
+        timedTasks[dateStr] = timed;
+        layouts[dateStr] = layoutDayTasks(timed, hourHeight);
+        if (allDay.length > 0 || timed.length > 0) hasAnyTasks = true;
+    });
+
+    const result = { weekStartStr, weekDays, allDayTasks, timedTasks, layouts, hasAnyTasks };
+    _weekAggCache.set(weekStartStr, result);
+    if (_weekAggCache.size > WEEK_AGG_CACHE_MAX) {
+        // Map 保持插入顺序：淘汰最旧条目（连续翻页场景下正好淘汰最远的周）
+        _weekAggCache.delete(_weekAggCache.keys().next().value);
+    }
+    return result;
+}
+
+// 预热相邻周（±1 周）：延迟到本次渲染结束后执行，只填缓存不动 DOM
+function _prewarmAdjacentWeeks(weekStartDate) {
+    if (_weekPrewarmTimer) { clearTimeout(_weekPrewarmTimer); _weekPrewarmTimer = null; }
+    _weekPrewarmTimer = setTimeout(() => {
+        _weekPrewarmTimer = null;
+        [-1, 1].forEach(step => {
+            const ws = new Date(weekStartDate);
+            ws.setDate(ws.getDate() + step * 7);
+            getWeekAggregate(ws); // 命中缓存则为空操作
+        });
+    }, 120);
+}
+
+// 完整展示一行提示文案所需的最小宽度（与当前可用宽度无关）。
+// 取「文案自然宽 + 非文本占位」：文案节点虽然被 ellipsis 截断，但 scrollWidth 仍返回完整内容宽度，
+// 而 chrome（水平内边距 + 图标 + 间距）不随可用宽度变化，因此该值在两种布局下都等于并排布局所需宽度，
+// 判断结果是一个稳定不动点，不会出现「布局来回抖动」。
+function _weekHintNeedWidth(hint) {
+    const pill = hint.firstElementChild;
+    const textEl = hint.querySelector('.week-empty-hint-text');
+    if (!pill || !textEl) return 0;
+    const chrome = pill.clientWidth - textEl.clientWidth; // 水平内边距 + 图标 + 间距
+    return textEl.scrollWidth + Math.max(0, chrome);
+}
+
+// 空周提示条落位：贴到周视图底部，与底部导航栏同一水平线、同一高度；
+// 左边缘以「周一」列为基准（跳过左侧时刻信息列，不遮挡时间轴），再向右微调 HINT_LEFT_OFFSET；
+// 右边缘停在导航栏左侧留出间隙，确保两者不重叠。
+// 数值全部按真实布局测量：导航栏宽度随周标题长度（「2026年9月」/「2026年8月 - 2026年9月」）变化，
+// 故不能写死；任一测量缺失时保留 HTML 上的兜底值。
+function _placeWeekEmptyHint() {
+    const hint = document.querySelector('.week-empty-hint');
+    if (!hint) return;
+    _bindWeekHintResize();
+    _observeWeekNavPill();
+    const wrapper = hint.parentElement;
+    const grid = document.getElementById('week-time-grid');
+    if (!wrapper || !grid) return;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    if (!wrapperRect.width) return;
+
+    // 左边界：「周一」列左边缘 = 左侧时刻信息列（桌面 52px / 移动端由 CSS 覆盖为 40px）的右边缘
+    // HINT_LEFT_OFFSET：在「与周一列对齐」的基础上再向右的视觉微调量
+    const HINT_LEFT_OFFSET = 10;
+    const labelCol = grid.querySelector(':scope > div.flex:not(.week-header-sticky) > div.flex-shrink-0');
+    const labelRight = labelCol ? labelCol.getBoundingClientRect().right : (wrapperRect.left + 52);
+    const left = Math.max(0, Math.round(labelRight - wrapperRect.left) + HINT_LEFT_OFFSET);
+
+    // 以底部导航栏胶囊为基准：同高、底边对齐、右边缘停在导航栏左侧
+    const navPill = document.querySelector('#view-nav-bar > *');
+    const navRect = navPill ? navPill.getBoundingClientRect() : null;
+    const GAP = 12;
+    // 并排布局至少要留出的宽度（测量失败时的保守下限）。低于此值宁可换布局，
+    // 也不要把提示文案压成「本…」这种毫无信息量的碎片。
+    const MIN_SIDE_W = 180;
+
+    let height = 48;   // 兜底：与导航栏 px-6 py-3 单行高度接近
+    let bottom = 16;   // 兜底：与导航栏 bottom-4 一致
+    let right = GAP;
+
+    if (navRect && navRect.width > 0) {
+        height = Math.round(navRect.height);
+        bottom = Math.max(0, Math.round(wrapperRect.bottom - navRect.bottom));
+        right = Math.round(wrapperRect.right - navRect.left) + GAP;
+    }
+
+    // 并排所需宽度实测：导航栏是居中的，左侧可用空间 ≈ (容器宽 - 导航栏宽)/2，
+    // 因此在 1440 / 1366 / 1280 / 1024 这类常见笔记本宽度下都放不下一整行文案。
+    // 旧实现固定阈值 96px 会让提示条被压成「本…」，故改为「放不下就换布局」。
+    const needW = Math.max(MIN_SIDE_W, _weekHintNeedWidth(hint));
+
+    // 空间不足（窄屏 / 移动端导航栏较宽）：改为停在导航栏上方整行显示，保证提示完整可读
+    if (wrapperRect.width - left - right < needW) {
+        right = GAP;
+        bottom = Math.min(wrapperRect.height - height - 8, bottom + height + 8);
+    }
+
+    hint.style.left = left + 'px';
+    hint.style.right = Math.max(GAP, right) + 'px';
+    hint.style.bottom = Math.max(0, bottom) + 'px';
+    hint.style.height = height + 'px';
+}
+
+// 窗口尺寸变化后重新落位（导航栏会随宽度重新居中，提示条需同步跟随）
+let _weekHintResizeBound = false;
+function _bindWeekHintResize() {
+    if (_weekHintResizeBound) return;
+    _weekHintResizeBound = true;
+    window.addEventListener('resize', () => {
+        if (document.querySelector('.week-empty-hint')) _placeWeekEmptyHint();
+    });
+}
+
+// 跟随底部导航栏的实际尺寸变化重新落位。
+// 必要性：在线版走 CDN Tailwind 的异步 JIT，innerHTML 写入后任意值类（如 min-w-[240px]）
+// 尚未生成对应 CSS，此刻测量到的是「变窄」的导航栏（居中 → 左边缘偏右），
+// 落位会随之偏右并压住导航栏。ResizeObserver 在样式真正生效后触发，可自愈；
+// 同时覆盖字体加载完成、周标题变长等导致导航栏宽度变化的场景。
+let _weekHintRO = null;
+let _weekHintROPill = null;
+function _observeWeekNavPill() {
+    const pill = document.querySelector('#view-nav-bar > *');
+    if (!pill || typeof ResizeObserver === 'undefined') return;
+    if (_weekHintRO && _weekHintROPill === pill) return; // 已在观察同一个胶囊，避免重复创建
+    if (_weekHintRO) _weekHintRO.disconnect();
+    _weekHintROPill = pill;
+    // 提示条为绝对定位、不影响导航栏尺寸，故不会触发观察回调自激
+    _weekHintRO = new ResizeObserver(() => _placeWeekEmptyHint());
+    _weekHintRO.observe(pill);
+}
+
+function renderWeekView(container) {
+    // 周聚合（含空周）统一走缓存：命中则零开销复用，未命中才计算并落缓存
+    const weekStart = getWeekStartDate(currentDate, settings.weekStart === 'monday');
+    const agg = getWeekAggregate(weekStart);
+    const weekDays = agg.weekDays;
+    const allDayTasks = agg.allDayTasks;
+    const layouts = agg.layouts;
+    const hasAnyTasks = agg.hasAnyTasks;
+
     const now = new Date();
     const todayStr = formatDate(now);
     const currentHour = now.getHours();
@@ -195,25 +395,8 @@ function renderWeekView(container) {
     
     const weekNum = getWeekNumber(weekDays[0], settings.weekStart === 'monday');
     
-    const allDayTasks = {};
-    const timedTasks = {};
-    weekDays.forEach(date => {
-        const dateStr = formatDate(date);
-        const dayAllTasks = getTasksForDate(date, { includeCompleted: getWeekConfig().showCompleted !== false });
-        allDayTasks[dateStr] = dayAllTasks.filter(t => t.isAllDay || isMultiDayTask(t));
-        timedTasks[dateStr] = dayAllTasks.filter(t => !t.isAllDay && !isMultiDayTask(t) && t.startTime);
-    });
-    
-    const hasAnyTasks = weekDays.some(date => {
-        const dateStr = formatDate(date);
-        return allDayTasks[dateStr].length > 0 || timedTasks[dateStr].length > 0;
-    });
-    
     const hourHeight = 60;
     const totalHours = weekViewHourEnd - weekViewHourStart;
-    
-    let headerHtml = '';
-
     
     let allDayHtml = '';
     allDayHtml += '<div class="flex-shrink-0 flex week-header-sticky" style="position: sticky; top: 0; z-index: 15;">';
@@ -282,9 +465,8 @@ function renderWeekView(container) {
         const dateStr = formatDate(date);
         const isToday = dateStr === todayStr;
         const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-        const dayTimed = timedTasks[dateStr] || [];
-        
-        const columnTasks = layoutDayTasks(dayTimed, hourHeight);
+        // 时间块布局已在聚合层算好并随周缓存复用（见 getWeekAggregate）
+        const columnTasks = layouts[dateStr] || [];
         
         timeGridHtml += `
             <div class="flex-1 min-w-0 relative ${isWeekend ? 'week-weekend-bg bg-gray-50/50' : ''} ${isToday ? 'bg-accent-soft dark:bg-accent-strong' : ''} border-l border-theme"
@@ -330,38 +512,49 @@ function renderWeekView(container) {
     
     timeGridHtml += '</div></div></div>';
     
-    if (!hasAnyTasks) {
-        timeGridHtml = `<div class="flex flex-col items-center justify-center py-20 text-theme-muted">
-            <i class="fas fa-calendar-week text-6xl mb-4 opacity-30"></i>
-            <p class="text-lg">本周暂无任务，点击空白区域添加任务</p>
+    // 空周：网格照常完整渲染（日期表头 / 农历节假日 / 全天区 / 时间网格全部保留），
+    // 只额外叠加一条悬浮提示条。这样空周依然可以点击空白新建任务、可以拖拽、
+    // 移动端单日模式也能正常增强（其依赖 #week-time-grid 存在）。
+    // 旧实现把整段 timeGridHtml 替换成空态卡片，又因下方 `hasAnyTasks ? timeGridHtml : ''`
+    // 把空态卡片一并丢弃，最终只剩空 div —— 这就是「周视图一片空白」的直接原因。
+    // pointer-events:none 让点击穿透到网格，保证「点击空白区域添加任务」可用。
+    // 初始 left/right/bottom/height 只是兜底值，真实像素由 _placeWeekEmptyHint()
+    // 在导航栏渲染后按实际布局测量覆盖：与导航栏同高同线、以「周一」列为基准向右偏移 10px、
+    // 右边缘停在导航栏左侧（不遮挡左侧时刻信息，也不压住导航栏）。
+    const emptyHintHtml = hasAnyTasks ? '' : `
+        <div class="week-empty-hint" style="position: absolute; left: 62px; right: 50%; bottom: 16px; height: 48px; display: flex; align-items: center; min-width: 0; pointer-events: none; user-select: none; z-index: 20;">
+            <!-- 视觉规格与周视图底部导航条完全对齐：直接复用导航条那一组类
+                 （bg-theme-secondary/80 + backdrop-blur-md + rounded-xl + shadow-lg + px-6 + text-theme-primary），
+                 不再另写内联背景/边框/文字色。这样导航条样式一旦调整，提示条自动跟随，两者不会再出现观感不一致。
+                 高度由 _placeWeekEmptyHint() 按导航条实测高度设定；字号沿用继承值（与导航条胶囊一致）。
+                 图标用 text-theme-secondary，对应导航条左右按钮的色阶。 -->
+            <div class="week-empty-hint-pill flex items-center gap-2 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 text-theme-primary"
+                 style="height: 100%; min-width: 0; max-width: 100%;">
+                <i class="fas fa-calendar-week text-theme-secondary flex-shrink-0"></i>
+                <span class="week-empty-hint-text" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">本周暂无任务，点击空白区域添加任务</span>
+            </div>
         </div>`;
-    }
     
-    const weekTitle = weekDays[0].getMonth() !== weekDays[6].getMonth()
-        ? `${formatMonthYear(weekDays[0])} - ${formatMonthYear(weekDays[6])}`
-        : formatMonthYear(weekDays[0]);
+    // 底部导航栏标题：与其他视图统一为「年 + 月」表达，取该周「中间日」所在月。
+    // weekDays[0] 即周起始日（getWeekAggregate 由 getWeekStartDate 展开而来）。
+    // 不再显示「8月 - 9月」跨月形式：标题宽度恒定，_placeWeekEmptyHint() 的落位不再随标题长度抖动。
+    const navAnchor = getWeekAnchorDate(weekDays[0]);
+    const navYear = navAnchor.getFullYear();
+    const navMonth = navAnchor.getMonth();
 
     // 保存旧网格的滚动位置（若存在），用于拖动后等重渲染场景保持视图位置
     const existingGrid = container.querySelector('#week-time-grid');
     const savedScrollTop = existingGrid ? existingGrid.scrollTop : null;
 
-    container.innerHTML = `<div class="h-full flex flex-col">${headerHtml}${hasAnyTasks ? timeGridHtml : ''}</div>`;
+    // 外层 flex 容器让出剩余高度；内层 relative 容器为悬浮提示提供定位上下文
+    // （提示固定在视口内，不随网格内部滚动而移动），并裁剪溢出。
+    container.innerHTML = `<div class="h-full flex flex-col"><div class="relative" style="flex: 1 1 0%; min-height: 0; overflow: hidden;">${timeGridHtml}${emptyHintHtml}</div></div>`;
 
-    // 填充底部导航栏
-    const _navBar = document.getElementById('view-nav-bar');
-    if (_navBar) {
-        _navBar.innerHTML = `
-            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
-                <button onclick="navigateWeek(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <h2 class="text-xl font-bold text-theme-primary min-w-[240px] text-center">${weekTitle}</h2>
-                <button onclick="navigateWeek(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-            </div>
-        `;
-    }
+    // 填充底部导航栏（年月分段快速跳转，三视图共用同一渲染）
+    renderNavTimeBar({ year: navYear, month: navMonth, prev: 'navigateWeek(-1)', next: 'navigateWeek(1)' });
+
+    // 空周提示条落位：读取真实布局，与底部导航栏同高同线、左对齐「周一」列、右停于导航栏左侧
+    _placeWeekEmptyHint();
 
     // 同步恢复滚动位置，消除自动刷新时的跳动
     const newGrid = document.getElementById('week-time-grid');
@@ -369,12 +562,15 @@ function renderWeekView(container) {
         if (savedScrollTop !== null) {
             // 重渲染（如数据同步、拖动任务后）：恢复之前的滚动位置
             newGrid.scrollTop = savedScrollTop;
-        } else if (hasAnyTasks && isCurrentWeek(weekDays)) {
-            // 首次渲染/切换到当前周：滚动到当前时刻
+        } else if (isCurrentWeek(weekDays)) {
+            // 首次渲染/切换到当前周：滚动到当前时刻（空周同样定位，不落在 06:00 顶部）
             const scrollTarget = Math.max(0, (currentHour - weekViewHourStart - 1) * hourHeight);
             setTimeout(() => { newGrid.scrollTop = scrollTarget; }, 50);
         }
     }
+
+    // 相邻周预热：延迟填充 ±1 周缓存，翻页时直接命中（只填缓存，不触碰 DOM）
+    _prewarmAdjacentWeeks(weekStart);
 }
 
 function layoutDayTasks(dayTasks, hourHeight) {
@@ -774,21 +970,8 @@ function renderMonthView(container) {
         </div>
     `;
 
-    // 填充底部导航栏
-    const _navBar = document.getElementById('view-nav-bar');
-    if (_navBar) {
-        _navBar.innerHTML = `
-            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
-                <button onclick="navigateMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <h2 class="text-xl font-bold text-theme-primary min-w-[240px] text-center">${year}年${month + 1}月</h2>
-                <button onclick="navigateMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-            </div>
-        `;
-    }
+    // 填充底部导航栏（年月分段快速跳转，三视图共用同一渲染）
+    renderNavTimeBar({ year: year, month: month, prev: 'navigateMonth(-1)', next: 'navigateMonth(1)' });
 
     // 手动滚动：用 transform 替代 CSS overflow，确保跨浏览器兼容
     const monthScroll = container.querySelector('#month-scroll');
@@ -1233,21 +1416,8 @@ function renderMonthViewMobile(container) {
         </div>
     `;
 
-    // 填充底部月份导航
-    const _navBar = document.getElementById('view-nav-bar');
-    if (_navBar) {
-        _navBar.innerHTML = `
-            <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
-                <button onclick="navigateMonth(-1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <h2 class="text-base font-bold text-theme-primary min-w-0 text-center">${year}年${month + 1}月</h2>
-                <button onclick="navigateMonth(1)" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-            </div>
-        `;
-    }
+    // 填充底部导航栏（年月分段快速跳转，三视图共用同一渲染）
+    renderNavTimeBar({ year: year, month: month, prev: 'navigateMonth(-1)', next: 'navigateMonth(1)' });
 }
 
 // 移动端月视图：选中日期
@@ -1279,4 +1449,329 @@ function navigateMonth(direction) {
     currentDate = new Date(year, targetMonth, safeDay);
     _monthSavedScrollTop = null; // 切换月份时重置滚动位置
     _playCalendarNavTransition(direction, renderView);
+}
+
+// ==================== 底部导航栏：年月快速跳转（日程 / 周 / 月 三视图共用） ====================
+// 标题拆成「年段 ｜ 月段」两个可点元素：点年段弹年份网格，点月段弹月份网格，
+// 选中后统一走 jumpToMonth()。
+// 周视图的语义：currentDate 设为该月 1 日，getWeekStartDate 天然得到
+// 「包含该月 1 日的那一周」＝该月第 1 周，之后由左右箭头继续翻周。
+//
+// 面板挂在 body 上而不是 #view-nav-bar 内部，两个原因：
+//   1. renderView()（views.js）每次渲染开头就执行 navBar.innerHTML = ''，
+//      挂在内部的节点会被当场销毁；
+//   2. #view-nav-bar 的 z-index 是 20，低于移动端底部导航栏的 30，挂在内部会被压住。
+
+let _qtpEl = null;
+let _qtpKind = 'month';
+let _qtpPageStart = 2000; // 年份面板当前页首年（12 年一屏）
+let _qtpHandlersBound = false;
+
+function _qtpWeekStartsOnMonday() {
+    return typeof settings !== 'undefined' && settings.weekStart === 'monday';
+}
+
+// 周所属年月：取该周「中间日」（第 4 天）所在年月。
+// 为什么不用「周起始日所在月」：2026-03-01 是周日，其所在周为 2/23–3/1，周起始日落在 2 月，
+// 于是「选 3 月」却显示「2026年2月」，与用户刚选的月份对不上。
+// 改用中间日后：一个 7 天周里中间日所在月恒占 4~7 天（多数），且每个周唯一归属一个月，
+// 无重叠无遗漏，「标题显示的是多数天数所在月」也便于解释。
+function getWeekAnchorDate(weekStart) {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + 3);
+    return d;
+}
+
+// 该月「第 1 周」的周起始日：中间日落在该月的第一周（与 getWeekAnchorDate 同口径）。
+function getFirstWeekStartOfMonth(year, month, weekStartsOnMonday) {
+    let ws = getWeekStartDate(new Date(year, month, 1), weekStartsOnMonday);
+    const mid = getWeekAnchorDate(ws);
+    if (mid.getFullYear() !== year || mid.getMonth() !== month) {
+        ws = new Date(ws);
+        ws.setDate(ws.getDate() + 7);
+    }
+    return ws;
+}
+
+// 标题/面板的「当前年月」。
+// 日程视图的标题由 IntersectionObserver 维护（显示的是滚动到的月份），与 currentDate 无关，
+// 必须读 _scheduleNavMonthLabel；周视图取周中间日所在月，与标题取值保持一致。
+function _qtpCurrentContext() {
+    if (typeof currentView !== 'undefined' && currentView === 'schedule'
+        && typeof _scheduleNavMonthLabel === 'string'
+        && /^\d{4}-\d{2}$/.test(_scheduleNavMonthLabel)) {
+        return {
+            year: parseInt(_scheduleNavMonthLabel.substring(0, 4), 10),
+            month: parseInt(_scheduleNavMonthLabel.substring(5), 10) - 1
+        };
+    }
+    let d = currentDate;
+    if (typeof currentView !== 'undefined' && currentView === 'week') {
+        d = getWeekAnchorDate(getWeekStartDate(currentDate, _qtpWeekStartsOnMonday()));
+    }
+    return { year: d.getFullYear(), month: d.getMonth() };
+}
+
+function _qtpIsOpen() {
+    return !!(_qtpEl && _qtpEl.style.visibility === 'visible');
+}
+
+// 统一的导航栏渲染。prev / next 传导航函数名（字符串），三视图各自传自己的。
+// titleId 用于日程视图：它的月份指示 IO 需要按 id 找到标题节点。
+function renderNavTimeBar(opts) {
+    const bar = document.getElementById('view-nav-bar');
+    if (!bar) return;
+    const year = opts.year;
+    const month = opts.month; // 0-based
+    const titleId = opts.titleId ? ` id="${opts.titleId}"` : '';
+    bar.innerHTML = `
+        <div class="flex items-center gap-4 bg-theme-secondary/80 backdrop-blur-md rounded-xl shadow-lg px-6 py-3">
+            <button onclick="${opts.prev}" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
+                <i class="fas fa-chevron-left"></i>
+            </button>
+            <h2${titleId} class="text-xl font-bold text-theme-primary text-center flex items-center justify-center gap-0" style="min-width: 190px;">
+                <button type="button" data-nav-year class="nav-seg" onclick="openQuickTimePanel('year', event)">${year}年</button>
+                <button type="button" data-nav-month class="nav-seg" onclick="openQuickTimePanel('month', event)">${month + 1}月</button>
+            </h2>
+            <button onclick="${opts.next}" class="p-2 hover:bg-theme-tertiary rounded-lg transition text-theme-secondary">
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>`;
+    // 面板开着时导航栏被重渲染（如后台数据同步）：补回置灰状态并跟随新胶囊重新定位
+    if (_qtpIsOpen()) {
+        bar.classList.add('qtp-open');
+        _qtpPosition();
+    }
+}
+
+// 只改标题文字、不重建 DOM。
+// 日程视图的月份指示 IntersectionObserver 原先是直接写 #schedule-nav-month 的 textContent，
+// 那会把两个分段按钮一并抹掉，故改走这里。
+function updateNavTimeBar(year, month) {
+    const bar = document.getElementById('view-nav-bar');
+    if (!bar) return;
+    const y = bar.querySelector('[data-nav-year]');
+    const m = bar.querySelector('[data-nav-month]');
+    if (y) y.textContent = `${year}年`;
+    if (m) m.textContent = `${month + 1}月`;
+}
+
+// 三个视图唯一的跳转入口
+function jumpToMonth(year, month) {
+    // 日程视图是滚动容器（不是重渲染）：先把目标月平移进渲染窗口，再交给渲染后的滚动定位。
+    // 窗口是 -3 ~ +9 共 13 个月（taskListView.js renderScheduleView），
+    // offset 取 (目标月 - 基准月) 后目标正好落在窗口第 4 个位置，与「今天」的常态位置一致。
+    //
+    // 基准月必须取「今天」而不是全局 currentDate：renderScheduleView 内部是
+    // `const currentDate = new Date();`（局部变量，遮蔽了全局），窗口始终以今天为锚点。
+    // 若按全局 currentDate 算 offset，在周/月视图里翻过页后再切到日程视图跳转，
+    // 会因为两套基准相差若干月而把目标月推出窗口（实测：选 2026-06 落到 2027-01）。
+    if (typeof currentView !== 'undefined' && currentView === 'schedule'
+        && typeof scheduleMonthOffset !== 'undefined'
+        && typeof renderScheduleView === 'function') {
+        const nowForBase = new Date();
+        const baseIdx = nowForBase.getFullYear() * 12 + nowForBase.getMonth();
+        const targetIdx = year * 12 + month;
+        const wanted = `${year}-${String(month + 1).padStart(2, '0')}`;
+        scheduleMonthOffset = targetIdx - baseIdx;
+        _scheduleScrollTargetMonth = wanted;
+        _scheduleScrollTargetDir = targetIdx >= baseIdx ? 1 : -1;
+        _scheduleAutoScroll = true;
+        renderScheduleView(document.getElementById('view-container'));
+        // 日程视图只为「有任务的月份」生成外壳（taskListView.js 的 monthsWithTasks 判断），
+        // 目标月无任务时会就近落到最近有内容的月份 —— 明确告知，避免用户以为跳错了。
+        if (typeof _scheduleNavMonthLabel === 'string'
+            && /^\d{4}-\d{2}$/.test(_scheduleNavMonthLabel)
+            && _scheduleNavMonthLabel !== wanted
+            && typeof showToast === 'function') {
+            showToast(`${year}年${month + 1}月暂无任务，已定位到 `
+                + `${_scheduleNavMonthLabel.substring(0, 4)}年${parseInt(_scheduleNavMonthLabel.substring(5), 10)}月`,
+                'info', 3000);
+        }
+        return;
+    }
+
+    // 周视图：落到该月「第 1 周」＝中间日落在该月的第一周（见 getFirstWeekStartOfMonth）。
+    // 不能简单地设成该月 1 日：1 日若落在周中，其所在周的中间日可能仍在上个月，
+    // 标题就会显示成上个月，与用户刚选的月份对不上。
+    if (typeof currentView !== 'undefined' && currentView === 'week') {
+        const monday = _qtpWeekStartsOnMonday();
+        const newWeekStart = getFirstWeekStartOfMonth(year, month, monday);
+
+        // 移动端周视图的单日模式：选中日期平移 N*7 天以保持原来的「星期几」，
+        // 否则重渲染时 mobile.js 会因该日不在本周而回落到 weekStrs[0]（周一）。
+        if (typeof isMobileView === 'function' && isMobileView()
+            && typeof _mobileWeekSelectedDate === 'string'
+            && /^\d{4}-\d{2}-\d{2}$/.test(_mobileWeekSelectedDate)) {
+            const oldSel = new Date(_mobileWeekSelectedDate + 'T00:00:00');
+            if (!isNaN(oldSel.getTime())) {
+                const weekdayOffset = Math.round((oldSel - getWeekStartDate(oldSel, monday)) / 86400000);
+                const newSel = new Date(newWeekStart);
+                newSel.setDate(newSel.getDate() + weekdayOffset);
+                _mobileWeekSelectedDate = formatDate(newSel);
+            }
+        }
+
+        currentDate = newWeekStart;
+        renderView();
+        return;
+    }
+
+    // 月视图只用到年月（renderMonthView / renderMonthViewMobile 均只读 getFullYear/getMonth）
+    currentDate = new Date(year, month, 1);
+    renderView();
+}
+
+function _qtpEnsure() {
+    if (_qtpEl) return _qtpEl;
+    const el = document.createElement('div');
+    el.id = 'quick-time-panel';
+    el.className = 'bg-theme-secondary border border-theme rounded-xl shadow-xl p-2 text-theme-primary';
+    el.style.position = 'fixed';
+    el.style.zIndex = '60';
+    el.style.visibility = 'hidden';
+    el.style.left = '0px';
+    el.style.top = '0px';
+    document.body.appendChild(el);
+    _qtpEl = el;
+    _qtpBindHandlers();
+    return el;
+}
+
+function _qtpBindHandlers() {
+    if (_qtpHandlersBound) return;
+    _qtpHandlersBound = true;
+    // 冒泡阶段：段按钮自己的 onclick 先执行（切换/关闭），这里只处理「点到面板外」
+    document.addEventListener('click', (e) => {
+        if (!_qtpIsOpen()) return;
+        if (_qtpEl.contains(e.target)) return;
+        if (e.target && e.target.closest && e.target.closest('#view-nav-bar .nav-seg')) return;
+        closeQuickTimePanel();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _qtpIsOpen()) closeQuickTimePanel();
+    });
+    window.addEventListener('resize', () => { if (_qtpIsOpen()) _qtpPosition(); });
+}
+
+function closeQuickTimePanel() {
+    if (_qtpEl) { _qtpEl.remove(); _qtpEl = null; }
+    const bar = document.getElementById('view-nav-bar');
+    if (bar) bar.classList.remove('qtp-open');
+}
+
+function openQuickTimePanel(kind, ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    const next = kind === 'year' ? 'year' : 'month';
+    // 再点同一段 = 关闭
+    if (_qtpIsOpen() && _qtpKind === next) { closeQuickTimePanel(); return; }
+
+    const wasOpen = _qtpIsOpen();
+    _qtpKind = next;
+    const ctx = _qtpCurrentContext();
+    // 仅在从关闭态打开时重置年份页（面板内 年↔月 互切时保留翻页位置）
+    if (!wasOpen) _qtpPageStart = Math.floor(ctx.year / 12) * 12;
+
+    _qtpEnsure();
+    _qtpRenderContent();
+    _qtpPosition();
+}
+
+function _qtpRenderContent() {
+    const el = _qtpEl;
+    if (!el) return;
+    const ctx = _qtpCurrentContext();
+    const cellBase = 'display:flex;align-items:center;justify-content:center;height:32px;border-radius:6px;font-size:13px;cursor:pointer;border:none;background:transparent;transition:background-color .15s ease;';
+    const cellIdle = 'color:var(--text-secondary);';
+    const cellActive = 'background:var(--accent-color, #3b82f6);color:#fff;font-weight:500;';
+    const gridStyle = 'display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;width:176px;';
+    const navBtn = 'padding:2px 8px;border-radius:6px;font-size:12px;cursor:pointer;border:none;background:transparent;color:var(--text-muted);';
+
+    if (_qtpKind === 'year') {
+        const start = _qtpPageStart;
+        let cells = '';
+        for (let i = 0; i < 12; i++) {
+            const y = start + i;
+            cells += `<button type="button" class="qtp-cell" style="${cellBase}${y === ctx.year ? cellActive : cellIdle}" onclick="qtpPickYear(${y})">${y}</button>`;
+        }
+        el.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:0 2px 6px;">
+                <button type="button" class="qtp-nav" style="${navBtn}" onclick="qtpPage(-1)">‹</button>
+                <span style="font-size:12px;color:var(--text-muted);">${start} – ${start + 11}</span>
+                <button type="button" class="qtp-nav" style="${navBtn}" onclick="qtpPage(1)">›</button>
+            </div>
+            <div style="${gridStyle}">${cells}</div>
+            <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border-color);text-align:center;">
+                <button type="button" class="qtp-nav" style="${navBtn}color:var(--accent-color, #3b82f6);" onclick="qtpPickToday()">今年</button>
+            </div>`;
+    } else {
+        let cells = '';
+        for (let m = 0; m < 12; m++) {
+            cells += `<button type="button" class="qtp-cell" style="${cellBase}${m === ctx.month ? cellActive : cellIdle}" onclick="qtpPickMonth(${m})">${m + 1}月</button>`;
+        }
+        el.innerHTML = `
+            <div style="text-align:center;padding:0 2px 6px;">
+                <button type="button" class="qtp-nav" style="${navBtn}color:var(--text-secondary);" onclick="openQuickTimePanel('year', event)">${ctx.year}年</button>
+            </div>
+            <div style="${gridStyle}">${cells}</div>`;
+    }
+}
+
+function _qtpPosition() {
+    const el = _qtpEl;
+    if (!el) return;
+    el.style.visibility = 'hidden';
+    el.style.left = '0px';
+    el.style.top = '0px';
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const pill = document.querySelector('#view-nav-bar > *');
+    let left = vw / 2 - w / 2;
+    let top = vh / 2 - h / 2;
+    if (pill) {
+        const r = pill.getBoundingClientRect();
+        if (r.width > 0) {
+            left = r.left + r.width / 2 - w / 2;
+            top = r.top - h - 8;               // 优先向上弹（胶囊贴在底部）
+            if (top < 8) top = r.bottom + 8;   // 上方确实放不下才落到下方
+        }
+    }
+    left = Math.max(8, Math.min(left, vw - w - 8));
+    top = Math.max(8, Math.min(top, vh - h - 8));
+    el.style.left = Math.round(left) + 'px';
+    el.style.top = Math.round(top) + 'px';
+    el.style.visibility = 'visible';
+    const bar = document.getElementById('view-nav-bar');
+    if (bar) bar.classList.add('qtp-open');
+}
+
+function qtpPage(direction) {
+    _qtpPageStart += direction * 12;
+    _qtpRenderContent();
+    _qtpPosition();
+}
+
+function qtpPickYear(year) {
+    // 只改年，月保持不变
+    const ctx = _qtpCurrentContext();
+    _qtpCommit(year, ctx.month);
+}
+
+function qtpPickMonth(month) {
+    // 只改月，年保持不变
+    const ctx = _qtpCurrentContext();
+    _qtpCommit(ctx.year, month);
+}
+
+function qtpPickToday() {
+    const now = new Date();
+    _qtpCommit(now.getFullYear(), now.getMonth());
+}
+
+function _qtpCommit(year, month) {
+    // 先关面板再跳转：跳转会触发 renderView()，而它会清空 #view-nav-bar
+    closeQuickTimePanel();
+    jumpToMonth(year, month);
 }

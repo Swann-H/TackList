@@ -132,6 +132,8 @@ async function refreshDataFromServer() {
         if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
         if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
         if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
+        // 周视图数据层缓存（按周聚合 + 相邻周预热）随任务数据变更一并失效
+        if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
         // 多标签页同步过来的新 tasks 会让番茄任务推荐列表缓存失效，必须清空。
         // 否则面板打开时仍展示旧数据，违反“多标签页任务同步”的一致性预期。
         if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
@@ -339,6 +341,8 @@ function saveData() {
     // 结构性变更（增删/改期/设置等）经此保存，令日程视图流水线缓存失效
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
+    // 周视图数据层缓存（按周聚合 + 相邻周预热）随任务数据变更一并失效
+    if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
     // 本地 tasks 已变更，番茄任务推荐列表缓存同样需要失效，下次打开面板时重新排序
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
     // 节流：500ms 内只发送一次，避免高频写入冲突
@@ -424,6 +428,8 @@ function _doSaveData() {
 function saveDataImmediate() {
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
+    // 周视图数据层缓存（按周聚合 + 相邻周预热）随任务数据变更一并失效
+    if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
     // 本地 tasks 已变更，番茄任务推荐列表缓存同样需要失效
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
     _saveInFlight = true; // 标记保存正在进行，防止 refreshDataFromServer 覆盖本地数据
@@ -446,6 +452,8 @@ function saveTaskPatch(taskId) {
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
+    // 周视图数据层缓存（按周聚合 + 相邻周预热）随任务数据变更一并失效
+    if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
     _saveInFlight = true; // 防止刷新覆盖本地未持久化的变更
     return fetch('/api/tasks/' + encodeURIComponent(taskId), {
         method: 'PATCH',
@@ -507,6 +515,8 @@ function _mergeServerData(serverData) {
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
+    // 周视图数据层缓存（按周聚合 + 相邻周预热）随任务数据变更一并失效
+    if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
 }
 
 function importData(file) {
@@ -1118,6 +1128,8 @@ async function loadData() {
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
+    // 周视图数据层缓存（按周聚合 + 相邻周预热）随任务数据变更一并失效
+    if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
 }
 
 // 主题系统

@@ -396,6 +396,51 @@
         #view-nav-bar:not(:empty) { pointer-events: none; }
         #view-nav-bar:not(:empty) > * { pointer-events: auto; }
 
+        /* ---- 底部导航栏：按「整屏」居中 ---- */
+        /* #view-nav-bar 是 #main-content 里 .flex-1 的绝对定位子元素，定位祖先的左边缘被
+           侧边栏（260px）+ #main-content 的 p-6 左内边距（24px）推到了 x=284。
+           原来用 left:50%（Tailwind 的 left-1/2）是拿「视图区」当基准居中，
+           视图区本身已经右移了 260px，于是胶囊在整屏上恒定偏右 130px（＝侧边栏宽的一半）。
+           这里改用 50vw（视口宽度，与定位祖先无关）再减掉定位祖先的左偏移，
+           于是无论视图区多宽都恒在整屏正中 —— 包括详情面板打开时
+           #main-content 被 margin-right:24rem 挤压、视图区变窄的情况
+           （margin-right 只改右边缘，定位祖先的左边缘仍是 284）。 */
+        #view-nav-bar { left: calc(50vw - 284px); }
+
+        /* ≤900px：769~900px 这段窄桌面窗口下视图区只剩约 540px，
+           按整屏居中会把胶囊推到侧边栏底下，故退回「视图区居中」——
+           宁可略偏右也不与侧边栏重叠。
+           ≤768px 时侧边栏改为 fixed 脱离文档流、视图区即整屏，百分比居中本就是对的。 */
+        @media (max-width: 900px) {
+            #view-nav-bar { left: 50%; }
+        }
+
+        /* ---- 底部导航栏：年月分段快速跳转（日程 / 周 / 月 三视图共用） ---- */
+        #view-nav-bar .nav-seg {
+            /* 年月之间不再有分隔符，靠内边距撑出「2026年 9月」的间隔感 */
+            padding: 2px 4px;
+            border-radius: 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+            /* 覆盖移动端 `#view-nav-bar button { min-width/height: 36px }`，否则标题段会被撑成触控块 */
+            min-width: 0 !important;
+            min-height: 0 !important;
+            transition: color 0.15s ease;
+        }
+        /* 悬浮/按下只改文字颜色，不加底色（底色在深色主题下是一块黑，观感突兀） */
+        #view-nav-bar .nav-seg:hover,
+        #view-nav-bar .nav-seg:active {
+            background: transparent;
+            color: var(--accent-color, #3b82f6);
+        }
+        /* 面板打开时置灰左右箭头，避免面板与箭头两个入口打架 */
+        #view-nav-bar.qtp-open button:not(.nav-seg) { pointer-events: none; opacity: 0.35; }
+
+        /* 快速跳转面板：挂在 body 上（避开 renderView() 清空 #view-nav-bar 与 z-index 倒挂） */
+        #quick-time-panel { position: fixed; z-index: 60; visibility: hidden; }
+        #quick-time-panel .qtp-cell:hover,
+        #quick-time-panel .qtp-nav:hover { background: var(--bg-tertiary); }
+
         .sidebar-bottom-buttons {
             padding: 1rem;
             border-top: 1px solid var(--border-color);
