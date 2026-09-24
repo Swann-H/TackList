@@ -713,17 +713,13 @@ function handleWeekGridClick(event, dateStr) {
     const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
     
     // 如果当前有打开的空任务详情，先删除空任务
+    // 判定统一走 tasks.js 的 discardEmptyDetailTask()：它带有「子任务模式下描述或子任务文本有内容即不算空」
+    // 分支，而此处原先只看标题与备注 —— 会把子任务模式下已输入内容的空标题任务误判为空任务删除（内容丢失）
     if (currentDetailTaskId) {
         const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
         if (taskIndex !== -1) {
-            const task = tasks[taskIndex];
-            const titleEl = document.getElementById('detail-task-title');
-            const notesEl = document.getElementById('detail-task-notes');
-            const currentTitle = titleEl ? titleEl.value : (task.title || '');
-            const currentNotes = notesEl ? notesEl.value : (task.notes || '');
-            if ((!currentTitle || !currentTitle.trim()) && (!currentNotes || !currentNotes.trim())) {
-                tasks.splice(taskIndex, 1);
-                saveData();
+            if (typeof discardEmptyDetailTask === 'function' && discardEmptyDetailTask()) {
+                // 空任务已在函数内删除并刷新视图，这里只需收起面板
                 hideDetailPanel();
                 currentDetailTaskId = null;
             } else {
@@ -752,7 +748,7 @@ function handleWeekGridClick(event, dateStr) {
         completed: false,
         createdAt: new Date().toISOString(),
         mode: 'text',
-        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0 }],
+        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0, startTime: null, reminders: [] }],
         progress: 0
     };
     

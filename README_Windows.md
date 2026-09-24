@@ -32,11 +32,13 @@ C:\Users\你的用户名\TODO
 ### 3. 运行安装脚本
 
 双击 `install.bat`，脚本会自动：
+
 - 检查 Python 环境
 - 创建桌面快捷方式
 - 创建开机自启动项
 
 安装完成后：
+
 - 桌面会出现"日程管理"快捷方式，双击即可启动
 - 系统会在下次登录时自动启动
 
@@ -85,7 +87,7 @@ start.bat restart   # 重启服务
 
 ### 一键安装（推荐）
 
-双击运行 `install_icalendar.bat`（或在命令行进入应用目录执行 `install_icalendar.bat`）。
+双击运行 `install_icalendar.bat`（或在命令行进入应用目录执行 `install_icalendar.bat`）。  
 `install_icalendar.bat` 只是引导器，真正的逻辑在同目录的 `install_icalendar.ps1`（PowerShell）。
 
 脚本会自动：
@@ -98,14 +100,14 @@ start.bat restart   # 重启服务
 
 失败时会明确打印原因与处理建议，常见提示包括：
 
-| 提示 | 含义 / 处理 |
-|------|-------------|
-| 未找到 Python | 安装 Python 3.8+ 并勾选 "Add Python to PATH" |
-| Python 版本过低（< 3.7） | 需升级 Python；3.7 装 5.0.x、3.8/3.9 装 6.3.x、3.10+ 装 7.x |
-| pip 不可用 | 重装 Python 并勾选 pip，或手动执行 `python -m ensurepip` |
-| 无法访问 PyPI | 无外网 / 被代理拦截：请改用离线包（见下），或配置代理后重试 |
-| 权限不足 | 以管理员身份运行，或脚本会自动降级为 `--user` 安装到当前用户 |
-| 公司代理/证书报错 | 设置 `HTTPS_PROXY`，或加 `--trusted-host pypi.org --trusted-host files.pythonhosted.org` |
+| 提示                 | 含义 / 处理                                                                             |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| 未找到 Python         | 安装 Python 3.8+ 并勾选 "Add Python to PATH"                                             |
+| Python 版本过低（< 3.7） | 需升级 Python；3.7 装 5.0.x、3.8/3.9 装 6.3.x、3.10+ 装 7.x                                  |
+| pip 不可用            | 重装 Python 并勾选 pip，或手动执行 `python -m ensurepip`                                       |
+| 无法访问 PyPI          | 无外网 / 被代理拦截：请改用离线包（见下），或配置代理后重试                                                     |
+| 权限不足               | 以管理员身份运行，或脚本会自动降级为 `--user` 安装到当前用户                                                 |
+| 公司代理/证书报错          | 设置 `HTTPS_PROXY`，或加 `--trusted-host pypi.org --trusted-host files.pythonhosted.org` |
 
 手动安装等价命令（需要与启动服务的是**同一个 Python**）：
 
@@ -129,20 +131,21 @@ powershell -ExecutionPolicy Bypass -File install_icalendar.ps1 -DryRun
 
 ## 文件说明
 
-| 文件 | 说明 |
-|------|------|
-| `start.bat` | 启动/停止/重启服务（入口，实际逻辑在 launcher.py） |
-| `launcher.py` | 启动编排器：单实例锁、健康检查、防误杀、确认就绪后才开浏览器 |
-| `install.bat` | 安装桌面快捷方式和开机自启动 |
-| `install_icalendar.bat` | **可选**：一键安装 icalendar（外部日历订阅用，支持联网/离线），双击即可 |
-| `install_icalendar.ps1` | **可选**：上述 .bat 的实际安装逻辑（PowerShell，可用 `-PythonPath` / `-DryRun` 参数） |
-| `pack_icalendar_wheels.bat` | **可选**：在联网机打包 icalendar 离线安装包（生成 `wheels/`），双击即可 |
-| `pack_icalendar_wheels.ps1` | **可选**：上述打包 .bat 的实际逻辑（可用 `-TargetVersion 3.8` 指定目标机 Python 版本） |
-| `requirements-optional.txt` | **可选**：icalendar 依赖清单（按 Python 版本自动约束） |
-| `server.py` | 主服务程序 |
-| `start_server.py` | 备用离线服务程序（功能有限） |
-| `data.json` | 用户数据文件 |
-| `server.log` | 服务运行日志 |
+| 文件                          | 说明                                                                 |
+| --------------------------- | ------------------------------------------------------------------ |
+| `start.bat`                 | 启动/停止/重启服务（入口，实际逻辑在 launcher.py）                                   |
+| `launcher.py`               | 启动编排器：单实例锁、健康检查、防误杀、确认就绪后才开浏览器                                     |
+| `install.bat`               | 安装桌面快捷方式和开机自启动                                                     |
+| `install_icalendar.bat`     | **可选**：一键安装 icalendar（外部日历订阅用，支持联网/离线），双击即可                        |
+| `install_icalendar.ps1`     | **可选**：上述 .bat 的实际安装逻辑（PowerShell，可用 `-PythonPath` / `-DryRun` 参数） |
+| `pack_icalendar_wheels.bat` | **可选**：在联网机打包 icalendar 离线安装包（生成 `wheels/`），双击即可                   |
+| `pack_icalendar_wheels.ps1` | **可选**：上述打包 .bat 的实际逻辑（可用 `-TargetVersion 3.8` 指定目标机 Python 版本）    |
+| `requirements-optional.txt` | **可选**：icalendar 依赖清单（按 Python 版本自动约束）                             |
+| `server.py`                 | 主服务程序                                                              |
+| `start_server.py`           | 备用离线服务程序（功能有限）                                                     |
+| `data.json`                 | 用户数据文件                                                             |
+| `server.log`                | 服务运行日志                                                             |
+| `launcher.log`              | 启动过程日志（排查"双击后没反应/卡住"先看这个）                                          |
 
 > `install.bat` 和 `start.bat` 的关系：`install.bat` 是一次性安装脚本，负责创建桌面快捷方式（指向 `start.bat`）和开机自启动项；`start.bat` 是日常使用的启动脚本。两个文件都需要保留。
 
@@ -212,6 +215,10 @@ type server.log | findstr "TackList Server"
 2. **代理软件**：浏览器访问 `127.0.0.1` 被代理拦截时，在代理软件（如 Clash）中开启"绕过局域网/回环地址"
 3. **服务僵死**：执行 `start.bat restart` 强制重启服务
 4. 查看日志定位：`server.log`（记录了服务启动与报错信息）
+
+### Q: `start.bat stop` 停不掉服务？
+
+旧版用 `netstat` / `tasklist` 识别进程时，因中文 Windows 输出为 GBK 而 Python 按 UTF-8 解码，输出被解成空串，导致永远找不到服务进程。现已修复，`stop` / `restart` 均正常。
 
 ### Q: 如何取消开机自启动？
 

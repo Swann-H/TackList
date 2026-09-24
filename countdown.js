@@ -10,6 +10,16 @@ let countdownDeleteTimer = null;
 // 系统默认项的固定 key
 const COUNTDOWN_AUTO_KEY = '__auto_holiday__';
 const COUNTDOWN_MAX_PIN = 2;
+// 「当天」放大名称布局的字数上限。双栏单列可用宽仅 98px，1.75rem 衬线下
+// 3 个汉字 ≈ 87.4px 刚好容纳，第 4 个字起必然换行 → 名称统一截断到 3 字。
+// ⚠️ 不能改成「前 3 字 + 省略号」：CJK 的「…」是全角，4 字宽 ≈ 116px 会撑破双栏。
+// 系统假期名已核实全部 ≤3 字（元旦/春节/清明节/劳动节/端午节/中秋节/国庆节），
+// 故只对自定义倒计时名做截断；外部抓取的假期名不在保证范围内（见 CD 复核记录）。
+const COUNTDOWN_TODAY_NAME_MAX = 3;
+// 系统假期连休段含多个节日名（如「国庆节·中秋节」）时改为交替展示，间隔与淡入淡出时长
+const COUNTDOWN_NAME_CYCLE_MS = 30000;
+const COUNTDOWN_NAME_SWAP_MS = 420;
+let cdNameCycleTimer = null;
 
 // ---------------------------------------------------------------- 计算工具
 
@@ -45,14 +55,28 @@ function getCountdownDays(dateStr, repeat) {
     return Math.round((dt - today) / 86400000);
 }
 
-// 获取下一个法定节假日（复刻原 updateHolidayCountdown 的聚合逻辑）
+// 获取「进行中 / 下一个」法定节假日（复刻原 updateHolidayCountdown 的聚合逻辑）
+// 天数口径：days = 假期首日 − 今天（真实相差天数，不再做 "−1 / +1" 偏移）
+//
+// 2026-09-25 约定：假期进行中（首日 ≤ 今天 ≤ 末日）**持续展示本假期**，不走倒计时——
+//   - 假期名沿用「今天」放大名称布局，第二行显示假期持续区间（如「10月1日 - 10月8日」）；
+//   - 连休段内的节日当天（按 holiday_data.json 当天映射名，如 2025-10-05 = 中秋节）
+//     只静态显示该节日名，不参与交替；
+//   - 其余天在段内各节日名之间交替展示（如国庆中秋连休轮换「国庆节 / 中秋节」）；
+//   - 假期结束（次日起）才让位给下一个假期，恢复「N 天后」倒计时。
+// 未来假期的 days = 假期首日 − 今天；首日当天即视为进行中（days = 0）。
+//
+// 基准日 = **连续放假段的第一天**（不看节日名）：节日当天常落在假期第 2、3 天
+// （如 2026 春节假期 2/15 起、正月初一在 2/17），倒计时应以假期首日为基准。
+// 一段连休里出现多个节日名时（如 2025 国庆中秋连休 10/1-10/8 内含中秋 10/5），
+// 段名按日期顺序并列显示为「国庆节·中秋节」，基准日仍是该段首日。
 function getNextHoliday() {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const currentYear = now.getFullYear().toString();
     const nextYear = (now.getFullYear() + 1).toString();
 
-    let holidayGroups = {};
+    const runs = [];
 
     function collect(yearStr, yearData) {
         if (!yearData || !yearData.holidays) return;
@@ -60,30 +84,29 @@ function getNextHoliday() {
         const sortedDates = Object.keys(holidays).sort();
         let i = 0;
         while (i < sortedDates.length) {
-            const name = holidays[sortedDates[i]];
-            const groupDates = [sortedDates[i]];
+            const runDates = [sortedDates[i]];
+            const names = [holidays[sortedDates[i]]];
             let j = i + 1;
-            while (j < sortedDates.length && holidays[sortedDates[j]] === name) {
+            while (j < sortedDates.length) {
                 const prevDate = new Date(parseInt(yearStr), parseInt(sortedDates[j - 1].split('-')[0]) - 1, parseInt(sortedDates[j - 1].split('-')[1]));
                 const currDate = new Date(parseInt(yearStr), parseInt(sortedDates[j].split('-')[0]) - 1, parseInt(sortedDates[j].split('-')[1]));
-                const diff = (currDate - prevDate) / 86400000;
-                if (Math.round(diff) === 1) {
-                    groupDates.push(sortedDates[j]);
-                    j++;
-                } else {
-                    break;
-                }
+                if (Math.round((currDate - prevDate) / 86400000) !== 1) break;
+                runDates.push(sortedDates[j]);
+                const nm = holidays[sortedDates[j]];
+                if (names.indexOf(nm) < 0) names.push(nm);
+                j++;
             }
-            if (groupDates.length > 2) {
-                const groupStart = new Date(parseInt(yearStr), parseInt(groupDates[0].split('-')[0]) - 1, parseInt(groupDates[0].split('-')[1]));
-                if (!holidayGroups[name] || groupStart < holidayGroups[name].startDate) {
-                    holidayGroups[name] = {
-                        startDate: groupStart,
-                        firstDateStr: groupDates[0],
-                        count: groupDates.length
-                    };
-                }
-            }
+            const lastParts = runDates[runDates.length - 1].split('-');
+            // 短假（1~2 天）同样参与评选；同名假期跨年各成一段，不做同名去重
+            runs.push({
+                name: names.join('·'),
+                names: names.slice(),   // 各节日名单独保留，供交替展示
+                dates: runDates.slice(),                    // 段内各日期（MM-DD），供「节日当天」判定
+                dateNames: runDates.map(d => holidays[d]),  // 各日期原始映射名（未去重）
+                startDate: new Date(parseInt(yearStr), parseInt(runDates[0].split('-')[0]) - 1, parseInt(runDates[0].split('-')[1])),
+                endDate: new Date(parseInt(yearStr), parseInt(lastParts[0]) - 1, parseInt(lastParts[1])),
+                count: runDates.length
+            });
             i = j;
         }
     }
@@ -91,14 +114,39 @@ function getNextHoliday() {
     collect(currentYear, holidayData[currentYear]);
     collect(nextYear, holidayData[nextYear]);
 
+    const _md = d => (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    const pad2 = n => String(n).padStart(2, '0');
+
+    // 1) 假期进行中：优先于一切未来假期（假期结束次日起才让位）
+    for (const run of runs) {
+        if (now >= run.startDate && now <= run.endDate) {
+            // 当天映射名（MM-DD 须补零对齐 holidayData 的键格式）
+            const todayKey = pad2(now.getMonth() + 1) + '-' + pad2(now.getDate());
+            const idx = run.dates.indexOf(todayKey);
+            const todayName = idx >= 0 ? run.dateNames[idx] : null;
+            return {
+                name: todayName || run.name,
+                // 节日当天只留一个名字 → cdNameHtml 走静态路径；其余天整段名字交替展示
+                names: todayName ? [todayName] : run.names,
+                startDate: run.startDate,
+                endDate: run.endDate,
+                days: 0,        // 走「今天」放大名称布局，假期期间持续显示假期名
+                ongoing: true,
+                dateLabel: _md(run.startDate) + ' - ' + _md(run.endDate)
+            };
+        }
+    }
+
+    // 2) 无进行中假期：最近的未来假期倒计时
     let nextHoliday = null;
     let minDiff = Infinity;
-    for (const name in holidayGroups) {
-        const group = holidayGroups[name];
-        const diff = (group.startDate - now) / 86400000;
-        if (diff > 0 && diff < minDiff) {
-            minDiff = Math.ceil(diff);
-            nextHoliday = { name: name, startDate: group.startDate, days: Math.max(0, minDiff - 1) };
+    for (const run of runs) {
+        const diff = Math.round((run.startDate - now) / 86400000);
+        // 首日当天已被上面的进行中分支命中，这里只会命中 diff > 0；
+        // 保留 >= 0 兜底（数据异常导致进行中判定漏掉时，首日当天仍可显示）
+        if (diff >= 0 && diff < minDiff) {
+            minDiff = diff;
+            nextHoliday = { name: run.name, names: run.names, startDate: run.startDate, endDate: run.endDate, days: diff, ongoing: false, dateLabel: _md(run.startDate) + '起' };
         }
     }
     return nextHoliday;
@@ -113,8 +161,10 @@ function resolveCountdownItem(key) {
             key: key,
             isHoliday: true,
             name: nh.name,
+            names: nh.names,        // 多节日名时供交替展示（节日当天只含一个名字 → 静态）
             days: nh.days,
-            dateLabel: (nh.startDate.getMonth() + 1) + '月' + nh.startDate.getDate() + '日起'
+            ongoing: nh.ongoing,    // 假期进行中（days=0 放大名称布局 + 区间文案）
+            dateLabel: nh.dateLabel // 未来「X月X日起」；进行中「X月X日 - X月X日」
         };
     }
     const cd = (settings.countdowns || []).find(c => c.id === key);
@@ -127,45 +177,103 @@ function resolveCountdownItem(key) {
 
 // ---------------------------------------------------------------- 侧边栏展示
 
-// 中间数字行 HTML（含 data-days 供温暖色判断）
+// 中间数字行 HTML（含 data-days 供临近色判断）
+// 天数口径：显示值 = 真实相差天数（明天 = "1天后"；当天/假期进行中 = 0，走放大名称布局，无数字行）
 function cdDaysHtml(days) {
     if (days === null || days === undefined) return '';
     if (days < 0) {
-        // 已过期：天数绝对值 +1（含两端，与未来分组保持一致）
-        const passed = (-days) + 1;
+        // 已过期：显示已过天数（同样用真实相差天数，不再 +1）
         return '<span class="holiday-countdown-unit">已过</span>' +
-            '<span class="holiday-countdown-number">' + passed + '</span>' +
+            '<span class="holiday-countdown-number">' + (-days) + '</span>' +
             '<span class="holiday-countdown-unit">天</span>';
     }
     if (days === 0) {
         // 今天：不渲染数字行，由 cdItemInner 改用放大名称布局
         return '';
     }
-    // 未来：天数 +1（含两端），data-days 仍保留真实剩余天数以维持临近高亮逻辑
-    const remaining = days + 1;
-    return '<span class="holiday-countdown-number" data-days="' + days + '">' + remaining + '</span><span class="holiday-countdown-unit">天后</span>';
+    // 未来：数字即真实剩余天数，data-days 与显示值一致（临近高亮与数字同档）
+    return '<span class="holiday-countdown-number" data-days="' + days + '">' + days + '</span><span class="holiday-countdown-unit">天后</span>';
 }
 
-// 单个展示项的内部 HTML（侧边栏与卡片共用）
-function cdItemInner(item) {
+// 名称行 HTML。
+// 系统假期连休段可能含多个节日名（如「国庆节·中秋节」），合并成一个长名称既易被裁切、
+// 也撑高双栏布局；改为交替展示：外层带 .cd-name-cycle，内层 .cd-name-cycle-text 由定时器轮换。
+// nameOverride：仅「当天」布局使用，传入已截断的名称（见 cdItemInner）。
+function cdNameHtml(item, baseCls, nameOverride) {
+    const names = (item.names && item.names.length > 1) ? item.names : null;
+    if (!names) {
+        const text = (nameOverride === undefined || nameOverride === null) ? item.name : nameOverride;
+        return '<div class="' + baseCls + '">' + escapeHtml(text) + '</div>';
+    }
+    return '<div class="' + baseCls + ' cd-name-cycle" data-cd-names="' +
+        escapeHtml(JSON.stringify(names)) + '"><span class="cd-name-cycle-text">' +
+        escapeHtml(names[0]) + '</span></div>';
+}
+
+// 单个展示项的内部 HTML（侧边栏 / 固定槽 / 卡片池共用）
+// todayNameMax：仅对「当天」放大名称生效的字数上限。
+//   侧边栏与固定槽传 COUNTDOWN_TODAY_NAME_MAX（固定槽即侧边栏预览，须一致）；
+//   卡片池不传（卡片可用宽 195.2px，够放下完整名称，截断只会丢信息）。
+function cdItemInner(item, todayNameMax) {
     if (item.days === 0) {
-        // 今天：放大名称（与数字相同的衬线字体）占据原名称+数字两行，第二行直接显示日期
-        return '<div class="holiday-countdown-name-today">' + escapeHtml(item.name) + '</div>' +
+        // 今天 / 假期进行中：放大名称（与数字相同的衬线字体）占据原名称+数字两行，
+        // 第二行显示日期行——节日当天「X月X日起」，假期进行中为持续区间「X月X日 - X月X日」
+        let nm = item.name;
+        if (!item.isHoliday && todayNameMax && nm && nm.length > todayNameMax) {
+            nm = nm.slice(0, todayNameMax);
+        }
+        return cdNameHtml(item, 'holiday-countdown-name-today', nm) +
             '<div class="holiday-countdown-date">' + escapeHtml(item.dateLabel) + '</div>';
     }
-    return '<div class="holiday-countdown-label">' + escapeHtml(item.name) + '</div>' +
+    return cdNameHtml(item, 'holiday-countdown-label') +
         '<div>' + cdDaysHtml(item.days) + '</div>' +
         '<div class="holiday-countdown-date">' + escapeHtml(item.dateLabel) + '</div>';
 }
 
-// 温暖色（临近假期时数字变橙红）
+function cdCycleNames(host) {
+    try {
+        const n = JSON.parse(host.getAttribute('data-cd-names') || '[]');
+        return Array.isArray(n) ? n : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+// 启动名称交替（每 COUNTDOWN_NAME_CYCLE_MS 切换一次：淡出 → 换字 → 淡入）。
+// 每次重渲染后都要调用：先清掉旧定时器，再按当前 DOM 重新收集轮换宿主，避免多定时器叠加。
+function startCountdownNameCycle(root) {
+    if (cdNameCycleTimer) { clearInterval(cdNameCycleTimer); cdNameCycleTimer = null; }
+    const active = Array.from((root || document).querySelectorAll('.cd-name-cycle'))
+        .filter(h => cdCycleNames(h).length > 1 && h.querySelector('.cd-name-cycle-text'));
+    if (!active.length) return;
+    let idx = 0;
+    cdNameCycleTimer = setInterval(() => {
+        idx += 1;
+        active.forEach(h => {
+            const names = cdCycleNames(h);
+            if (names.length < 2) return;
+            const t = h.querySelector('.cd-name-cycle-text');
+            if (!t) return;
+            const next = names[idx % names.length];
+            t.classList.add('is-swapping');
+            setTimeout(() => {
+                if (!t.isConnected) return;   // 期间被重渲染掉了，放弃这次换字
+                t.textContent = next;
+                t.classList.remove('is-swapping');
+            }, COUNTDOWN_NAME_SWAP_MS);
+        });
+    }, COUNTDOWN_NAME_CYCLE_MS);
+}
+
+// 临近色（临近假期时数字渐变：蓝 → 青 → 绿，更契合假期意味；用户 2026-09-25 指定）
+// 仅作用于未来倒计时数字（data-days ≥ 1）；当天/假期进行中无数字行，不着色
 function applyCountdownWarmth() {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     document.querySelectorAll('#holiday-countdown .holiday-countdown-number[data-days], .cd-slot .holiday-countdown-number[data-days], .cd-card .holiday-countdown-number[data-days]').forEach(el => {
         const days = parseInt(el.getAttribute('data-days'), 10);
-        if (days === 3) el.style.color = isDark ? '#FFB74D' : '#E67E22';
-        else if (days === 2) el.style.color = isDark ? '#FF8A65' : '#E65100';
-        else if (days === 1) el.style.color = isDark ? '#EF5350' : '#C62828';
+        if (days === 3) el.style.color = isDark ? '#64B5F6' : '#1E88E5';    // 3 天：蓝
+        else if (days === 2) el.style.color = isDark ? '#4DD0E1' : '#00ACC1'; // 2 天：青
+        else if (days === 1) el.style.color = isDark ? '#66BB6A' : '#43A047'; // 1 天：绿
         else el.style.color = '';
     });
 }
@@ -174,6 +282,8 @@ function applyCountdownWarmth() {
 function renderSidebarCountdown() {
     const box = document.getElementById('holiday-countdown');
     if (!box) return;
+    // 记下本次渲染所依据的日期，供跨天轮询比对（见 checkCountdownDayRollover）
+    cdRenderedDayKey = cdDayKey();
 
     const pinned = (settings.pinnedCountdowns || []).slice();
     const items = [];
@@ -184,29 +294,65 @@ function renderSidebarCountdown() {
 
     if (items.length === 0) {
         // 未固定任何项：保留默认"下一个节假日"居中展示（向后兼容）
-        const nh = getNextHoliday();
-        if (!nh) {
+        // 走 cdItemInner 以便 days === 0（假期首日）时同样用放大名称布局，而不是留下空数字行
+        const auto = resolveCountdownItem(COUNTDOWN_AUTO_KEY);
+        if (!auto) {
             box.innerHTML = '<div class="holiday-countdown-label">暂无假期信息</div><div><span class="holiday-countdown-number">-</span></div>';
+            startCountdownNameCycle();   // 清掉可能残留的轮换定时器
             return;
         }
-        const m = nh.startDate.getMonth() + 1;
-        const d = nh.startDate.getDate();
-        box.innerHTML =
-            '<div class="holiday-countdown-label">' + escapeHtml(nh.name) + '</div>' +
-            '<div>' + cdDaysHtml(nh.days) + '</div>' +
-            '<div class="holiday-countdown-date">' + m + '月' + d + '日起</div>';
+        box.innerHTML = cdItemInner(auto, COUNTDOWN_TODAY_NAME_MAX);
     } else if (items.length === 1) {
-        box.innerHTML = cdItemInner(items[0]);
+        box.innerHTML = cdItemInner(items[0], COUNTDOWN_TODAY_NAME_MAX);
     } else {
         // 最多 2 个：左右展示，中间虚线分割
         box.innerHTML =
             '<div class="cd-dual">' +
-            '<div class="cd-dual-item">' + cdItemInner(items[0]) + '</div>' +
+            '<div class="cd-dual-item">' + cdItemInner(items[0], COUNTDOWN_TODAY_NAME_MAX) + '</div>' +
             '<div class="cd-divider"></div>' +
-            '<div class="cd-dual-item">' + cdItemInner(items[1]) + '</div>' +
+            '<div class="cd-dual-item">' + cdItemInner(items[1], COUNTDOWN_TODAY_NAME_MAX) + '</div>' +
             '</div>';
     }
     applyCountdownWarmth();
+    startCountdownNameCycle();
+}
+
+// ---------------------------------------------------------------- 跨天自动刷新
+
+// days 只在重渲染时重算，而本模块此前只在「初始化 / 抓取节假日 / Pin 开关 / 增删改」
+// 时重渲染 —— 页面挂着过夜会让「N 天后」一直停在昨天的值（30s 数据轮询不覆盖此块）。
+// 这里做轻量轮询：30s 比一次日期字符串，变更即重渲染侧边栏；管理页开着也一并刷新。
+let cdRenderedDayKey = null;
+
+function cdDayKey() {
+    const d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+}
+
+function checkCountdownDayRollover() {
+    const key = cdDayKey();
+    if (cdRenderedDayKey === null) { cdRenderedDayKey = key; return; }
+    if (key === cdRenderedDayKey) return;
+    cdRenderedDayKey = key;
+    renderSidebarCountdown();
+    if (typeof currentView !== 'undefined' && currentView === 'countdown') {
+        renderCountdownView(document.getElementById('view-container'));
+    }
+}
+
+// 后台标签页的 setInterval 会被节流，故回前台时再补一次检查。
+// ⚠️ 刻意不做顶层副作用：tmp/test_countdown_days.js 会把本文件前半段放进
+//    无 DOM 的沙箱里 new Function 求值，顶层碰 document / setInterval 会直接抛错，
+//    在 Node 里 setInterval 还会挂住进程。故由 app.js:init() 显式调用本函数启动。
+let cdDayRolloverWatching = false;
+
+function startCountdownDayRolloverWatch() {
+    if (cdDayRolloverWatching) return;
+    cdDayRolloverWatching = true;
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) checkCountdownDayRollover();
+    });
+    setInterval(checkCountdownDayRollover, 30000);
 }
 
 // ---------------------------------------------------------------- Pin 开关
@@ -299,6 +445,7 @@ function renderCountdownView(container) {
         '</div>';
 
     applyCountdownWarmth();
+    startCountdownNameCycle();
 
     setTimeout(() => {
         const nameInput = document.getElementById('cd-edit-name');
@@ -314,7 +461,8 @@ function renderSlotHtml(index) {
     if (key) {
         const it = resolveCountdownItem(key);
         if (it) {
-            inner = cdItemInner(it);
+            // 固定槽＝侧边栏预览，名称上限与侧边栏保持一致
+            inner = cdItemInner(it, COUNTDOWN_TODAY_NAME_MAX);
             draggableAttr = ' draggable="true" ondragstart="cdDragStart(event,\'' + key + '\',\'slot\')" ondragend="cdDragEnd(event)"';
         } else {
             inner = '<span class="cd-slot-empty">（已失效）</span>';
@@ -333,8 +481,9 @@ function buildPoolItems() {
     const nh = getNextHoliday();
     if (nh) {
         items.push({
-            key: COUNTDOWN_AUTO_KEY, isHoliday: true, name: nh.name, days: nh.days,
-            dateLabel: (nh.startDate.getMonth() + 1) + '月' + nh.startDate.getDate() + '日起',
+            key: COUNTDOWN_AUTO_KEY, isHoliday: true, name: nh.name, names: nh.names, days: nh.days,
+            ongoing: nh.ongoing,
+            dateLabel: nh.dateLabel,    // 与侧边栏同源：未来「起」/ 进行中「区间」
             editable: false, deletable: false
         });
     }

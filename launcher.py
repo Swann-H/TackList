@@ -8,16 +8,43 @@
 - 服务确认健康后才打开浏览器；失败时弹窗提示并附日志末尾
 - 只清理确认僵死的 python 进程，不误杀忙碌中的健康服务
 
+════════ Windows 上三个已踩过的坑（2026-09-22 修复，改相关函数前务必先读）════════
+
+坑 1：**往控制台写字会永久阻塞。**
+cmd 控制台一旦被鼠标点选（QuickEdit 选择模式）或被滚动条拖动，进程对它的写入就会
+一直挂住。launcher 原本只用 print 报进度，于是表现为"桌面快捷方式弹出黑窗口、里面
+什么都没有、卡死在这里"（进程被强关后留下退出码 0xC000013A = STATUS_CONTROL_C_EXIT）。
+对策：日志先同步落盘 launcher.log（永不阻塞），控制台输出交给守护线程尽力而为；
+同时尽力关闭控制台的 QuickEdit 模式。⚠️ 配套要求：进程收尾必须走 os._exit
+（守护线程可能正卡在 write() 上握着 stdout 缓冲区锁，正常收尾会死等，见文件末尾注释）。
+
+坑 2：**OpenProcess 成功 ≠ 进程还活着。**
+只要还有任何句柄指向已退出的进程对象（cmd.exe 等父进程持有的句柄就足够），按 PID 仍
+能 OpenProcess 成功。实测：PID 6724 的 OpenProcess 返回有效句柄、GetLastError=0，
+但 GetExitCodeProcess = 3221225786(0xC000013A)，进程其实早就死了。
+后果：launch.lock 里的死 PID 被当成"另一个启动流程正在进行"，锁永远拆不掉，
+后续每次双击都变成 "another launch in progress (pid X), waiting..." 然后等 110 秒放弃。
+对策：pid_alive() 必须再看 GetExitCodeProcess == STILL_ACTIVE。
+
+坑 3：**cmd / netstat / tasklist 在本机输出 GBK，而 Python 处于 UTF-8 模式。**
+subprocess.run(..., text=True) 会在读线程里抛 UnicodeDecodeError，异常被吞掉后
+stdout 变成空串 —— port_listener_pids() 恒返回空集合、is_python_pid() 恒返回 False，
+于是 start.bat stop 停不掉服务、僵尸清理全部失效。
+对策：一律按字节读取再 errors='replace' 解码（见 run_text）。
+
 用法：python launcher.py [start|stop|restart]
 """
 
 import ctypes
 import json
 import os
+import queue
 import socket
 import subprocess
 import sys
+import threading
 import time
+import traceback
 import urllib.request
 
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -27,26 +54,115 @@ PORT_FILE = os.path.join(DIRECTORY, 'server.port')
 PID_FILE = os.path.join(DIRECTORY, 'server.pid')
 LAUNCH_LOCK = os.path.join(DIRECTORY, 'launch.lock')
 DATA_FILE = os.path.join(DIRECTORY, 'data.json')
+LAUNCHER_LOG_FILE = os.path.join(DIRECTORY, 'launcher.log')
 
 DEFAULT_PORT = 14438
 HEALTH_TIMEOUT = 60          # 冷启动（杀毒扫描等）最长等待秒数
 ZOMBIE_CONFIRM_SECONDS = 10  # 判定占端口的进程僵死前的观察期
 # 等待另一启动器释放锁的最长时间：需覆盖其"僵尸观察 + 杀进程等待 + 健康等待"全程
 LOCK_WAIT_SECONDS = ZOMBIE_CONFIRM_SECONDS + 10 + HEALTH_TIMEOUT + 30
+# 锁的最大存活时间：正常流程最长约 2 分钟（LOCK_WAIT 110s + 启动），
+# 超过这个时长还占着锁，说明持有者已卡死（如控制台被点选冻住），
+# 直接判定为陈旧锁并接管，避免一次卡死永久堵死后续所有启动。
+LOCK_MAX_AGE_SECONDS = 600
 
-# pythonw 下 stdout/stderr 为 None，统一落到日志文件
+# ── 日志：先落盘，再尽力写控制台 ────────────────────────────────────────────
+# pythonw 下 stdout/stderr 为 None；此时直接落到 launcher.log
+_CONSOLE_OK = sys.stdout is not None
 if sys.stdout is None:
-    sys.stdout = open(LOG_FILE, 'a', encoding='utf-8')
+    sys.stdout = open(LAUNCHER_LOG_FILE, 'a', encoding='utf-8')
 if sys.stderr is None:
-    sys.stderr = open(LOG_FILE, 'a', encoding='utf-8')
+    sys.stderr = open(LAUNCHER_LOG_FILE, 'a', encoding='utf-8')
+
+_console_queue = queue.Queue()
+_console_pending = 0
+_console_pending_lock = threading.Lock()
+
+
+def _write_console(text):
+    """真正的控制台写入。单独抽成函数是为了可测：测试里把它换成"永远不返回"
+    就能复现被冻住的控制台（见 tmp/test_launcher_win.py 的 E 段）。"""
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
+def _console_pump():
+    """控制台写入放在守护线程里：控制台被点选/滚动冻住时只会堵住这个线程，
+    不会拖死启动流程（这正是"黑窗口里什么都没有、卡死"的根因）。"""
+    global _console_pending
+    while True:
+        text = _console_queue.get()
+        try:
+            _write_console(text)
+        except Exception:
+            pass
+        finally:
+            with _console_pending_lock:
+                _console_pending -= 1
+
+
+if _CONSOLE_OK:
+    threading.Thread(target=_console_pump, daemon=True).start()
+
+
+def flush_console(timeout=0.5):
+    """把已排队的控制台输出尽力写完（最多等 timeout 秒）。
+
+    必须调用：主线程退出会立刻杀掉守护线程，不 drain 就会丢掉最后的日志
+    （实测踩过：`launcher.py stop` 控制台一行都没有）。控制台被冻住时
+    也只是白等 timeout 秒，不会真的卡死。"""
+    if not _CONSOLE_OK:
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _console_pending_lock:
+            if _console_pending <= 0:
+                return
+        time.sleep(0.02)
+
+
+def _disable_console_quick_edit():
+    """尽力关掉控制台 QuickEdit：鼠标点一下窗口就会进入选择模式并冻住所有输出。"""
+    if os.name != 'nt':
+        return
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.GetStdHandle.restype = ctypes.c_void_p
+        k32.GetStdHandle.argtypes = [ctypes.c_ulong]
+        k32.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        k32.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        STD_INPUT_HANDLE = -10
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        handle = k32.GetStdHandle(STD_INPUT_HANDLE)
+        if not handle or handle == ctypes.c_void_p(-1).value:
+            return
+        mode = ctypes.c_ulong(0)
+        if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+        k32.SetConsoleMode(handle,
+                           (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS)
+    except Exception:
+        pass
+
+
+def _append_launcher_log(line):
+    try:
+        with open(LAUNCHER_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(line)
+    except Exception:
+        pass
 
 
 def log(msg):
-    print('[%s] launcher: %s' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg))
-    try:
-        sys.stdout.flush()
-    except Exception:
-        pass
+    global _console_pending
+    line = '[%s] launcher: %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg)
+    _append_launcher_log(line)          # 同步落盘，永不阻塞
+    if _CONSOLE_OK:
+        # 先计数再入队，避免守护线程抢先把计数减成负数
+        with _console_pending_lock:
+            _console_pending += 1
+        _console_queue.put(line)
 
 
 def read_preferred_port():
@@ -105,18 +221,73 @@ def remove_file(path):
         pass
 
 
+def run_text(args, timeout=10):
+    """执行外部命令并按字节读取后容错解码。
+
+    本机 cmd / netstat / tasklist 输出 GBK，而 Python 处于 UTF-8 模式，
+    用 text=True 会在读线程抛 UnicodeDecodeError，异常被吞掉后 stdout 变成空串
+    （实测：netstat 与 tasklist 都命中）。所以这里一律走字节 + errors='replace'，
+    只要目标串是 ASCII（LISTENING / python.exe / PID 数字）就不受影响。"""
+    try:
+        out = subprocess.run(args, capture_output=True, timeout=timeout).stdout
+        return (out or b'').decode('utf-8', 'replace')
+    except Exception:
+        return ''
+
+
+# ── Windows 进程存活判定 ────────────────────────────────────────────────────
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_SYNCHRONIZE = 0x00100000
+_STILL_ACTIVE = 259
+_WAIT_TIMEOUT = 258
+
+
+def _setup_kernel32():
+    """显式声明 restype/argtypes：句柄是 64 位指针，默认 c_int 会截断。"""
+    k32 = ctypes.windll.kernel32
+    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    k32.GetExitCodeProcess.restype = ctypes.c_int
+    k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    k32.WaitForSingleObject.restype = ctypes.c_ulong
+    k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    k32.CloseHandle.restype = ctypes.c_int
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    return k32
+
+
+_K32 = _setup_kernel32() if os.name == 'nt' else None
+
+
+def _win_pid_alive(pid):
+    """OpenProcess 成功只说明"进程对象还在"（别人还握着句柄时按 PID 照样能打开），
+    必须再看退出码：只有 STILL_ACTIVE 才算真活着。"""
+    handle = _K32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if handle:
+        try:
+            code = ctypes.c_ulong(0)
+            if _K32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == _STILL_ACTIVE
+            return False
+        finally:
+            _K32.CloseHandle(handle)
+    # 权限不足（系统进程等）时退回 SYNCHRONIZE + 0 毫秒等待：
+    # WAIT_TIMEOUT = 还在跑；WAIT_OBJECT_0 = 已退出
+    handle = _K32.OpenProcess(_SYNCHRONIZE, False, pid)
+    if handle:
+        try:
+            return _K32.WaitForSingleObject(handle, 0) == _WAIT_TIMEOUT
+        finally:
+            _K32.CloseHandle(handle)
+    return False
+
+
 def pid_alive(pid):
     if not pid or pid <= 0 or pid == os.getpid():
         return False
     if os.name == 'nt':
         try:
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            if not handle:
-                return False
-            kernel32.CloseHandle(handle)
-            return True
+            return _win_pid_alive(pid)
         except Exception:
             return False
     try:
@@ -129,29 +300,20 @@ def pid_alive(pid):
 def port_listener_pids(port):
     """返回监听该端口的所有 PID。"""
     pids = set()
-    try:
-        out = subprocess.run(['netstat', '-ano', '-p', 'tcp'],
-                             capture_output=True, text=True, timeout=10).stdout
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 5 and parts[0] == 'TCP' and parts[3] == 'LISTENING':
-                if parts[1].endswith(':%d' % port):
-                    try:
-                        pids.add(int(parts[4]))
-                    except ValueError:
-                        pass
-    except Exception:
-        pass
+    for line in run_text(['netstat', '-ano', '-p', 'tcp']).splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0] == 'TCP' and parts[3] == 'LISTENING':
+            if parts[1].endswith(':%d' % port):
+                try:
+                    pids.add(int(parts[4]))
+                except ValueError:
+                    pass
     return pids
 
 
 def is_python_pid(pid):
-    try:
-        out = subprocess.run(['tasklist', '/FI', 'PID eq %d' % pid, '/FO', 'CSV'],
-                             capture_output=True, text=True, timeout=10).stdout
-        return 'python' in out.lower()
-    except Exception:
-        return False
+    out = run_text(['tasklist', '/FI', 'PID eq %d' % pid, '/FO', 'CSV'])
+    return 'python' in out.lower()
 
 
 def kill_pids(pids):
@@ -207,10 +369,20 @@ def launch_lock_holder_pid():
 
 
 def launch_lock_stale():
-    """按持有者进程是否存活判断锁陈旧（锁文件里写有 PID）。
-    合法启动流程可耗时 100 秒以上，按文件 mtime 判断会误拆仍在工作的活锁。"""
+    """判断锁是否已陈旧。
+
+    - 优先看"持有者进程是否真的活着"（锁文件里写有 PID）；
+    - 再加一道兜底：锁存在时间超过 LOCK_MAX_AGE_SECONDS 一律视为陈旧。
+      因为进程可能"活着但卡死"（控制台被点选冻住就是这样），此时 pid_alive
+      永远为真，只靠存活判定会让一次卡死永久堵死后续所有启动。"""
     holder = launch_lock_holder_pid()
-    return holder is None or not pid_alive(holder)
+    if holder is None or not pid_alive(holder):
+        return True
+    try:
+        age = time.time() - os.path.getmtime(LAUNCH_LOCK)
+    except OSError:
+        return True
+    return age > LOCK_MAX_AGE_SECONDS
 
 
 def find_healthy_port(candidates, timeout=2):
@@ -222,26 +394,30 @@ def find_healthy_port(candidates, timeout=2):
 
 def spawn_server():
     log_fp = open(LOG_FILE, 'a', encoding='utf-8')
-    exe = sys.executable
-    base, _ = os.path.splitext(exe)
-    pythonw = base + 'w.exe'
-    if os.path.exists(pythonw):
-        exe = pythonw
-    kwargs = {}
-    if os.name == 'nt':
-        kwargs['creationflags'] = (subprocess.CREATE_NEW_PROCESS_GROUP |
-                                   subprocess.CREATE_NO_WINDOW)
-    return subprocess.Popen([exe, SERVER_SCRIPT], cwd=DIRECTORY,
-                            stdout=log_fp, stderr=log_fp,
-                            stdin=subprocess.DEVNULL, **kwargs)
-
-
-def log_tail(lines=12):
     try:
-        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+        exe = sys.executable
+        base, _ = os.path.splitext(exe)
+        pythonw = base + 'w.exe'
+        if os.path.exists(pythonw):
+            exe = pythonw
+        kwargs = {}
+        if os.name == 'nt':
+            kwargs['creationflags'] = (subprocess.CREATE_NEW_PROCESS_GROUP |
+                                       subprocess.CREATE_NO_WINDOW)
+        return subprocess.Popen([exe, SERVER_SCRIPT], cwd=DIRECTORY,
+                                stdout=log_fp, stderr=log_fp,
+                                stdin=subprocess.DEVNULL, **kwargs)
+    finally:
+        # 子进程已拿到自己的句柄副本；父进程不关会一直泄漏一个文件句柄
+        log_fp.close()
+
+
+def log_tail(path, lines=12):
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return ''.join(f.readlines()[-lines:]).strip()
     except Exception:
-        return '(无法读取 server.log)'
+        return '(无法读取 %s)' % os.path.basename(path)
 
 
 def show_startup_failure(preferred, proc=None):
@@ -253,10 +429,13 @@ def show_startup_failure(preferred, proc=None):
            u'1. 杀毒软件拦截了 python / server.py，建议将本目录加入白名单\n'
            u'2. 端口 %d 被其他程序占用\n'
            u'3. Python 环境异常\n\n'
-           u'—— server.log 末尾 ——\n%s'
+           u'—— launcher.log 末尾 ——\n%s\n\n'
+           u'—— server.log 末尾 ——\n%s\n\n'
+           u'（两个日志的完整内容都在本目录下）'
            % (reason or (u'服务在 %d 秒内未能完成启动。' % HEALTH_TIMEOUT),
-              preferred, log_tail()))
+              preferred, log_tail(LAUNCHER_LOG_FILE, 8), log_tail(LOG_FILE, 12)))
     log('startup failed:\n%s' % msg)
+    flush_console()   # 弹模态框前先把控制台刷出来，否则用户只看到一个空黑窗
     message_box(msg)
 
 
@@ -390,7 +569,11 @@ def cmd_start():
             # 持锁进程仍存活且服务迟迟未就绪：宁可放弃也不无锁启动，
             # 否则会双开服务，两个实例同时写 data.json 会互相覆盖
             log('another launcher still holds the lock, giving up')
-            message_box(u'另一个 TackList 启动流程正在进行中，请稍候片刻后重试。')
+            flush_console()
+            message_box(u'另一个 TackList 启动流程正在进行中，请稍候片刻后重试。\n\n'
+                        u'若反复出现：说明上一次启动卡住了（残留 launch.lock）。\n'
+                        u'可删除应用目录下的 launch.lock 后重新双击快捷方式，\n'
+                        u'或执行 start.bat restart。诊断信息见 launcher.log。')
             return 1
 
     try:
@@ -401,23 +584,35 @@ def cmd_start():
 
 
 def cmd_stop():
-    stopped = False
     ports = {read_preferred_port()}
     file_port = read_small_int(PORT_FILE)
     if file_port:
         ports.add(file_port)
+
+    targets = set()
     for port in ports:
-        for pid in port_listener_pids(port):
-            if is_python_pid(pid):
-                kill_pids({pid})
-                stopped = True
+        targets |= port_listener_pids(port)
+    pid = read_small_int(PID_FILE)
+    if pid:
+        targets.add(pid)
+
+    stopped = []
+    for target in sorted(targets):
+        if target == os.getpid():
+            continue
+        if is_python_pid(target):
+            kill_pids({target})
+            stopped.append(target)
+
     remove_file(PID_FILE)
     remove_file(PORT_FILE)
-    log('service stopped' if stopped else 'no running service found')
+    log('service stopped (pids %s)' % stopped if stopped else 'no running service found')
     return 0
 
 
 def main():
+    # 关掉控制台 QuickEdit：鼠标点一下窗口就进入选择模式，会冻住所有控制台写入
+    _disable_console_quick_edit()
     action = sys.argv[1] if len(sys.argv) > 1 else 'start'
     if action == 'stop':
         return cmd_stop()
@@ -431,5 +626,26 @@ def main():
     return cmd_start()
 
 
+def _run():
+    try:
+        return main()
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 1
+    except Exception:
+        traceback.print_exc()
+        return 1
+    finally:
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        flush_console()
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    # 必须用 os._exit 跳过解释器收尾：控制台/管道被堵住时，守护线程会卡在
+    # sys.stdout.write 里一直握着缓冲区锁，正常收尾会去抢那把锁 —— 进程要么永不退、
+    # 要么 Fatal Python error: _enter_buffered_busy 崩掉（实测见
+    # tmp/test_launcher_exit_hang.py：正常收尾 rc=3221226505，os._exit 1 秒 rc=0）。
+    # 日志按行同步落盘，不依赖收尾时的 flush，所以跳过收尾是安全的。
+    os._exit(_run())

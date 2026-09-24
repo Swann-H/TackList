@@ -43,6 +43,15 @@
             font-weight: 700;
             src: url('/offline_assets/fonts/BarlowCondensed-700-latin.woff2') format('woff2');
         }
+        /* 倒计时「放大名称」专用衬线：Noto Serif SC 子集（GB2312 汉字 6763 字 + 拉丁/数字）
+           —— 离线本地资产，不依赖外网；许可见 offline_assets/fonts/LICENSE-CountdownSerif.txt */
+        @font-face {
+            font-family: 'Countdown Serif';
+            font-style: normal;
+            font-weight: 700;
+            font-display: swap;
+            src: url('/offline_assets/fonts/CountdownSerif-700.woff2') format('woff2');
+        }
 
         .pomodoro-timer-font {
             font-family: 'DIN Alternate', 'Barlow Condensed', 'Oswald', sans-serif;
@@ -596,6 +605,10 @@
             font-size: 0.65rem;
             color: var(--text-secondary);
             letter-spacing: 0.05em;
+            /* 名称行保持单行，长名（超长自定义名）省略号截断而非换行撑高 */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .holiday-countdown-number {
@@ -618,9 +631,28 @@
             color: var(--text-secondary);
         }
 
+        /* 系统假期连休段含多个节日名时（「国庆节」↔「中秋节」）交替展示，
+           countdown.js:startCountdownNameCycle 每 30s 换一次字：
+           先加 .is-swapping 淡出上移，420ms 后改文本再移除 → 淡入落回。
+           ⚠️ 用纯 CSS transition，不要换成 Tailwind 工具类（离线 JIT 会静默失效）。 */
+        .cd-name-cycle-text {
+            display: inline-block;
+            /* ⚠️ 必须显式继承字体：全局 `* { font-family: var(--app-font-family, …) }` 会直接命中
+               本 span（直接匹配压过从父级继承），不加这行「放大名称」就会掉回全局黑体 */
+            font-family: inherit;
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+        .cd-name-cycle-text.is-swapping {
+            opacity: 0;
+            transform: translateY(-0.3em);
+        }
+
         /* 今天：放大名称（与数字相同的衬线字体），占据原名称+数字两行 */
         .holiday-countdown-name-today {
-            font-family: 'Georgia', 'Times New Roman', serif;
+            /* 汉字衬线：优先本地子集字体（离线必可用），末端保留 serif —— 不可写成 sans-serif，
+               否则汉字会掉到黑体，与数字行的 Georgia 衬线明显割裂 */
+            font-family: 'Countdown Serif', 'Georgia', 'Times New Roman',
+                         'Songti SC', 'STSong', 'SimSun', 'Noto Serif CJK SC', serif;
             font-size: 1.75rem;
             font-weight: 700;
             line-height: 1.2;
@@ -648,6 +680,10 @@
         .cd-dual-item {
             flex: 1;
             min-width: 0;
+            /* 纵向 flex：配合下方 .cd-dual .holiday-countdown-date 的 margin-top:auto，
+               把两列的日期行都压到盒子底部对齐（见该规则处的说明） */
+            display: flex;
+            flex-direction: column;
         }
         .cd-divider {
             width: 0;
@@ -661,6 +697,38 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        /* 双栏内「放大名称」：单列可用宽仅 98px，而 1.75rem 下「国庆节·中秋节」需 185.23px。
+           基础样式的 flex 居中 + overflow:hidden 会把溢出「静默居中裁切」——
+           text-overflow 对 flex 容器不生效，实测两头各切一半（显示成「庆节·中秋」）且无省略号。
+           故此处改为允许换行并限 2 行；须用 -webkit-box 才能启用 line-clamp
+           （居中改由 .holiday-countdown-box 的 text-align:center 承担，flex 的 justify-content 失效）。
+           ⚠️ line-height 不能小于 1.35：Noto Serif SC 的字形内容框约 1.43em，
+               line-height 1.15 时每行上下各被切约 4px（实测 1.3 仍切 1px，1.35 起为 0）。 */
+        .cd-dual .holiday-countdown-name-today {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            /* 1 行时在 min-height(46.4px) 槽位里垂直居中 —— 名称交替后系统节日名
+               都是 3 字以内（「国庆节」「中秋节」），1 行即可容纳，此时元素高度回到
+               46.4px = 单栏槽位，日期行落回 59.4px，与单栏各行完全一致。
+               只有超长名称才会占到 2 行（75.6px），那时由 margin-top:auto 兜底对齐。
+               ⚠️ 2026-09-24 起：自定义名已在 countdown.js:cdItemInner 按
+               COUNTDOWN_TODAY_NAME_MAX=3 截断，系统假期名实测最长 3 字 →
+               正常路径下这里恒为 1 行，line-clamp:2 仅作外部抓取数据的兜底。 */
+            -webkit-box-pack: center;
+            white-space: normal;
+            text-align: center;
+            line-height: 1.35;
+        }
+        /* 双栏两列的「日期行」贴底对齐。
+           双栏里「放大名称」必须换 2 行（75.6px），远高于单栏那个
+           46.4px 的槽位（= 名称行 + 数字行），若不干预，列1 的日期行会落到
+           88.6px 而列2 仍在 59.4px —— 两列参差 29.2px。
+           .cd-dual-item 已是纵向 flex，这里给日期行 margin-top:auto 把它压到底部，
+           两列日期行重新对齐（代价：列2 的「天数行」与「日期行」之间留白）。 */
+        .cd-dual .holiday-countdown-date {
+            margin-top: auto;
         }
         .countdown-container {
             background: var(--bg-secondary, #ffffff);
@@ -733,7 +801,12 @@
         }
         .cd-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            /* 卡片最小宽 256px：卡片内名称可用宽 = 卡片宽 − 16px(卡片内边距)
+               − 44.8px(.cd-side-body 左右内边距，为悬浮的 Pin/设置按钮预留)
+               = 195.2px。需容下 1.75rem 下最长的内置节日名「国庆节·中秋节」
+               （实测 185.23px），故 256px 留出约 10px 余量。
+               原 220px 时可用宽仅 159.2px → 名称被省略号截断 25.59px。 */
+            grid-template-columns: repeat(auto-fill, minmax(256px, 1fr));
             gap: 0.75rem;
             align-items: start;
         }
@@ -909,6 +982,40 @@
             animation: questPopIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
             overflow: hidden;
             position: relative;
+        }
+
+        /* 提前提醒：图标正下方（6 点钟方向）的提前量徽标。
+           时机提示不进标题行（标题保持「时间 [任务名]」规整格式），改由此徽标承载。
+           底色与图标圆底一致（slate-900），盖住圆形边框下沿形成"挂坠"观感；
+           文字/描边用 currentColor 跟随主题色（主任务琥珀、子任务蓝）。 */
+        .reminder-advance-badge {
+            position: absolute;
+            left: 50%;
+            bottom: -9px;
+            transform: translateX(-50%);
+            padding: 0 5px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 14px;
+            white-space: nowrap;
+            background: #0f172a;
+            border: 1px solid currentColor;
+            color: inherit;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        /* 提醒 Toast 第 2 行（正文：清单名 | 详情描述）。最多 2 行，超出打省略号。
+           详情描述是自由文本，不设上限时 400 字能把 Toast 撑到 534px（基线 149px）。
+           ⚠️ 用纯 CSS 而不是 Tailwind 的 line-clamp-2：离线版走本地 JIT，
+              关键布局约束不应依赖工具类是否被收录（同 .reminder-advance-badge 的理由）。
+           ⚠️ break-words 必须同时保留，否则无空格的长英文串仍会单行超宽。 */
+        .reminder-toast-body {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            overflow: hidden;
         }
 
         @keyframes questPopIn {
@@ -1219,7 +1326,25 @@
         .scrollbar-visible::-webkit-scrollbar-thumb {
             background-color: var(--border-color);
         }
-
+        
+        /* 看板底部横向滚动条：默认隐藏（滑块透明），仅当指针进入滚动条所在窄条
+           （kanbanView.js 加 .scrollbar-hover）或直接悬浮滑块时显示。 */
+        .scrollbar-always {
+            scrollbar-color: transparent transparent;
+        }
+        
+        .scrollbar-always.scrollbar-hover {
+            scrollbar-color: var(--border-color) transparent;
+        }
+        
+        .scrollbar-always.scrollbar-hover::-webkit-scrollbar-thumb {
+            background-color: var(--border-color);
+        }
+        
+        .scrollbar-always::-webkit-scrollbar-thumb:hover {
+            background-color: var(--text-muted);
+        }
+        
         /* ==================== 方案1：背景动画改造 ==================== */
         /* 原 background-position 动画每帧触发 paint（无法 GPU 合成）。
            改为 ::before 伪元素持有大尺寸渐变 + transform 动画，走 GPU 合成层，零 paint。 */
@@ -1798,6 +1923,113 @@
         @media (prefers-reduced-motion: reduce) {
             .subtask-item.subtask-holding::after { animation: none; transform: scaleX(0.35); }
         }
+        /* ============ 子任务时间与提醒 ============ */
+        /* 子任务行外层容器：垂直堆叠「内层操作行 + 内联提醒面板」 */
+        .subtask-item { display: block; }
+
+        /* —— 右侧「共用位置」.subtask-slot ——
+           有时间文本：常显；悬浮到该文本上只变蓝提示可点击，**不换显铃铛**
+           没有时间文本：未悬浮什么都不显示，悬浮该行才出铃铛
+           触摸设备：没有 hover，两者都显示（见下方 @media (hover: none)）
+           min-width 预留铃铛宽度：否则「无时间的行」悬浮时铃铛出现会把文本域挤窄、文字重排 */
+        .subtask-slot {
+            display: flex; align-items: center; justify-content: flex-end;
+            flex-shrink: 0; min-width: 1.25rem;
+        }
+        .subtask-slot .subtask-time-label { cursor: pointer; transition: color .15s; }
+        .subtask-slot .subtask-time-label:not(.hidden):hover { color: var(--accent-color, #3b82f6); }
+        /* 该行提醒面板已展开：时间文本保持主题色，作为「本行已展开」的指示 */
+        .subtask-item.panel-open .subtask-slot .subtask-time-label:not(.hidden) { color: var(--accent-color, #3b82f6); }
+
+        /* —— 时间文案：两行（方案 B「主次」）——
+           上行 = 日期/相对标签（11px、更淡），下行 = 时刻（12px / 13px 行高，主信息）。
+           两行 line-height 之和 11 + 13 = 24px，正好等于文本域高度 → 行高保持 32px 不变（见文档 §15）。
+           min-height + justify-content:flex-end：让「今天」（只有时刻一行）也与其他行底部对齐。 */
+        .subtask-time-label:not(.hidden) {
+            display: flex; flex-direction: column; align-items: flex-end;
+            justify-content: flex-end; min-height: 1.5rem;
+            font-variant-numeric: tabular-nums; white-space: nowrap;
+        }
+        .subtask-time-date { font-size: 11px; line-height: 11px; opacity: .75; }
+        .subtask-time-clock { font-size: 12px; line-height: 13px; }
+        .subtask-item.subtask-completed .subtask-time-label { text-decoration: line-through; }
+
+        /* —— 铃铛与删除按钮：固定 20×20 ——
+           必须固定高度（不能只靠 padding + 继承行高）：否则按钮盒高 32px 会把行撑高 8px，
+           鼠标在行间上下移动时下方内容整体跳动。line-height 用于居中图标。 */
+        .subtask-bell-btn, .subtask-delete-btn {
+            display: none;
+            width: 1.25rem; height: 1.25rem; padding: 0; flex-shrink: 0;
+            line-height: 1.25rem; text-align: center;
+            color: var(--text-muted, #9ca3af); transition: color .15s;
+        }
+        .subtask-bell-btn:hover, .subtask-delete-btn:hover { color: var(--text-primary); }
+        /* 无时间文本的行：悬浮该行（或该行面板已展开）时才出铃铛 */
+        .subtask-item:hover .subtask-slot .subtask-time-label.hidden ~ .subtask-bell-btn { display: block; }
+        .subtask-item.panel-open .subtask-slot .subtask-time-label.hidden ~ .subtask-bell-btn { display: block; }
+
+        /* —— 删除按钮：桌面端平时不出现，只在「管理模式」显示（替换共用位置）—— */
+        .subtask-delete-btn.subtask-delete-confirm { color: #ef4444; }
+        #subtasks-container.subtask-manage .subtask-slot { display: none !important; }
+        #subtasks-container.subtask-manage .subtask-delete-btn { display: block !important; }
+
+        /* —— 「编辑/管理」入口：详情说明行右侧，hover 说明行或子任务区才淡入 ——
+           用 opacity 占位（不是 display）：始终占据宽度，避免悬浮时描述框变宽/变窄导致文本重排 */
+        .subtask-manage-btn {
+            flex-shrink: 0;
+            width: 1.5rem; height: 1.5rem; padding: 0;
+            line-height: 1.5rem; text-align: center; border-radius: 0.5rem;
+            color: var(--text-muted, #9ca3af);
+            opacity: 0; pointer-events: none;
+            transition: opacity .15s, color .15s;
+        }
+        /* 入口在说明行里，但要「悬浮说明行或子任务区」都能唤出，
+           故用公共包装层 #subtask-content（二者是兄弟，无法用后代选择器互相命中） */
+        #subtask-content:hover .subtask-manage-btn { opacity: 1; pointer-events: auto; }
+        .subtask-manage-btn:hover { color: var(--text-primary); }
+        .subtask-manage-btn.on { opacity: 1; pointer-events: auto; color: var(--accent-color, #3b82f6); }
+
+        /* —— 触摸设备没有 hover ——
+           时间与铃铛都显示（否则二者必有其一不可达），删除按钮常显（维持原状），
+           管理入口不出现（移动端本来就一直看得到删除按钮，该入口无意义） */
+        @media (hover: none) {
+            .subtask-slot .subtask-time-label:not(.hidden),
+            .subtask-slot .subtask-bell-btn,
+            .subtask-delete-btn { display: block !important; }
+            .subtask-manage-btn { display: none !important; }
+        }
+
+        /* 子任务内联提醒面板 */
+        .subtask-reminder-panel {
+            margin: 0.25rem 0 0.5rem 1.5rem;
+            padding: 0.5rem; border-radius: 0.5rem;
+            border: 1px solid var(--border-color, #e5e7eb);
+            background: var(--bg-tertiary, #f9fafb);
+            /* 不能给面板设 overflow：会把「日期/时间快速选择」下拉裁掉。
+               限高交给内部的提前量列表自己处理。 */
+            overflow: visible;
+        }
+        /* 提前量多选列表自身限高（超出滚动），保证面板整体不会过高 */
+        .subtask-reminder-options { max-height: 168px; overflow-y: auto; }
+        /* 提前提醒配置区默认折叠（面板初始带 .advance-collapsed）：
+           折叠时只留标题行 + N/5 计数，选项列表与自定义添加行一起隐藏 */
+        .subtask-reminder-panel.advance-collapsed .subtask-reminder-options,
+        .subtask-reminder-panel.advance-collapsed .subtask-reminder-custom-row { display: none; }
+        /* 展开时箭头由「>」转成「v」 */
+        .subtask-reminder-panel:not(.advance-collapsed) .subtask-advance-chevron { transform: rotate(90deg); }
+        body.has-bg-image .subtask-reminder-panel {
+            background: transparent;
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+        }
+        /* 提前提醒达到上限时的提示抖动 */
+        @keyframes reminder-limit-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-3px); }
+            75% { transform: translateX(3px); }
+        }
+        .reminder-limit-shake { animation: reminder-limit-shake 300ms ease; }
+        @media (prefers-reduced-motion: reduce) { .reminder-limit-shake { animation: none; } }
         /* ============ 平滑过渡动画（设置项：平滑过渡动画 / body.fx-smooth 作用域） ============ */
         /* 桌面端任务详情面板：呼入/呼出（移动端已有 mobilePanelIn，不重复处理）
            both 填充固定动画结束态，避免动画结束后样式回退引起的位置抖动
@@ -2072,7 +2304,16 @@
 border-color: var(--accent-color, #3b82f6);
 background-color: rgba(59, 130, 246, 0.08);
 }
-
+        /* 配色卡片右上角的操作按钮组（按强调色重新派生 / 撤销编辑） */
+        .palette-card-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        /* 强调色与其余层次色相已脱节时，派生按钮高亮提示 */
+        .palette-derive-btn.palette-derive-suggested {
+            color: var(--accent-color, #3b82f6);
+        }
 /* ==================== 移动端适配（依据《移动端显示适配.md》v3.0） ==================== */
 /* 4.2 消除移动端 300ms 点击延迟并禁止双击缩放 */
 html, body, button, [onclick], input, select, textarea, a, label { touch-action: manipulation; }
@@ -2860,24 +3101,19 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
 
                 <div class="grid grid-cols-2 gap-2" data-page-node-id="2WtSSEwnCHxabNSfeclStm">
                     <div class="relative" data-page-node-id="bQk0NOZk29xheGxcZRMjyE">
-                        <button type="button" onclick="toggleDetailReminderPicker()" class="w-full px-3 py-1.5 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-tertiary flex items-center justify-between" data-page-node-id="1cD6a31WqZLhiwAtRkcHsY">
-                            <span data-page-node-id="M727UpIGeVsBMaw0p14wrM"><i class="fas fa-bell mr-2" data-page-node-id="DEtSSHuehVrDluVKHy5WDD"></i><span id="detail-reminder-text" data-page-node-id="Yb65QEQnPUozPqnhCy0jQZ">不提醒</span></span>
-                            <i class="fas fa-chevron-down text-xs" data-page-node-id="j62lGxW6zvw9cNplXobVEo"></i>
+                        <button type="button" onclick="toggleDetailReminderPicker()" class="w-full px-3 py-1.5 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-tertiary flex items-center justify-between gap-1" data-page-node-id="1cD6a31WqZLhiwAtRkcHsY">
+                            <span class="flex items-center min-w-0" data-page-node-id="M727UpIGeVsBMaw0p14wrM"><i class="fas fa-bell mr-2 flex-shrink-0" data-page-node-id="DEtSSHuehVrDluVKHy5WDD"></i><span id="detail-reminder-text" class="truncate" data-page-node-id="Yb65QEQnPUozPqnhCy0jQZ">不提前提醒</span></span>
+                            <span class="flex items-center gap-1 flex-shrink-0">
+                                <span id="detail-reminder-badge" class="hidden text-[10px] leading-4 px-1 rounded bg-theme-secondary text-theme-muted">0</span>
+                                <i class="fas fa-chevron-down text-xs" data-page-node-id="j62lGxW6zvw9cNplXobVEo"></i>
+                            </span>
                         </button>
-                        <div id="detail-reminder-picker" class="hidden absolute left-0 right-0 mt-1 p-2 bg-theme-tertiary rounded-lg border border-theme space-y-1 z-10 shadow-lg" data-page-node-id="CNLtGUCHqrUxzPvAiPZNjk">
-                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary" data-page-node-id="ByeIihFGjBmY94CsINNXSe">
-                                <input type="radio" name="detail-reminder" value="0" class="detail-reminder-option" checked onchange="updateDetailReminderText()" data-page-node-id="WQXKzIoPNbaRYSVNTmNLSn"> 不提醒
-                            </label>
-                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary" data-page-node-id="xtjVQ5XW108xsExVdSjvQx">
-                                <input type="radio" name="detail-reminder" value="5" class="detail-reminder-option" onchange="updateDetailReminderText()" data-page-node-id="3fXGXo9zZYuQ2Bu90Yewga"> 提前5分钟
-                            </label>
-                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary" data-page-node-id="wNiCKDlGqeixss4pxLJQ4z">
-                                <input type="radio" name="detail-reminder" value="1440" class="detail-reminder-option" onchange="updateDetailReminderText()" data-page-node-id="HqWfmdf3IrQzqFGiBtpPR7"> 提前1天
-                            </label>
-                            <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary" data-page-node-id="qFKF6oTEIq0l1dSPzIdIq0">
-                                <input type="radio" name="detail-reminder" value="custom" class="detail-reminder-option" onchange="updateDetailReminderText()" data-page-node-id="Y2N1aX2wKcP8cqu5dlklt3"> 自定义
-                            </label>
-                            <input type="number" id="detail-custom-reminder" class="hidden w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="分钟数" onchange="updateDetailReminderText()" data-page-node-id="p1TY17g6HJG9LtGhoUJCzQ">
+                        <div id="detail-reminder-picker" class="hidden absolute left-0 right-0 mt-1 p-2 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg" style="max-height: 380px; overflow-y: auto;" data-page-node-id="CNLtGUCHqrUxzPvAiPZNjk">
+                            <div id="detail-reminder-options" class="space-y-0.5"></div>
+                            <div id="detail-reminder-custom-row" class="flex items-center gap-1 border-t border-theme mt-1 pt-1">
+                                <input type="number" id="detail-custom-reminder" min="1" max="10080" placeholder="提前分钟数" class="flex-1 min-w-0 px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary">
+                                <button type="button" onclick="addDetailCustomReminder()" class="px-2 py-1 text-xs rounded border border-theme text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap">+ 添加</button>
+                            </div>
                         </div>
                     </div>
                     <div class="relative" data-page-node-id="J3oo8fC2ZEGmfVQj8tFDQC">
@@ -2917,7 +3153,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                         <input type="radio" name="detail-repeat" value="weeklyFirstWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="08bpEqUTGK0bjTK6likSy0"> 每周首个工作日
                                     </label>
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="DNfTdXC0ziH5WGyB3DRIUY">
-                                        <input type="radio" name="detail-repeat" value="weeklyLastWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="9JlfabY1UjsLI7UJMRdZOH"> 每周最后一个工作日
+                                        <input type="radio" name="detail-repeat" value="weeklyLastWorkday" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="9JlfabY1UjsLI7UJMRdZOH"> 工作周期最后一个工作日
                                     </label>
                                 </div>
                             </div>
@@ -2990,8 +3226,21 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
             <div class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col" data-page-node-id="DwupiE79aKOZtzPsykHWJV">
                 <textarea id="detail-task-notes" placeholder="任务详情描述" class="w-full flex-1 bg-transparent border-none outline-none resize-none text-theme-primary min-h-[120px]"></textarea>
                 <!-- 子任务模式下的任务详情描述（置于子任务列表上方） -->
-                <textarea id="detail-task-description" placeholder="任务详情描述" rows="1" class="hidden w-full bg-transparent border-none outline-none resize-none text-theme-primary overflow-y-auto" style="min-height: 36px; max-height: 200px;"></textarea>
-                <div id="subtasks-container" class="hidden space-y-2" data-page-node-id="t9YICD7kz2UgWlsEODri2a"></div>
+                <!-- 子任务内容块：说明行 + 列表。hover 整块任一处都显示「编辑」入口 -->
+                <div id="subtask-content">
+                <div id="subtask-desc-row" class="hidden flex items-start gap-2">
+                    <textarea id="detail-task-description" placeholder="任务详情描述" rows="1" class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-theme-primary overflow-y-auto" style="min-height: 36px; max-height: 200px;"></textarea>
+                    <!-- 「编辑/管理」入口：居右、hover 说明行或子任务区才淡入。
+                         用 opacity 占位而非 display —— 避免悬浮时描述框宽度变化导致文本重排 -->
+                    <button type="button" id="subtask-manage-btn" class="subtask-manage-btn" onclick="toggleSubtaskManageMode()" title="批量管理子任务" aria-label="批量管理子任务">
+                        <i class="fas fa-pen-to-square text-xs"></i>
+                    </button>
+                </div>
+                <!-- 子任务列表（与上面的说明行同步显隐） -->
+                <div id="subtasks-area" class="hidden" data-page-node-id="t9YICD7kz2UgWlsEODri2a">
+                    <div id="subtasks-container" class="space-y-2"></div>
+                </div>
+                </div>
             </div>
 
             <!-- 任务创建/完成时间显示（标签区上方，仅已完成任务显示） -->
@@ -3549,6 +3798,33 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
         </div>
     </div>
 
+    <!-- 内置目录浏览器（系统目录对话框不可用时的兜底，零依赖） -->
+    <div id="bg-dir-browser-modal" class="fixed inset-0 modal-overlay hidden items-center justify-center" style="z-index: 55;" onclick="closeBgDirBrowser()">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-xl mx-4 shadow-2xl flex flex-col max-h-[80vh]" onclick="event.stopPropagation()">
+            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-bold text-theme-primary"><i class="fas fa-folder-open text-theme-muted mr-2"></i>选择图片目录</h2>
+                <button type="button" onclick="closeBgDirBrowser()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
+                    <i class="fas fa-times text-theme-muted"></i>
+                </button>
+            </div>
+            <div class="p-4 border-b border-theme space-y-2 flex-shrink-0">
+                <div class="flex gap-2">
+                    <input type="text" id="bg-dir-browser-path" placeholder="输入目录路径后回车" onkeydown="if(event.key==='Enter'){event.preventDefault();_dirBrowserLoad(this.value,false);}" class="flex-1 min-w-0 px-3 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                    <button type="button" onclick="_dirBrowserLoad(document.getElementById('bg-dir-browser-path').value,false)" class="px-3 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap">前往</button>
+                </div>
+                <div id="bg-dir-browser-shortcuts" class="flex flex-wrap gap-2"></div>
+            </div>
+            <div id="bg-dir-browser-list" class="flex-1 overflow-y-auto p-2 min-h-[12rem]"></div>
+            <div class="p-4 border-t border-theme flex items-center gap-3 flex-shrink-0">
+                <p id="bg-dir-browser-status" class="hidden flex-1 min-w-0 text-xs text-theme-muted truncate"></p>
+                <div class="flex gap-2 ml-auto shrink-0">
+                    <button type="button" onclick="closeBgDirBrowser()" class="px-4 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition">取消</button>
+                    <button type="button" onclick="bgDirBrowserConfirm()" class="px-4 py-2 text-sm bg-accent text-white rounded-lg hover:bg-accent-hover transition">选择此目录</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="boring-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center" onclick="closeBoringModal()" data-page-node-id="UepAh9KDrBJh61cxlF5ZRy">
         <div class="bg-theme-secondary rounded-2xl w-full max-w-lg mx-4 fade-in shadow-2xl" onclick="event.stopPropagation()" data-page-node-id="H4kEL0yqfkkAsAmqNtxiOc">
             <div class="p-6 border-b border-theme" data-page-node-id="UnxDG5oSdBkFFXxJdnvjUQ">
@@ -3762,34 +4038,25 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                         <div class="palette-color-bar mb-1" data-palette="builtin-blue" data-page-node-id="ZhD1qAr4faGBR18wGJpYh7"></div>
                                         <div class="flex items-center justify-between" data-page-node-id="Jdfj3sO30tlL7ZrhEBpNSd">
                                             <div class="text-xs text-theme-secondary" data-page-node-id="pBSOMifwGXNOFhQI5dcfgM">星夜</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="6bR7yW54uDBx9FAwebYOdq"></i>
+                                            <span class="palette-card-actions"><i onmousedown="event.stopPropagation();event.preventDefault();rederivePaletteLayers('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-wand-magic-sparkles palette-derive-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="按强调色重新生成整套配色"></i><i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:blue')" data-palette-key="builtin:blue" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="6bR7yW54uDBx9FAwebYOdq"></i></span>
                                         </div>
                                     </button>
                                     <button onmousedown="startPalettePreview('builtin:green')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:green" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer" data-page-node-id="pqSgsGb6q3sEYPpFMOPFT6">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-green" data-page-node-id="WtkSxkMs4m7pqEWOLwmW40"></div>
                                         <div class="flex items-center justify-between" data-page-node-id="MiWHQGcjUY7Lm8m8jZPpsy">
                                             <div class="text-xs text-theme-secondary" data-page-node-id="OsyDE5X5ZchiFGA8JmJYde">春野</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="ACxTb1zAxNMnDGqRk0qB7F"></i>
+                                            <span class="palette-card-actions"><i onmousedown="event.stopPropagation();event.preventDefault();rederivePaletteLayers('builtin:green')" data-palette-key="builtin:green" class="fas fa-wand-magic-sparkles palette-derive-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="按强调色重新生成整套配色"></i><i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:green')" data-palette-key="builtin:green" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="ACxTb1zAxNMnDGqRk0qB7F"></i></span>
                                         </div>
                                     </button>
                                     <button onmousedown="startPalettePreview('builtin:amber')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:amber" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer" data-page-node-id="AHsHXsEB7CHFpsGPwTb3AM">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-amber" data-page-node-id="iT3HquEWOL8BfQiA0mzQE4"></div>
                                         <div class="flex items-center justify-between" data-page-node-id="HQqdoBMuTBmVTpiQqXbiuI">
                                             <div class="text-xs text-theme-secondary" data-page-node-id="HSWoY5CE7XUHPQzqYyT4Ni">夕照</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:amber')" data-palette-key="builtin:amber" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="CRSJdP8JRKnBearBJsgJaA"></i>
+                                            <span class="palette-card-actions"><i onmousedown="event.stopPropagation();event.preventDefault();rederivePaletteLayers('builtin:amber')" data-palette-key="builtin:amber" class="fas fa-wand-magic-sparkles palette-derive-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="按强调色重新生成整套配色"></i><i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('builtin:amber')" data-palette-key="builtin:amber" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="CRSJdP8JRKnBearBJsgJaA"></i></span>
                                         </div>
                                     </button>
                                 </div>
-
-                                <!-- 自定义主题色 -->
-                                <p class="text-xs text-theme-muted mb-1" data-page-node-id="EP2DCSeFDC6nmgDSlgpEAQ">自定义主题色</p>
-                                <div class="flex gap-2 items-center mb-3" data-page-node-id="N4E6LA7om5AGHG2uucZgzS">
-                                    <input type="color" id="custom-accent-input" value="#3b82f6" onchange="syncCustomAccentInputs('color')" class="w-10 h-9 rounded cursor-pointer border-2 border-theme bg-theme-tertiary" title="选择颜色" data-page-node-id="FZFOw8HzGIz5cEzV5yVBcl">
-                                    <input type="text" id="custom-accent-text" placeholder="#3b82f6" oninput="syncCustomAccentInputs('text')" class="flex-1 px-3 py-1.5 text-sm border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" title="输入十六进制颜色" data-page-node-id="33NT9GQxwHNeUuleYQ5jJ9">
-                                    <button onclick="applyCustomAccent()" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap" data-page-node-id="Y59LTui9poSroaQsENOgc5">
-                                        <i class="fas fa-check mr-1" data-page-node-id="zdP6Xipv9oHmESDUnFsqON"></i>应用
-                                    </button>
-                                </div>
+                                <p class="text-xs text-theme-muted mb-3">点击色块可单独调整颜色。修改强调色后，点击重新配色按钮即可自动生成整套配色。</p>
 
                                 <!-- 背景图取色 -->
                                 <p class="text-xs text-theme-muted mb-1" data-page-node-id="acI1WYujGFbuWKUQYcGptx">背景图取色</p>
@@ -3809,21 +4076,21 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                         <div class="palette-color-bar mb-1" data-palette="vibrant" data-page-node-id="fjoZuwgC5f2Zh5iPrgzt5U"></div>
                                         <div class="flex items-center justify-between" data-page-node-id="Gj8UzxqvxRcTQApWFv0Yxr">
                                             <div class="text-xs text-theme-secondary" data-page-node-id="1ZnCOBfSBEdkDFovDSwbBD">鲜艳</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('vibrant')" data-palette-key="vibrant" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="jSwa4UO5wfdcCqC9sFWVpf"></i>
+                                            <span class="palette-card-actions"><i onmousedown="event.stopPropagation();event.preventDefault();rederivePaletteLayers('vibrant')" data-palette-key="vibrant" class="fas fa-wand-magic-sparkles palette-derive-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="按强调色重新生成整套配色"></i><i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('vibrant')" data-palette-key="vibrant" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="jSwa4UO5wfdcCqC9sFWVpf"></i></span>
                                         </div>
                                     </button>
                                     <button onmousedown="startPalettePreview('muted')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="muted" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer" data-page-node-id="ozClzhIdrecLJs9TDxp5do">
                                         <div class="palette-color-bar mb-1" data-palette="muted" data-page-node-id="nNJfjBsaHJEC4PxqxkA7a2"></div>
                                         <div class="flex items-center justify-between" data-page-node-id="9UR1SnmAuSBqTquxnDYEvJ">
                                             <div class="text-xs text-theme-secondary" data-page-node-id="kgBmDdbbH5P74GHHGf3FQx">柔和</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="pQLTKjbPcdnjVRavg9mzI5"></i>
+                                            <span class="palette-card-actions"><i onmousedown="event.stopPropagation();event.preventDefault();rederivePaletteLayers('muted')" data-palette-key="muted" class="fas fa-wand-magic-sparkles palette-derive-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="按强调色重新生成整套配色"></i><i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('muted')" data-palette-key="muted" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="pQLTKjbPcdnjVRavg9mzI5"></i></span>
                                         </div>
                                     </button>
                                     <button onmousedown="startPalettePreview('steady')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="steady" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer" data-page-node-id="NaFL4AJiL93DzbS3xQoGsT">
                                         <div class="palette-color-bar mb-1" data-palette="steady" data-page-node-id="kY0DJ27BM2xH6V4v1NWwka"></div>
                                         <div class="flex items-center justify-between" data-page-node-id="woH0FhhBPrzyUItTU3g9i1">
                                             <div class="text-xs text-theme-secondary" data-page-node-id="kpvyCu1QE3gxDW3KBHg6dA">沉稳</div>
-                                            <i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('steady')" data-palette-key="steady" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="tpdb8SFQKW6ZXMAjPOfleU"></i>
+                                            <span class="palette-card-actions"><i onmousedown="event.stopPropagation();event.preventDefault();rederivePaletteLayers('steady')" data-palette-key="steady" class="fas fa-wand-magic-sparkles palette-derive-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="按强调色重新生成整套配色"></i><i onmousedown="event.stopPropagation();event.preventDefault();resetPaletteEdit('steady')" data-palette-key="steady" class="fas fa-undo palette-reset-btn text-xs text-theme-muted hover:text-accent transition" style="display:none" title="撤销编辑" data-page-node-id="tpdb8SFQKW6ZXMAjPOfleU"></i></span>
                                         </div>
                                     </button>
                                 </div>
@@ -4361,7 +4628,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.1</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.2</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>

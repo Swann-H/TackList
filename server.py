@@ -15,6 +15,7 @@ if sys.stderr is None:
 import json
 import threading
 import subprocess
+import shutil
 import time
 import signal
 import socket
@@ -97,11 +98,121 @@ def get_local_ip():
         return "127.0.0.1"
 
 data_lock = threading.Lock()
-notified_task_ids = set()
+# 已提醒去重集合（任务+时间点级）。
+# 元素形如 "task_xxx@0@1758326400000"（准点）、"task_xxx@30@1758326400000"（提前 30 分钟）、
+#        "task_xxx@sub_yyy@0@1758326400000"（子任务准点）。
+# 末段 base_ms 为任务/子任务的时间戳：时间一变 key 全部失效，重复任务顺延/改时间后可再次提醒。
+notified_reminder_keys = set()
 notified_task_ids_lock = threading.Lock()
-# 稍后提醒队列: {task_id: remind_again_after_timestamp_ms}
+# 稍后提醒队列: {"task_id@_task" 或 "task_id@sub_yyy": remind_again_after_timestamp_ms}
 snoozed_reminders = {}
 snoozed_reminders_lock = threading.Lock()
+
+# 提醒触发窗口（毫秒）：围绕每个提醒时间点的容差。
+# diff = 提醒时刻 - 当前时刻，故 diff<0 表示提醒时刻已过、diff>0 表示还没到。
+# 早到容差 30s（时钟抖动）；迟到容差 60s（巡检间隔 30s，向后放宽以覆盖漏拍，
+# 避免"差一点错过窗口就永不提醒"）。
+REMINDER_EARLY_TOLERANCE_MS = 30000
+REMINDER_LATE_TOLERANCE_MS = 60000
+# 提前提醒：最多 5 个，取值范围 1 ~ 10080 分钟（7 天）
+REMINDER_MAX_COUNT = 5
+REMINDER_MAX_MINUTES = 10080
+
+
+def _reminder_key(task_id, minute, subtask_id=None, base_ms=0):
+    """构造提醒去重键。minute=0 表示准点。base_ms 为对应任务/子任务的时间戳。"""
+    who = '%s@%s' % (task_id, subtask_id) if subtask_id else task_id
+    return '%s@%d@%d' % (who, minute, base_ms)
+
+
+def _snooze_key(task_id, subtask_id=None):
+    """构造稍后提醒队列的键。"""
+    return '%s@%s' % (task_id, subtask_id or '_task')
+
+
+def _normalize_reminder_minutes(raw):
+    """归一化提前提醒数组：仅保留 1~10080 的整数，去重、降序、截断 5 个。"""
+    out = []
+    if isinstance(raw, list):
+        for v in raw:
+            try:
+                m = int(v)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= m <= REMINDER_MAX_MINUTES and m not in out:
+                out.append(m)
+    return sorted(out, reverse=True)[:REMINDER_MAX_COUNT]
+
+
+def _task_advance_minutes(task):
+    """读取任务的提前量列表；兼容旧字段 reminder（>0 视为一个提前量）。"""
+    raw = task.get('reminders')
+    if isinstance(raw, list):
+        return _normalize_reminder_minutes(raw)
+    old = task.get('reminder')
+    if isinstance(old, (int, float)) and old > 0:
+        return [int(old)]
+    return []
+
+
+def _fire_points(base_ms, advance_minutes):
+    """返回 [(minute, fire_ms, kind)]；minute=0 恒为第一项（准点，系统固有行为）。"""
+    points = [(0, base_ms, 'ondot')]
+    for m in advance_minutes:
+        points.append((m, base_ms - m * 60 * 1000, 'advance'))
+    return points
+
+
+def _try_fire(key, fire_ms, now_ms):
+    """窗口判定 + 原子去重；返回 True 表示本次应触发。
+
+    diff = fire_ms - now_ms：>0 为尚未到点（允许提前 30s 抖动），<0 为已过点（允许补发 60s）。
+    """
+    diff = fire_ms - now_ms
+    if not (-REMINDER_LATE_TOLERANCE_MS <= diff <= REMINDER_EARLY_TOLERANCE_MS):
+        return False
+    with notified_task_ids_lock:
+        if key in notified_reminder_keys:
+            return False
+        notified_reminder_keys.add(key)
+    return True
+
+
+def _humanize_minute(minute):
+    """把提前分钟数转成人类可读文案：5 分钟 / 1 小时 / 1 天。"""
+    try:
+        m = int(minute)
+    except (TypeError, ValueError):
+        return ''
+    if m >= 1440 and m % 1440 == 0:
+        d = m // 1440
+        return '1 天' if d == 1 else '%d 天' % d
+    if m >= 60 and m % 60 == 0:
+        h = m // 60
+        return '1 小时' if h == 1 else '%d 小时' % h
+    return '%d 分钟' % m
+
+
+def _truncate_for_title(text, limit=24):
+    """系统通知的软截断（标题与正文共用，limit 由调用方按承载位传）。
+
+    系统通知没有 CSS 省略号，过长内容会把通知撑爆；前端 Toast 另有 CSS truncate 兜底。
+    标题档 limit=24（子任务名）；正文档 limit=80（任务详情描述）。
+    """
+    t = (text or '').strip()
+    return t if len(t) <= limit else t[:limit - 1] + '…'
+
+
+def _list_prefix(list_id, data):
+    """清单名前缀：非默认清单返回 '清单名 | '，否则空串。"""
+    list_name = ''
+    for lst in (data.get('taskLists') or []):
+        if lst.get('id') == list_id:
+            list_name = lst.get('name', '')
+            break
+    if list_name and list_name != '默认':
+        return list_name + ' | '
+    return ''
 
 pomodoro_state = {
     "running": False,
@@ -619,13 +730,25 @@ def _send_windows_notify(title, body):
     except Exception:
         pass
 
-def send_notify_send(title, body, task_id=None, category=None):
+def send_notify_send(title, body, task_id=None, category=None, subtask_id=None,
+                     reminder_kind=None, reminder_minute=0):
+    """发通知（系统通知 + 前端队列）。
+
+    reminder_kind / reminder_minute：提醒类型（ondot 准点 / advance 提前量 / snooze 稍后）
+    与提前分钟数。标题里的「· N 分钟后」只服务于系统通知栏（它只有一行标题）；
+    应用内 Toast 需要靠这两个字段把时机改放到图标徽标上，标题行保持规整格式。
+    """
     global _notify_env
     notif_data = {'title': title, 'body': body or ''}
     if task_id:
         notif_data['taskId'] = task_id
+    if subtask_id:
+        notif_data['subtaskId'] = subtask_id
     if category:
         notif_data['category'] = category
+    if reminder_kind:
+        notif_data['reminderKind'] = reminder_kind
+        notif_data['reminderMinute'] = int(reminder_minute or 0)
     with pending_notifications_lock:
         # 同类通知覆盖：新通知到达时清除同类的旧通知
         # 确保用户只看到最新阶段的状态（如休息结束时清除专注完成通知）
@@ -949,6 +1072,7 @@ def _do_calendar_sync():
                 t['isAllDay'] = is_all_day
                 t['notes'] = notes
                 t['reminder'] = 0
+                t['reminders'] = []
                 t['repeat'] = rrule
                 # completed / completedAt / tags / important / urgent / listId / progress 保留本地
                 result['updated'] += 1
@@ -966,6 +1090,7 @@ def _do_calendar_sync():
                     'endTime': end_iso,
                     'isAllDay': is_all_day,
                     'reminder': 0,
+                    'reminders': [],
                     'repeat': rrule,
                     'completed': False,
                     'createdAt': now.isoformat().replace('+00:00', 'Z'),
@@ -1206,159 +1331,536 @@ def bg_carousel_loop():
         time.sleep(1)
 
 
-def _bg_pick_directory_dialog():
-    """在服务器所在机器上弹出系统目录选择对话框，返回所选路径（取消/不可用返回 None）。
-    优先 tkinter；不可用时 Windows 回退 PowerShell FolderBrowserDialog，Linux 回退 zenity。"""
-    # tkinter
+# ==================== 系统目录选择对话框（跨平台） ====================
+# 关键约束：GUI 对话框一律在独立子进程中弹出，不在 HTTP 处理线程里创建 Tk / Qt 对象。
+# 线程内建 Tk 在部分发行版（如银河麒麟）上会直接抛异常，且异常被吞掉后只剩
+# 「未选择目录」这一条无信息量的提示；放进子进程后失败可判读、可换后端、可超时。
+
+# tkinter 目录选择脚本。退出码：0=已选（路径走 stdout），2=用户取消，3/4/5=该解释器不可用
+_TK_DIR_PICK_SCRIPT = r'''
+import sys
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+except Exception:
+    sys.exit(3)
+try:
+    root = tk.Tk()
+except Exception:
+    sys.exit(4)
+root.withdraw()
+try:
+    root.attributes('-topmost', True)
+    root.update()
+except Exception:
+    pass
+try:
+    path = filedialog.askdirectory(parent=root, title='选择壁纸目录')
+except Exception:
+    sys.exit(5)
+try:
+    root.destroy()
+except Exception:
+    pass
+sys.stdout.write(path or '')
+sys.exit(0 if path else 2)
+'''
+
+# Qt 目录选择脚本（银河麒麟 / UOS 自带 PyQt5，zenity 往往没装）。
+# 退出码：0=已选，2=用户取消，3=无 Qt 绑定，4=弹窗失败
+_QT_DIR_PICK_SCRIPT = r'''
+import os
+import sys
+bindings = ('PyQt5.QtWidgets', 'PySide2.QtWidgets', 'PyQt6.QtWidgets', 'PySide6.QtWidgets')
+widgets = None
+for name in bindings:
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        root.focus_force()
-        path = filedialog.askdirectory(parent=root, title='选择壁纸目录')
-        root.destroy()
-        if path:
-            return path
-        return None
+        widgets = __import__(name, fromlist=['*'])
+        break
+    except Exception:
+        widgets = None
+if widgets is None:
+    sys.exit(3)
+try:
+    app = widgets.QApplication.instance() or widgets.QApplication(sys.argv[:1])
+    path = widgets.QFileDialog.getExistingDirectory(
+        None, '选择壁纸目录', os.path.expanduser('~'))
+except Exception:
+    sys.exit(4)
+sys.stdout.write(path or '')
+sys.exit(0 if path else 2)
+'''
+
+# 命令行目录选择器：zenity / kdialog / qarma / yad，存在即用
+_LINUX_CLI_PICKERS = ('zenity', 'kdialog', 'qarma', 'yad')
+
+# 判定"对话框根本没弹出来"（而不是用户取消）的 stderr 特征
+_DISPLAY_FAIL_HINTS = (
+    'cannot open display', "can't open display", 'unable to open display',
+    'could not connect', 'unable to init server', 'no display',
+    'cannot connect to x server', 'display is not set',
+)
+
+
+def _home_dir():
+    """当前用户主目录。expanduser 在 HOME 缺失且 pwd 不可用时会原样返回 '~'，
+    此时再退到环境变量，避免内置目录浏览器一起步就落到无效路径。"""
+    home = os.path.expanduser('~')
+    if not home or home == '~':
+        home = os.environ.get('HOME') or os.environ.get('USERPROFILE') or ''
+    return home
+
+
+def _guess_display():
+    """推断 X11 DISPLAY：优先环境变量，其次 /tmp/.X11-unix 下的套接字，最后回退 :0"""
+    try:
+        for name in sorted(os.listdir('/tmp/.X11-unix')):
+            if name.startswith('X') and name[1:].isdigit():
+                return ':' + name[1:]
     except Exception:
         pass
+    return ':0'
+
+
+def _gui_session_env():
+    """为 GUI 子进程补齐图形会话环境变量。
+
+    服务常由 nohup / 自启动脚本 / systemd 拉起，DISPLAY、XAUTHORITY、
+    DBUS_SESSION_BUS_ADDRESS 可能缺失，tkinter / zenity 会静默失败——
+    表现就是"点了「选择目录」什么都不弹"。这里按可推断的信息补齐。"""
+    env = os.environ.copy()
     if IS_WINDOWS:
+        return env
+    if not env.get('DISPLAY'):
+        env['DISPLAY'] = _guess_display()
+    if not env.get('XAUTHORITY'):
+        xauth = os.path.join(os.path.expanduser('~'), '.Xauthority')
+        if os.path.isfile(xauth):
+            env['XAUTHORITY'] = xauth
+    if not env.get('XDG_RUNTIME_DIR'):
         try:
-            ps_script = (
-                "Add-Type -AssemblyName System.Windows.Forms;"
-                "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
-                "$d.Description = '选择壁纸目录';"
-                "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
-                "{ Write-Output $d.SelectedPath }"
-            )
-            result = subprocess.run(
-                ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', ps_script],
-                capture_output=True, text=True, timeout=600,
-                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
-            )
+            runtime = '/run/user/%d' % os.getuid()
+            if os.path.isdir(runtime):
+                env['XDG_RUNTIME_DIR'] = runtime
+        except Exception:
+            pass
+    if not env.get('WAYLAND_DISPLAY'):
+        try:
+            runtime = env.get('XDG_RUNTIME_DIR', '')
+            for name in ('wayland-0', 'wayland-1'):
+                if runtime and os.path.exists(os.path.join(runtime, name)):
+                    env['WAYLAND_DISPLAY'] = name
+                    break
+        except Exception:
+            pass
+    if not env.get('DBUS_SESSION_BUS_ADDRESS'):
+        try:
+            bus = os.path.join(env.get('XDG_RUNTIME_DIR', ''), 'bus')
+            if env.get('XDG_RUNTIME_DIR') and os.path.exists(bus):
+                env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=' + bus
+            else:
+                # 老式会话：~/.dbus/session-bus/<machine>-<display> 里存有总线地址
+                display = env.get('DISPLAY', ':0').replace(':', '').split('.')[0]
+                bus_dir = os.path.expanduser('~/.dbus/session-bus/')
+                for fname in os.listdir(bus_dir):
+                    if display not in fname:
+                        continue
+                    with open(os.path.join(bus_dir, fname), 'r') as fh:
+                        for line in fh:
+                            if line.startswith('DBUS_SESSION_BUS_ADDRESS='):
+                                env['DBUS_SESSION_BUS_ADDRESS'] = line.split('=', 1)[1].strip().rstrip(';')
+                                break
+                    break
+        except Exception:
+            pass
+    return env
+
+
+def _candidate_interpreters():
+    """候选 Python 解释器（去重保序）：当前解释器 → PATH 上的 python3 / python。
+    自启动环境里的 sys.executable 可能没装 python3-tk，而系统 python3 装了（反之亦然），
+    所以逐个试，而不是只认一个。"""
+    result = []
+    for exe in [sys.executable, shutil.which('python3'), shutil.which('python')]:
+        if exe and exe not in result:
+            result.append(exe)
+    return result
+
+
+def _pick_dir_subprocess(script, env, unavailable_codes):
+    """跑一个"打印路径到 stdout"的子进程对话框脚本，逐个解释器尝试。
+
+    返回 (path, reason)：reason 为 ok / cancelled / unavailable / error"""
+    saw_error = False
+    for exe in _candidate_interpreters():
+        try:
+            result = subprocess.run([exe, '-c', script],
+                                    capture_output=True, text=True, timeout=600, env=env)
+        except Exception:
+            continue
+        if result.returncode == 0:
             path = (result.stdout or '').strip()
-            return path if path else None
-        except Exception:
-            return None
-    else:
+            return (path, 'ok') if path else (None, 'cancelled')
+        if result.returncode == 2:
+            return None, 'cancelled'
+        if result.returncode not in unavailable_codes:
+            # 非约定退出码（多为脚本异常）：换下一个解释器再试，别就此放弃
+            saw_error = True
+    return (None, 'error') if saw_error else (None, 'unavailable')
+
+
+def _pick_dir_tkinter(env):
+    """tkinter 目录选择（子进程）"""
+    return _pick_dir_subprocess(_TK_DIR_PICK_SCRIPT, env, (3, 4, 5))
+
+
+def _pick_dir_qt(env):
+    """Qt 目录选择（子进程）。银河麒麟 / UOS 默认带 PyQt5，覆盖 zenity 缺失的场景。"""
+    return _pick_dir_subprocess(_QT_DIR_PICK_SCRIPT, env, (3, 4))
+
+
+def _pick_dir_cli(env):
+    """zenity / kdialog / qarma / yad 目录选择。
+    这类工具的约定是：0=确定，1=取消；但连不上显示服务时也返回 1，
+    因此再用 stderr 特征区分"真取消"和"压根没弹出来"，后者继续换下一个后端。"""
+    home = _home_dir()
+    for name in _LINUX_CLI_PICKERS:
+        exe = shutil.which(name)
+        if not exe:
+            continue
+        if name == 'kdialog':
+            argv = [exe, '--getexistingdirectory', home, '--title', '选择壁纸目录']
+        else:
+            argv = [exe, '--file-selection', '--directory', '--title=选择壁纸目录']
         try:
-            result = subprocess.run(
-                ['zenity', '--file-selection', '--directory', '--title=选择壁纸目录'],
-                capture_output=True, text=True, timeout=600
-            )
-            if result.returncode == 0:
-                path = (result.stdout or '').strip()
-                return path if path else None
-            return None
+            result = subprocess.run(argv, capture_output=True, text=True,
+                                    timeout=600, env=env)
         except Exception:
-            return None
+            continue
+        out = (result.stdout or '').strip()
+        err = (result.stderr or '').lower()
+        if result.returncode == 0:
+            return (out, 'ok') if out else (None, 'cancelled')
+        if result.returncode == 1 and not any(h in err for h in _DISPLAY_FAIL_HINTS):
+            return None, 'cancelled'
+    return None, 'unavailable'
+
+
+def _pick_dir_windows():
+    """Windows：tkinter（子进程）→ PowerShell FolderBrowserDialog"""
+    env = os.environ.copy()
+    path, reason = _pick_dir_tkinter(env)
+    if reason in ('ok', 'cancelled'):
+        return path, reason
+    try:
+        ps_script = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
+            "$d.Description = '选择壁纸目录';"
+            "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
+            "{ Write-Output $d.SelectedPath }"
+        )
+        result = subprocess.run(
+            ['powershell', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', ps_script],
+            capture_output=True, text=True, timeout=600,
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
+        )
+        path = (result.stdout or '').strip()
+        return (path, 'ok') if path else (None, 'cancelled')
+    except Exception:
+        return None, 'unavailable'
+
+
+def _bg_pick_directory_dialog():
+    """在服务器所在机器上弹出系统目录选择对话框。
+
+    返回 (path, reason)：
+      path   选中的目录绝对路径；未选中为 None
+      reason 'ok'          已选择
+             'cancelled'   用户主动取消（调用方提示"未选择目录"）
+             'unavailable' 当前环境没有可用的图形对话框（缺 python3-tk / zenity，
+                           或服务跑在无图形会话的环境）→ 调用方回退内置目录浏览器
+             'error'       对话框存在但调用出错
+    后端按 可用性 依次尝试：tkinter → Qt(PyQt5) → zenity/kdialog/qarma/yad；
+    任一后端弹出了对话框（无论用户选还是取消）即终止，不会连弹两次。"""
+    if IS_WINDOWS:
+        return _pick_dir_windows()
+    env = _gui_session_env()
+    saw_error = False
+    for picker in (_pick_dir_tkinter, _pick_dir_qt, _pick_dir_cli):
+        try:
+            path, reason = picker(env)
+        except Exception:
+            continue
+        if reason in ('ok', 'cancelled'):
+            return path, reason
+        if reason == 'error':
+            saw_error = True
+    return (None, 'error') if saw_error else (None, 'unavailable')
+
+
+# ---------- 内置目录浏览器（系统对话框不可用时的零依赖兜底） ----------
+
+_xdg_user_dirs_cache = None
+
+
+def _xdg_user_dirs():
+    """读取 XDG 用户目录（与语言/发行版无关）。
+
+    中文系统是 ~/桌面、~/图片，英文是 ~/Desktop、~/Pictures，法语是 ~/Bureau……
+    硬编码目录名只能覆盖中英两种；xdg-user-dir 是各桌面发行版的统一口径，
+    缺失（如精简安装）时返回空表，由调用方回退到中英文候选名。"""
+    global _xdg_user_dirs_cache
+    if _xdg_user_dirs_cache is not None:
+        return _xdg_user_dirs_cache
+    found = {}
+    if not IS_WINDOWS:
+        exe = shutil.which('xdg-user-dir')
+        if exe:
+            for key in ('DESKTOP', 'DOWNLOAD', 'PICTURES'):
+                try:
+                    out = subprocess.run([exe, key], capture_output=True,
+                                         text=True, timeout=5)
+                    p = (out.stdout or '').strip()
+                    if p and os.path.isdir(p):
+                        found[key] = p
+                except Exception:
+                    pass
+    _xdg_user_dirs_cache = found
+    return found
+
+
+def _bg_dir_shortcuts():
+    """内置目录浏览器的快捷入口（目录存在才返回）"""
+    home = _home_dir()
+    xdg = _xdg_user_dirs()
+    candidates = (
+        ('主目录', home),
+        ('桌面', xdg.get('DESKTOP') or os.path.join(home, '桌面')),
+        ('桌面', os.path.join(home, 'Desktop')),
+        ('图片', xdg.get('PICTURES') or os.path.join(home, '图片')),
+        ('图片', os.path.join(home, 'Pictures')),
+        ('下载', xdg.get('DOWNLOAD') or os.path.join(home, '下载')),
+        ('下载', os.path.join(home, 'Downloads')),
+    )
+    result = []
+    seen = set()
+    for name, p in candidates:
+        if not p or p in seen or not os.path.isdir(p):
+            continue
+        seen.add(p)
+        result.append({'name': name, 'path': p})
+    return result
+
+
+def _bg_browse_directory(raw_path):
+    """列出某目录下的子目录，供前端内置目录浏览器使用。
+    只读、只返回目录（不返回文件名），不跟随越权——本功能只需要选目录。"""
+    home = _home_dir()
+    target = (raw_path or '').strip() or home
+    try:
+        target = os.path.realpath(os.path.abspath(os.path.expanduser(target)))
+    except Exception:
+        return {'success': False, 'reason': 'bad_path', 'message': '路径无法解析'}
+    if not os.path.exists(target):
+        return {'success': False, 'reason': 'not_found', 'message': '目录不存在：%s' % target}
+    if not os.path.isdir(target):
+        return {'success': False, 'reason': 'not_dir', 'message': '不是目录：%s' % target}
+    try:
+        names = os.listdir(target)
+    except PermissionError:
+        return {'success': False, 'reason': 'denied', 'message': '没有权限读取：%s' % target}
+    except Exception as e:
+        return {'success': False, 'reason': 'error', 'message': str(e)}
+    visible, hidden = [], []
+    for name in names:
+        full = os.path.join(target, name)
+        try:
+            if not os.path.isdir(full):
+                continue
+        except Exception:
+            continue
+        item = {'name': name, 'path': full}
+        (hidden if name.startswith('.') else visible).append(item)
+    visible.sort(key=lambda x: x['name'].lower())
+    hidden.sort(key=lambda x: x['name'].lower())
+    parent = os.path.dirname(target)
+    return {
+        'success': True,
+        'path': target,
+        'parent': parent if parent and parent != target else '',
+        'home': home,
+        'shortcuts': _bg_dir_shortcuts(),
+        'entries': visible + hidden,
+    }
+
+
+def _fire_task_reminder(task, minute, kind, data):
+    """主任务提醒：系统通知 + 前端队列。minute=0 为准点（kind='ondot'/'snooze'）。"""
+    task_id = task.get('id', '')
+    task_name = task.get('title') or '未命名任务'
+    try:
+        local_time = parse_iso_datetime(task['startTime']).astimezone()
+        time_str = local_time.strftime('%H:%M')
+        date_str = local_time.strftime('%m-%d')
+    except Exception:
+        time_str, date_str = '??:??', ''
+
+    # 提前量：标题带"距开始还有多久"；准点：沿用现有纯时间格式
+    if kind == 'advance' and minute > 0:
+        if minute >= 1440:
+            base_title = '%s %s · %s' % (date_str, time_str, _humanize_minute(minute))
+        else:
+            base_title = '%s · %s后' % (time_str, _humanize_minute(minute))
+    else:
+        base_title = time_str
+
+    notes = task.get('notes', '')
+    list_prefix = _list_prefix(task.get('listId'), data)
+    if notes and notes.strip():
+        # 保持旧行为：有 notes 时标题带任务名，正文用 notes
+        title = '%s %s' % (base_title, task_name)
+        body = list_prefix + notes.strip()
+    else:
+        title = base_title
+        body = list_prefix + task_name
+
+    send_notify_send(title, body, task_id=task_id, reminder_kind=kind, reminder_minute=minute)
+    play_notification_sound()
+
+
+def _reminder_body_head(task, task_name):
+    """子任务提醒正文的「头部」：任务名，子任务模式下再挂上详情描述。
+
+    子任务模式且填了详情描述时返回 `任务名 · 详情描述`。
+    用户 2026-09-23 明确：系统通知看不到应用内界面，**任务名与描述都要保留**
+    （应用内 Toast 第 2 行是「描述顶替任务名」，两者口径有意不同，别去"统一"）。
+    非子任务模式（`mode` 缺省或 `'text'`）或未填描述 → 只返回任务名，旧正文一字不变。
+    描述是自由文本、系统通知没有省略号，故按正文档软截断到 80 字（标题档是 24）。
+    """
+    if (task.get('mode') or 'text') != 'text':
+        description = _truncate_for_title(task.get('description'), limit=80)
+        if description:
+            return '%s · %s' % (task_name, description)
+    return task_name
+
+
+def _fire_subtask_reminder(task, subtask, minute, kind, data):
+    """子任务提醒：系统通知 + 前端队列。
+
+    正文格式：`清单名 | 头部 → 子任务文本（已完成/总数）`
+    头部 = 任务名；子任务模式且填了详情描述时为 `任务名 · 详情描述`（见 _reminder_body_head）
+    标题格式：准点 `09:00 · 子任务名`；提前量 `08:50 · 10 分钟后 · 子任务名`
+    标题始终带子任务名（不论子任务多少条）：系统通知看不到应用内的子任务列表，
+    标题里有名字才能一眼看出是哪一步到点。
+    """
+    task_id = task.get('id', '')
+    st_id = subtask.get('id', '')
+    task_name = task.get('title') or '未命名任务'
+    st_text = (subtask.get('text') or '').strip() or '未命名子任务'
+
+    try:
+        local_time = parse_iso_datetime(subtask['startTime']).astimezone()
+        time_str = local_time.strftime('%H:%M')
+        date_str = local_time.strftime('%m-%d')
+    except Exception:
+        time_str, date_str = '??:??', ''
+
+    subs = [s for s in (task.get('subtasks') or []) if (s.get('text') or '').strip()]
+    done = len([s for s in subs if s.get('completed')])
+    total = len(subs)
+    progress = '（%d/%d）' % (done, total) if total else ''
+
+    list_prefix = _list_prefix(task.get('listId'), data)
+
+    # 标题里用真实子任务名（过长软截断），无论子任务有多少条都带名字。
+    # （曾按「仅 > 1 条时带名字」实现过，已按用户要求撤销：标题始终写名字更一致）
+    st_title = _truncate_for_title(st_text)
+    if kind == 'advance' and minute > 0:
+        if minute >= 1440:
+            title = '%s %s · %s · %s' % (date_str, time_str, _humanize_minute(minute), st_title)
+        else:
+            title = '%s · %s后 · %s' % (time_str, _humanize_minute(minute), st_title)
+    else:
+        title = '%s · %s' % (time_str, st_title)
+
+    body = '%s%s → %s%s' % (list_prefix, _reminder_body_head(task, task_name), st_text, progress)
+
+    # 不传 category：同一时刻多个子任务到点时应各自独立入队，避免被同类覆盖丢消息
+    send_notify_send(title, body, task_id=task_id, subtask_id=st_id,
+                     reminder_kind=kind, reminder_minute=minute)
+    play_notification_sound()
 
 
 def check_task_reminders():
-    global notified_task_ids
     try:
         data = load_data_from_file()
         tasks = data.get('tasks', [])
-        now = datetime.now(timezone.utc)
-        now_ms = int(now.timestamp() * 1000)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-        # Check snoozed reminders: if snooze time expired, re-notify
+        # —— 稍后提醒：到期后直接重发 ——
         with snoozed_reminders_lock:
-            expired_snooze_ids = [tid for tid, ts in snoozed_reminders.items() if now_ms >= ts]
-            for tid in expired_snooze_ids:
-                del snoozed_reminders[tid]
+            expired = [(k, ts) for k, ts in snoozed_reminders.items() if now_ms >= ts]
+            for k, _ in expired:
+                del snoozed_reminders[k]
 
-        if expired_snooze_ids:
-            for task in tasks:
-                task_id = task.get('id', '')
-                if task_id not in expired_snooze_ids:
+        for skey, _ in expired:
+            task_id, _, sub_id = skey.partition('@')
+            if sub_id == '_task':
+                sub_id = None
+            task = next((t for t in tasks if t.get('id') == task_id), None)
+            if not task or task.get('completed'):
+                continue
+            if sub_id:
+                st = next((s for s in (task.get('subtasks') or []) if s.get('id') == sub_id), None)
+                if not st or st.get('completed') or not st.get('startTime'):
                     continue
-                if task.get('completed'):
+                if not (st.get('text') or '').strip():
                     continue
-                with notified_task_ids_lock:
-                    notified_task_ids.discard(task_id)
-                task_name = task.get('title', '未命名任务')
-                try:
-                    task_time = parse_iso_datetime(task['startTime'])
-                    local_time = task_time.astimezone()
-                    time_str = local_time.strftime('%H:%M')
-                except Exception:
-                    time_str = '??:??'
-                notes = task.get('notes', '')
-                list_id = task.get('listId', '')
-                list_name = ''
-                for lst in data.get('taskLists', []):
-                    if lst.get('id') == list_id:
-                        list_name = lst.get('name', '')
-                        break
-                list_prefix = ''
-                if list_name and list_name != '默认':
-                    list_prefix = list_name + ' | '
-                if notes and notes.strip():
-                    title = '%s %s' % (time_str, task_name)
-                    body = list_prefix + notes.strip()
-                else:
-                    title = time_str
-                    body = list_prefix + task_name
-                with notified_task_ids_lock:
-                    notified_task_ids.add(task_id)
-                send_notify_send(title, body, task_id=task_id)
-                play_notification_sound()
+                _fire_subtask_reminder(task, st, 0, 'snooze', data)
+            else:
+                if not task.get('startTime') or task.get('isAllDay'):
+                    continue
+                _fire_task_reminder(task, 0, 'snooze', data)
 
+        # —— 主任务：准点无条件触发 + 用户配置的提前量 ——
         for task in tasks:
-            if not task.get('startTime') or task.get('completed'):
+            # 无时间 / 已完成 / 全天 一律跳过（全天任务无具体时刻可作"准点"）
+            if not task.get('startTime') or task.get('completed') or task.get('isAllDay'):
                 continue
-            if task.get('isAllDay'):
-                continue
-            reminder = task.get('reminder', 0)
             task_id = task.get('id', '')
-            with notified_task_ids_lock:
-                if task_id in notified_task_ids:
-                    continue
-
             try:
-                task_time = parse_iso_datetime(task['startTime'])
-                task_time_ms = int(task_time.timestamp() * 1000)
+                task_time_ms = int(parse_iso_datetime(task['startTime']).timestamp() * 1000)
             except Exception:
                 continue
+            for minute, fire_ms, kind in _fire_points(task_time_ms, _task_advance_minutes(task)):
+                key = _reminder_key(task_id, minute, base_ms=task_time_ms)
+                if _try_fire(key, fire_ms, now_ms):
+                    _fire_task_reminder(task, minute, kind, data)
 
-            diff = task_time_ms - now_ms
-            should_notify = False
-
-            if reminder and reminder > 0:
-                remind_ms = reminder * 60 * 1000
-                if 0 < diff <= remind_ms:
-                    should_notify = True
-            else:
-                if -30000 <= diff <= 30000:
-                    should_notify = True
-
-            if should_notify:
-                with notified_task_ids_lock:
-                    notified_task_ids.add(task_id)
-                task_name = task.get('title', '未命名任务')
-                local_time = task_time.astimezone()
-                time_str = local_time.strftime('%H:%M')
-                notes = task.get('notes', '')
-                list_id = task.get('listId', '')
-                list_name = ''
-                for lst in data.get('taskLists', []):
-                    if lst.get('id') == list_id:
-                        list_name = lst.get('name', '')
-                        break
-                list_prefix = ''
-                if list_name and list_name != '默认':
-                    list_prefix = list_name + ' | '
-                if notes and notes.strip():
-                    title = '%s %s' % (time_str, task_name)
-                    body = list_prefix + notes.strip()
-                else:
-                    title = time_str
-                    body = list_prefix + task_name
-                send_notify_send(title, body, task_id=task_id)
-                play_notification_sound()
+        # —— 子任务：与主任务同规则（准点恒触发 + 最多 5 个提前量）——
+        for task in tasks:
+            if task.get('completed'):
+                continue
+            task_id = task.get('id', '')
+            for st in (task.get('subtasks') or []):
+                st_id = st.get('id', '')
+                if not st_id or st.get('completed'):
+                    continue
+                st_time = st.get('startTime')
+                if not st_time:
+                    continue
+                if not (st.get('text') or '').strip():
+                    continue  # 无文本不通知（正文无内容可显示）
+                try:
+                    st_time_ms = int(parse_iso_datetime(st_time).timestamp() * 1000)
+                except Exception:
+                    continue
+                for minute, fire_ms, kind in _fire_points(
+                        st_time_ms, _normalize_reminder_minutes(st.get('reminders'))):
+                    key = _reminder_key(task_id, minute, st_id, base_ms=st_time_ms)
+                    if _try_fire(key, fire_ms, now_ms):
+                        _fire_subtask_reminder(task, st, minute, kind, data)
     except Exception as e:
         print("Reminder check error: %s" % str(e))
 
@@ -1555,20 +2057,26 @@ def pomodoro_checker_loop():
         time.sleep(1)
 
 def cleanup_notified_ids():
-    global notified_task_ids
+    """清理已删除任务残留的去重键与稍后提醒项（按 task_id 前缀匹配，天然覆盖子任务）。"""
+    global notified_reminder_keys
     try:
         data = load_data_from_file()
         tasks = data.get('tasks', [])
-        valid_ids = set()
-        for task in tasks:
-            if task.get('id'):
-                valid_ids.add(task['id'])
+        valid_prefixes = tuple('%s@' % t['id'] for t in tasks if t.get('id'))
         with notified_task_ids_lock:
-            notified_task_ids = notified_task_ids & valid_ids
+            if valid_prefixes:
+                notified_reminder_keys = {
+                    k for k in notified_reminder_keys if k.startswith(valid_prefixes)
+                }
+            else:
+                notified_reminder_keys = set()
         with snoozed_reminders_lock:
-            invalid_snooze = [tid for tid in snoozed_reminders if tid not in valid_ids]
-            for tid in invalid_snooze:
-                del snoozed_reminders[tid]
+            invalid_snooze = [
+                k for k in snoozed_reminders
+                if not (valid_prefixes and k.startswith(valid_prefixes))
+            ]
+            for k in invalid_snooze:
+                del snoozed_reminders[k]
     except Exception:
         pass
 
@@ -1666,6 +2174,13 @@ class TodoHandler(BaseHTTPRequestHandler):
             with bg_carousel_lock:
                 resp = _bg_carousel_public_state_locked()
             self.send_json_response(resp)
+            return
+
+        # 背景图轮播：内置目录浏览器（系统目录对话框不可用时的兜底，零外部依赖）
+        if path == '/api/bg-carousel/browse-directory':
+            query = urllib.parse.parse_qs(parsed.query)
+            target = (query.get('path') or [''])[0]
+            self.send_json_response(_bg_browse_directory(target))
             return
 
         # 背景图轮播：当前图片字节流（URL 携带 ?v=switchId，切换后地址变化天然绕过缓存）
@@ -1861,24 +2376,21 @@ class TodoHandler(BaseHTTPRequestHandler):
                     pomodoro_state['autoBreak'] = s.get('autoBreak', pomodoro_state.get('autoBreak', False))
                     pomodoro_state['autoFocus'] = s.get('autoFocus', pomodoro_state.get('autoFocus', False))
 
-                global notified_task_ids
+                global notified_reminder_keys
+                task_prefixes = tuple('%s@' % t['id'] for t in data.get('tasks', []) if t.get('id'))
                 with notified_task_ids_lock:
-                    # 仅保留仍存在的任务ID，且对 startTime 变化的任务清除通知标记，
-                    # 使其在新的时间到达时能重新触发提醒
-                    old_data = load_data_from_file()
-                    old_start_times = {}
-                    for t in old_data.get('tasks', []):
-                        if t.get('id'):
-                            old_start_times[t['id']] = t.get('startTime', '')
-                    task_ids = set()
-                    for task in data.get('tasks', []):
-                        if task.get('id'):
-                            task_ids.add(task['id'])
-                            # 任务时间变化时，清除通知标记，允许在新时间重新提醒
-                            new_start = task.get('startTime', '')
-                            if new_start != old_start_times.get(task['id']):
-                                notified_task_ids.discard(task['id'])
-                    notified_task_ids = notified_task_ids & task_ids
+                    # 仅保留仍存在的任务（按 task_id 前缀匹配，天然覆盖子任务键）。
+                    # 任务时间变化时新 key 含新的 base_ms，旧键自动失效；此处一并清理同任务旧键，避免集合无限增长。
+                    if task_prefixes:
+                        notified_reminder_keys = {
+                            k for k in notified_reminder_keys if k.startswith(task_prefixes)
+                        }
+                    else:
+                        notified_reminder_keys = set()
+                with snoozed_reminders_lock:
+                    for k in [k for k in snoozed_reminders
+                              if not (task_prefixes and k.startswith(task_prefixes))]:
+                        del snoozed_reminders[k]
 
                 self.send_json_response({"status": "ok", "version": _data_version})
                 return
@@ -1894,7 +2406,7 @@ class TodoHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         # 增量保存单个任务：避免每次勾选/编辑都序列化并传输全量数据（5510 任务 + 416 历史）
-        global _data_version, notified_task_ids
+        global _data_version, notified_reminder_keys
         try:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
@@ -1953,11 +2465,18 @@ class TodoHandler(BaseHTTPRequestHandler):
                         release_file_lock(lock_fd)
                     _data_version += 1
 
-                # 任务时间变化时清除通知标记，允许在新时间重新提醒
+                # 任务时间变化时清除该任务（含子任务）的通知标记，允许在新时间重新提醒
                 new_start = task.get('startTime', '')
-                with notified_task_ids_lock:
-                    if new_start != old_start:
-                        notified_task_ids.discard(task_id)
+                if new_start != old_start:
+                    pfx = '%s@' % task_id
+                    with notified_task_ids_lock:
+                        notified_reminder_keys = {
+                            k for k in notified_reminder_keys if not k.startswith(pfx)
+                        }
+                        # 同步清理该任务的稍后提醒项
+                        with snoozed_reminders_lock:
+                            for k in [k for k in snoozed_reminders if k.startswith(pfx)]:
+                                del snoozed_reminders[k]
 
                 self.send_json_response({"status": "ok", "version": _data_version})
                 return
@@ -1972,7 +2491,7 @@ class TodoHandler(BaseHTTPRequestHandler):
                 pass
 
     def do_POST(self):
-        global pomodoro_notified
+        global pomodoro_notified, notified_reminder_keys
         try:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
@@ -2233,11 +2752,19 @@ class TodoHandler(BaseHTTPRequestHandler):
 
             # 背景图轮播：弹出系统目录选择对话框（在服务器所在机器上）
             if path == '/api/bg-carousel/pick-directory':
-                path_picked = _bg_pick_directory_dialog()
+                path_picked, reason = _bg_pick_directory_dialog()
                 if path_picked:
                     self.send_json_response({'success': True, 'path': path_picked})
                 else:
-                    self.send_json_response({'success': False})
+                    # reason 让前端能区分"用户取消"和"环境没有图形对话框"，
+                    # 后者自动降级到内置目录浏览器（见 app.js bgCarouselSelectDirectory）
+                    resp = {'success': False, 'reason': reason or 'unavailable'}
+                    if reason == 'unavailable':
+                        resp['message'] = ('当前系统没有可用的图形目录选择组件'
+                                           '（缺少 python3-tk / zenity 等），已切换为内置目录浏览器')
+                    elif reason == 'error':
+                        resp['message'] = '系统目录对话框调用失败，已切换为内置目录浏览器'
+                    self.send_json_response(resp)
                 return
 
             if path == '/api/shutdown':
@@ -2879,11 +3406,22 @@ class TodoHandler(BaseHTTPRequestHandler):
                     self.send_error_json("Invalid JSON", 400)
                     return
                 task_id = data.get('taskId')
+                subtask_id = data.get('subtaskId')
                 with notified_task_ids_lock:
-                    if task_id:
-                        notified_task_ids.discard(task_id)
+                    if not task_id:
+                        notified_reminder_keys.clear()
+                    elif subtask_id:
+                        # 只清除该子任务（含准点与各提前量）
+                        pfx = '%s@%s@' % (task_id, subtask_id)
+                        notified_reminder_keys = {
+                            k for k in notified_reminder_keys if not k.startswith(pfx)
+                        }
                     else:
-                        notified_task_ids.clear()
+                        # 清除该任务及其所有子任务
+                        pfx = '%s@' % task_id
+                        notified_reminder_keys = {
+                            k for k in notified_reminder_keys if not k.startswith(pfx)
+                        }
                 self.send_json_response({"status": "ok"})
                 return
 
@@ -2896,14 +3434,19 @@ class TodoHandler(BaseHTTPRequestHandler):
                     self.send_error_json("Invalid JSON", 400)
                     return
                 task_id = data.get('taskId')
+                subtask_id = data.get('subtaskId')
                 delay_minutes = data.get('delayMinutes', 15)
                 if not task_id:
                     self.send_error_json("taskId is required", 400)
                     return
+                try:
+                    delay_minutes = max(1, int(delay_minutes))
+                except (TypeError, ValueError):
+                    delay_minutes = 15
                 now = datetime.now(timezone.utc)
                 remind_after = int(now.timestamp() * 1000) + delay_minutes * 60 * 1000
                 with snoozed_reminders_lock:
-                    snoozed_reminders[task_id] = remind_after
+                    snoozed_reminders[_snooze_key(task_id, subtask_id)] = remind_after
                 self.send_json_response({"status": "ok", "remindAfter": remind_after})
                 return
 

@@ -252,11 +252,12 @@ function isWorkday(date) {
     return day !== 0 && day !== 6;
 }
 
-function findFirstWorkdayOfWeek(weekStart, weekStartsOnMonday) {
-    const d = new Date(weekStart);
+function findFirstWorkdayOfWeek(weekStart) {
+    const start = new Date(weekStart);
+    start.setHours(0, 0, 0, 0);
     for (let i = 0; i < 7; i++) {
-        const checkDate = new Date(d);
-        checkDate.setDate(d.getDate() + i);
+        const checkDate = new Date(start);
+        checkDate.setDate(start.getDate() + i);
         if (isWorkday(checkDate)) {
             return checkDate;
         }
@@ -264,20 +265,103 @@ function findFirstWorkdayOfWeek(weekStart, weekStartsOnMonday) {
     return null;
 }
 
-function findLastWorkdayOfWeek(weekStart, weekStartsOnMonday) {
-    const d = new Date(weekStart);
-    let lastWorkday = null;
-    let lastHolidayOrWeekend = null;
-    for (let i = 0; i < 7; i++) {
-        const checkDate = new Date(d);
-        checkDate.setDate(d.getDate() + i);
-        if (isWorkday(checkDate)) {
-            lastWorkday = new Date(checkDate);
-        } else {
-            lastHolidayOrWeekend = new Date(checkDate);
+/**
+ * 判断某天是否为「工作周期的最后一个工作日」。
+ *
+ * 定义（2026-09-20 与用户确认，取代早期有歧义的「第一个假期组前一天」语义）：
+ *   **当天是工作日，且次日是休息日** → 当天即为工作周期的最后一个工作日。
+ *
+ * 该定义无歧义、可逐日判定，天然与节假日/调休数据同步
+ * （工作日/休息日一律经 isWorkday 判定，禁止用 getDay() 判断周末）。
+ *
+ * 例：周一~周五上班、周六休、周日调休上班 →
+ *     周五满足（周五上班、周六休）；周日上班但周一也是上班，不满足。
+ *
+ * @param {Date} date - 待判定的日期
+ * @returns {boolean} 是否为工作周期的最后一个工作日
+ */
+function isLastWorkdayOfCycle(date) {
+    const today = new Date(date);
+    today.setHours(0, 0, 0, 0);
+    if (!isWorkday(today)) return false;
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    return !isWorkday(tomorrow);
+}
+
+/**
+ * 从 `fromDate` 之后找到第一个「工作周期的最后一个工作日」。
+ *
+ * @param {Date} fromDate - 起始日期（不含当天）
+ * @param {number} [maxDays=14] - 向后搜索天数上限
+ * @returns {Date} 命中的日期（00:00）；未找到时回退为 fromDate + 1 天
+ */
+function findNextLastWorkdayOfCycle(fromDate, maxDays) {
+    const limit = typeof maxDays === 'number' ? maxDays : 14;
+    const cursor = new Date(fromDate);
+    cursor.setHours(0, 0, 0, 0);
+    for (let i = 0; i < limit; i++) {
+        cursor.setDate(cursor.getDate() + 1);
+        if (isLastWorkdayOfCycle(cursor)) {
+            return new Date(cursor);
         }
     }
-    return lastWorkday;
+    // 数据异常（如两周内完全没有休息日）时的兜底：推进一天，避免死循环
+    const fallback = new Date(fromDate);
+    fallback.setDate(fallback.getDate() + 1);
+    return fallback;
+}
+
+/**
+ * 计算「本周最后一个工作日」——按新的「工作周期」定义：
+ * 本周内所有满足「当天上班且次日休息」的日子中，**最后一个**即为本周的答案。
+ *
+ * @param {Date} weekStart - 本周起始日（由 getWeekStartDate 按设置算出）
+ * @returns {Date|null} 本周最后一个工作日的 00:00；找不到返回 null
+ */
+function findLastWorkdayOfWeek(weekStart) {
+    const start = new Date(weekStart);
+    start.setHours(0, 0, 0, 0);
+    let last = null;
+    for (let i = 0; i < 7; i++) {
+        const checkDate = new Date(start);
+        checkDate.setDate(start.getDate() + i);
+        if (isLastWorkdayOfCycle(checkDate)) {
+            last = new Date(checkDate);
+        }
+    }
+    return last;
+}
+
+/**
+ * 找到 `fromDate` 之后的第一个「节假日首日」（即某段连续假期的第一天）。
+ *
+ * 数据源为 holidayData[year].holidays（同 isWorkday 的口径），
+ * 因此会跟随用户导入/编辑的调休表变化，不再硬编码 1/1、5/1、10/1。
+ *
+ * @param {Date} fromDate - 起始日期（不含当天；通常为重复任务当前周期）
+ * @param {number} [maxDays=400] - 向后搜索的天数上限（覆盖跨年场景）
+ * @returns {Date|null} 节假日首日的 00:00；未找到返回 null
+ */
+function findNextHolidayStart(fromDate, maxDays) {
+    const limit = typeof maxDays === 'number' ? maxDays : 400;
+    const base = new Date(fromDate);
+    base.setHours(0, 0, 0, 0);
+    const cursor = new Date(base);
+    cursor.setDate(cursor.getDate() + 1);
+    let prevWasHoliday = false;
+    // 起始日若本身是假期，视为处于假期中：只找「假期之后」的下一个首日
+    prevWasHoliday = !!getHolidayInfo(formatDate(base));
+    for (let i = 0; i < limit; i++) {
+        const info = getHolidayInfo(formatDate(cursor));
+        const isHoliday = !!(info && info.type === 'holiday');
+        if (isHoliday && !prevWasHoliday) {
+            return new Date(cursor);
+        }
+        prevWasHoliday = isHoliday;
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return null;
 }
 
 function findFirstWorkdayOfMonth(year, month) {
@@ -877,6 +961,8 @@ function applySettings(parsed) {
     if (typeof repairStalePaletteCustoms === 'function') repairStalePaletteCustoms();
     // 迁移背景图取色调色板：旧扁平格式 → 新 light/dark 双变体；'dark' → 'steady'
     if (typeof migrateBgImagePalettes === 'function') migrateBgImagePalettes();
+    // 迁移已下线的「自定义主题色」选择：custom:<hex> → 色相最接近的内置配色，并清理残留记录
+    if (typeof migrateCustomAccentToBuiltin === 'function') migrateCustomAccentToBuiltin();
     // 迁移：cmdDefaultDate → defaultTaskDate（设置项从「命令面板」移至「新建任务默认值」并更名）
     if (settings.cmdDefaultDate !== undefined && settings.defaultTaskDate === undefined) {
         settings.defaultTaskDate = settings.cmdDefaultDate;
@@ -1107,6 +1193,12 @@ async function loadData() {
     }
     
     if (!_initialLoadDone) {
+        // 首次加载：清理上次会话残留的空任务（不关详情面板直接刷新/关页面会留下空白卡片）。
+        // 只在此处调用，不能在 refreshDataFromServer / 后续 loadData 调用里做，
+        // 否则会删掉用户正在编辑的空任务。
+        if (typeof pruneLeftoverEmptyTasks === 'function' && pruneLeftoverEmptyTasks() > 0) {
+            saveData();
+        }
         // 每次启动（新标签）显示设置中的默认视图；清单/特殊项的偏好视图仅会话内切换时生效
         currentView = getHomeView();
         // 恢复上次筛选状态（刷新后回到上次查看的清单/标签/过滤器）
@@ -1635,6 +1727,13 @@ function bgCarouselUpdateConfig(config, onError) {
 }
 
 // 设置面板弹出系统目录选择对话框（在服务器所在机器上）
+// 返回 { success, path } 或 { success:false, reason: 'cancelled' | 'unavailable' | 'error' }
 function bgCarouselPickDirectory() {
     return fetch('/api/bg-carousel/pick-directory', { method: 'POST' }).then(r => r.json());
+}
+
+// 内置目录浏览器：列出服务端某目录下的子目录（系统对话框不可用时兜底）
+function bgCarouselBrowseDirectory(path) {
+    const q = path ? ('?path=' + encodeURIComponent(path)) : '';
+    return fetch('/api/bg-carousel/browse-directory' + q).then(r => r.json());
 }

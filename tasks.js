@@ -1,3 +1,95 @@
+// ==================== 提前提醒（多选）常量 ====================
+// 提醒分两层：准点提醒（任务/子任务时间到达时必然弹出，系统固有行为，不可配置、不在面板中展示）
+//             提前提醒（用户配置，相对时间点的提前量，最多 5 个）。
+// 因此 reminders 数组只存提前量，恒 > 0；准点不走这个数组。
+const REMINDER_PRESETS = [
+    { minute: 5,    label: '提前 5 分钟' },
+    { minute: 15,   label: '提前 15 分钟' },
+    { minute: 30,   label: '提前 30 分钟' },
+    { minute: 60,   label: '提前 1 小时' },
+    { minute: 120,  label: '提前 2 小时' },
+    { minute: 1440, label: '提前 1 天' },
+];
+const REMINDER_MAX_COUNT = 5;
+const REMINDER_MAX_MINUTES = 10080; // 7 天
+const REMINDER_EMPTY_LABEL = '不提前提醒';
+
+// 当前展开的子任务提醒面板 id（互斥，同一时刻最多展开一个）
+let openSubtaskReminderPanelId = null;
+// 子任务「管理模式」：开启后每行右侧显示删除按钮（桌面端平时不显示删除按钮）。
+// 临时状态，不持久化；关闭面板 / 切换任务 / 切换任务模式 / 按 Esc 都会退出。
+let subtaskManageMode = false;
+
+// 归一化提前量数组：过滤非正整数/越界值、去重、降序、截断 5 个
+function normalizeReminderMinutes(raw) {
+    const out = [];
+    if (Array.isArray(raw)) {
+        raw.forEach(v => {
+            const m = parseInt(v, 10);
+            if (!isNaN(m) && m >= 1 && m <= REMINDER_MAX_MINUTES && !out.includes(m)) {
+                out.push(m);
+            }
+        });
+    }
+    return out.sort((a, b) => b - a).slice(0, REMINDER_MAX_COUNT);
+}
+
+// 读取任务/子任务的提前量（兼容旧字段 reminder）
+function getAdvanceMinutes(entity) {
+    if (!entity) return [];
+    if (Array.isArray(entity.reminders)) return normalizeReminderMinutes(entity.reminders);
+    const old = parseInt(entity.reminder, 10);
+    return (!isNaN(old) && old > 0) ? [old] : [];
+}
+
+// 提前量文案：5 分钟 / 1 小时 / 1 天
+function formatReminderMinute(minute) {
+    const m = parseInt(minute, 10);
+    if (isNaN(m)) return '';
+    if (m >= 1440 && m % 1440 === 0) {
+        const d = m / 1440;
+        return d === 1 ? '提前 1 天' : `提前 ${d} 天`;
+    }
+    if (m >= 60 && m % 60 === 0) {
+        const h = m / 60;
+        return h === 1 ? '提前 1 小时' : `提前 ${h} 小时`;
+    }
+    return `提前 ${m} 分钟`;
+}
+
+// 提前量列表文案：首项带「提前」，其余只留量词，避免摘要过长
+// 例：[30, 5] -> "提前 30 分钟、5 分钟"
+function formatAdvanceList(minutes) {
+    const list = normalizeReminderMinutes(minutes);
+    if (list.length === 0) return '';
+    const short = m => formatReminderMinute(m).replace(/^提前\s*/, '');
+    return '提前 ' + list.map(short).join('、');
+}
+
+// 折叠态摘要：超过 2 项折叠为「提前 X、Y 等 N 项」；无提前量时为「不提前提醒」
+function formatReminderSummary(minutes) {
+    const list = normalizeReminderMinutes(minutes);
+    if (list.length === 0) return REMINDER_EMPTY_LABEL;
+    if (list.length <= 2) return formatAdvanceList(list);
+    const short = m => formatReminderMinute(m).replace(/^提前\s*/, '');
+    return `提前 ${short(list[0])}、${short(list[1])} 等 ${list.length} 项`;
+}
+
+// 计算某个提前量的绝对触发时刻文案（无任务时间时返回 '--:--'）
+function formatReminderAbsolute(baseIso, minute) {
+    if (!baseIso) return '--:--';
+    const base = new Date(baseIso);
+    if (isNaN(base.getTime())) return '--:--';
+    const t = new Date(base.getTime() - minute * 60 * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    const hm = `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    const sameDay = t.getFullYear() === base.getFullYear()
+        && t.getMonth() === base.getMonth()
+        && t.getDate() === base.getDate();
+    if (sameDay) return hm;
+    return `${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${hm}`;
+}
+
 let deleteConfirmTaskId = null;
 function confirmDeleteTask(taskId) {
     const taskElements = document.querySelectorAll(`[data-task-id="${taskId}"]`);
@@ -431,33 +523,23 @@ function clearRecentFilter() {
 }
 
 function openAddTaskModal(presetDate = null) {
-    // 如果当前有打开的空任务详情，先删除空任务
+    // 如果当前有打开的空任务详情，先删除空任务（判定统一走面板档 isPanelTaskContentless）
     if (currentDetailTaskId) {
-        const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
-        if (taskIndex !== -1) {
-            const task = tasks[taskIndex];
-            const titleEl = document.getElementById('detail-task-title');
-            const notesEl = document.getElementById('detail-task-notes');
-            const currentTitle = titleEl ? titleEl.value : (task.title || '');
-            const currentNotes = notesEl ? notesEl.value : (task.notes || '');
-            // 子任务模式：描述或任一子任务文本有内容时，不算空任务
-            const hasSubtaskContent = task.mode === 'subtasks'
-                && (!!((task.description || '').trim())
-                    || (task.subtasks || []).some(st => st.text && st.text.trim()));
-            if ((!currentTitle || !currentTitle.trim()) && (!currentNotes || !currentNotes.trim()) && !hasSubtaskContent) {
-                tasks.splice(taskIndex, 1);
-                saveData();
-                hideDetailPanel();
-                currentDetailTaskId = null;
-            } else {
-                closeTaskDetailPanel();
-            }
+        if (discardEmptyDetailTask()) {
+            // 空任务已删除：必须收起面板并清空 id，否则下面 openTaskDetailPanel(newTask.id)
+            // 会走进「切换任务」分支，对一个已不存在的 id 再走一次判定与保存
+            hideDetailPanel();
+            currentDetailTaskId = null;
         } else {
+            // 非空任务：走正常关闭流程（内含「标题为空则兜底生成未命名任务」）
             closeTaskDetailPanel();
         }
     }
 
     const now = new Date();
+    
+    // 侧边栏上下文（当前选中的清单/标签/过滤器）→ 新任务的默认清单与标签
+    const ctx = (typeof getSidebarNewTaskDefaults === 'function') ? getSidebarNewTaskDefaults() : null;
     
     let startTime = null;
     let isAllDay = true;
@@ -471,11 +553,11 @@ function openAddTaskModal(presetDate = null) {
     const newTask = {
         id: generateId(),
         title: '',
-        listId: settings.defaultListId || 'default',
-        important: settings.defaultImportant || false,
-        urgent: settings.defaultUrgent || false,
+        listId: (ctx && ctx.listId) || settings.defaultListId || 'default',
+        important: (ctx && ctx.important === true) ? true : (settings.defaultImportant || false),
+        urgent: (ctx && ctx.urgent === true) ? true : (settings.defaultUrgent || false),
         notes: '',
-        tags: [],
+        tags: (ctx && ctx.tagIds) ? ctx.tagIds.slice() : [],
         startTime: startTime ? startTime.toISOString() : null,
         endTime: null,
         isAllDay: isAllDay,
@@ -485,7 +567,7 @@ function openAddTaskModal(presetDate = null) {
         createdAt: new Date().toISOString(),
         mode: 'text',
         description: '',
-        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0 }],
+        subtasks: [createSubtask('', 0)],
         progress: 0
     };
     
@@ -748,6 +830,8 @@ function showDetailPanel(taskId) {
 }
 function hideDetailPanel() {
     _clearExtTaskDetailGuard(); // 关闭面板时移除横幅并恢复控件可编辑（3.3.2）
+    openSubtaskReminderPanelId = null; // 收起子任务提醒面板展开态
+    subtaskManageMode = false;         // 关闭面板时退出子任务管理模式（临时状态，不残留）
     const panel = document.getElementById('task-detail-panel');
     if (!panel) return;
     // 四象限展开态窄轨联动（PRD FR4 方案 B）：面板的移除同样交给 qHookDetailPanelToggle，
@@ -853,6 +937,107 @@ function isDetailPanelShowingTask(taskId) {
     return !!panel && !panel.classList.contains('hidden');
 }
 
+// ==================== 「空任务」判定（统一口径） ====================
+// 分两档。它们的数据来源与误删代价都不同，不能混用：
+//   · 面板档 isPanelTaskContentless()：判断「用户刚新建、还没填东西就放弃了」的任务。
+//     标题与备注是 DOM 唯一权威 —— 它们没有实时写回任务对象（setupTitleAutoResize 只做高度自适应，
+//     task.notes 只在 saveTaskDetail 里赋值），所以必须读 DOM；而 mode / description / subtasks
+//     是实时写回的，读任务对象即可。
+//     调用前提：面板正在展示该任务（函数内部会校验，不满足时退回对象档）。
+//   · 对象档 isPersistedTaskContentless(task)：判断「持久化数据里的垃圾任务」，供启动清理使用。
+//     此时没有任何 DOM 可依赖，且误删不可逆，故取最保守口径：不看 mode，四类内容全查。
+// 删除动作与删除后的副作用**不在此统一** —— 四处调用方的落盘方式（节流 / 立即）、是否收起面板、
+// 是否重渲染各不相同，属于调用方契约，硬统一会破坏它们。
+
+/** 纯子判定：任务对象层面是否含子任务内容（描述或任一子任务文本）。 */
+function hasSubtaskContent(task) {
+    if (!task) return false;
+    if ((task.description || '').trim()) return true;
+    return (task.subtasks || []).some(st => st && st.text && st.text.trim());
+}
+
+/**
+ * 面板档：详情面板当前展示的任务是否「无任何内容」。
+ * 标题/备注读 DOM（权威）；子任务模式分支用 task.mode —— 不用 currentTaskMode，
+ * 那是全局面板状态，在没有面板的上下文里恒为 'text'，会漏判子任务内容。
+ * @returns {boolean} true = 可安全丢弃
+ */
+function isPanelTaskContentless() {
+    if (!currentDetailTaskId) return false;
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return false;
+    // DOM 只在「确认面板正展示该任务」时才可信；否则退回对象档（更保守：宁可留下垃圾，也不误删）
+    if (!isDetailPanelShowingTask(task.id)) return isPersistedTaskContentless(task);
+
+    const titleEl = document.getElementById('detail-task-title');
+    const currentTitle = titleEl ? titleEl.value : (task.title || '');
+    if (currentTitle && currentTitle.trim()) return false;
+
+    const notesEl = document.getElementById('detail-task-notes');
+    if (notesEl && notesEl.value && notesEl.value.trim()) return false;
+
+    if ((task.mode || 'text') === 'subtasks') {
+        const descEl = document.getElementById('detail-task-description');
+        const descValue = descEl ? descEl.value : (task.description || '');
+        if (descValue && descValue.trim()) return false;
+        if ((task.subtasks || []).some(st => st && st.text && st.text.trim())) return false;
+    }
+    return true;
+}
+
+/**
+ * 对象档：这条持久化数据是否「无任何内容」。
+ * 不看 mode（保守：文本模式但子任务里有文本的历史数据也不删）；外部日历任务不参与。
+ * @returns {boolean} true = 可安全丢弃
+ */
+function isPersistedTaskContentless(task) {
+    if (!task || task.extSourceId) return false;
+    if (task.title && task.title.trim()) return false;
+    if (task.notes && task.notes.trim()) return false;
+    if (hasSubtaskContent(task)) return false;
+    return true;
+}
+
+/**
+ * 丢弃详情面板当前展示的空任务（走面板档判定）。
+ * 供「切换任务」等「面板不关闭但当前任务被换掉」的场景复用 —— 这些场景原先只调用
+ * saveTaskDetailWithoutClose()，空任务会被当作普通任务保存下来，永久留在列表里。
+ * @returns {boolean} true 表示已删除并刷新视图（调用方不要再保存该任务）；
+ *                    false 表示任务非空、任务不存在或面板无当前任务。
+ * 注意：只负责删掉这个空任务，不隐藏面板、不清 currentDetailTaskId ——
+ *       调用方紧接着要展示目标任务；关闭面板仍请走 closeTaskDetailPanel。
+ */
+function discardEmptyDetailTask() {
+    if (!isPanelTaskContentless()) return false;
+    const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
+    if (taskIndex === -1) return false;
+
+    tasks.splice(taskIndex, 1);
+    saveData();
+    renderLists();
+    renderView();
+    return true;
+}
+
+/**
+ * 启动时清理「残留空任务」（走对象档判定）。
+ * 新建任务在创建瞬间就已 push + saveData 落盘（见 openAddTaskModal / kanbanQuickAdd / 周视图网格新建），
+ * 若用户不关面板而直接刷新或关闭页面，这个空任务会留在数据里，下次打开就是一张空白卡片。
+ * 只在首次加载时调用（见 data.js loadData），不能在 refreshDataFromServer 里调用：
+ * 那会把用户正在编辑、尚未落盘内容的空任务删掉。
+ * @returns {number} 被删除的任务数
+ */
+function pruneLeftoverEmptyTasks() {
+    if (!Array.isArray(tasks) || !tasks.length) return 0;
+    const before = tasks.length;
+    for (let i = tasks.length - 1; i >= 0; i--) {
+        if (isPersistedTaskContentless(tasks[i])) tasks.splice(i, 1);
+    }
+    const removed = before - tasks.length;
+    if (removed > 0) console.info('[启动清理] 移除 ' + removed + ' 个残留空任务');
+    return removed;
+}
+
 function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     // 计划面板打开时，主视图点击任务一律先收起计划面板（计划面板内任务项已不再呼出详情面板）
     if (planPanelOpen) {
@@ -874,7 +1059,13 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     if (currentDetailTaskId && currentDetailTaskId !== taskId && !detailReadOnly) {
         const visiblePanel = document.getElementById('task-detail-panel');
         if (visiblePanel && !visiblePanel.classList.contains('hidden')) {
-            saveTaskDetailWithoutClose();
+            // 当前任务若是「新建后什么都没填」的空任务，切换时按关闭面板的口径直接删除，
+            // 而不是当作普通任务保存下来（否则空任务会永久留在列表里）。
+            // 目标任务不存在时保持原逻辑：只保存、不删除。
+            const targetExists = tasks.some(t => t.id === taskId);
+            if (!targetExists || !discardEmptyDetailTask()) {
+                saveTaskDetailWithoutClose();
+            }
         }
     }
     const task = tasks.find(t => t.id === taskId);
@@ -883,6 +1074,8 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     currentDetailTaskId = taskId;
     isTimeRangeMode = !!task.endTime;
     detailReadOnly = readOnly;
+    // 切换任务时退出子任务管理模式（临时状态，不跨任务残留）
+    exitSubtaskManageMode();
     _applyExtTaskDetailGuard(task); // 外部任务：注入横幅 + 锁定外部覆盖字段（3.3.2）
     
     const titleInput = document.getElementById('detail-task-title');
@@ -934,31 +1127,10 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     detailUrgentState = task.urgent || false;
     updateDetailPriorityButtons();
     
-    // 设置提醒
-    document.querySelectorAll('.detail-reminder-option').forEach(opt => opt.checked = false);
-    document.getElementById('detail-custom-reminder').classList.add('hidden');
-    if (task.reminder && task.reminder > 0) {
-        let matched = false;
-        document.querySelectorAll('.detail-reminder-option').forEach(opt => {
-            if (opt.value === String(task.reminder)) {
-                opt.checked = true;
-                matched = true;
-            }
-        });
-        if (!matched) {
-            const customOpt = document.querySelector('.detail-reminder-option[value="custom"]');
-            if (customOpt) {
-                customOpt.checked = true;
-                document.getElementById('detail-custom-reminder').classList.remove('hidden');
-                document.getElementById('detail-custom-reminder').value = task.reminder;
-            }
-        }
-        updateDetailReminderText();
-    } else {
-        const noReminderOpt = document.querySelector('.detail-reminder-option[value="0"]');
-        if (noReminderOpt) noReminderOpt.checked = true;
-        updateDetailReminderText();
-    }
+    // 设置提前提醒（准点提醒为系统固有行为，无需回填）
+    document.getElementById('detail-custom-reminder').value = '';
+    document.getElementById('detail-custom-reminder').classList.remove('border-red-500');
+    renderDetailReminderPanel();
     
     // 设置重复
     document.querySelectorAll('.detail-repeat-option').forEach(opt => opt.checked = false);
@@ -1077,13 +1249,13 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     if (currentTaskMode === 'subtasks') {
         document.getElementById('detail-task-notes').classList.add('hidden');
         descInput.classList.remove('hidden');
-        document.getElementById('subtasks-container').classList.remove('hidden');
+        _setSubtasksAreaVisible(true);
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
         document.getElementById('toggle-mode-btn').title = '文本模式';
     } else {
         document.getElementById('detail-task-notes').classList.remove('hidden');
         descInput.classList.add('hidden');
-        document.getElementById('subtasks-container').classList.add('hidden');
+        _setSubtasksAreaVisible(false);
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul"></i>';
         document.getElementById('toggle-mode-btn').title = '切换任务模式';
     }
@@ -1293,19 +1465,12 @@ function saveDetailTimeConfig() {
         delete task.endTime;
     }
     
-    const reminderSelected = document.querySelector('input[name="detail-reminder"]:checked');
-    if (reminderSelected) {
-        if (reminderSelected.value === '0') {
-            task.reminder = 0;
-        } else if (reminderSelected.value === 'custom') {
-            const customVal = parseInt(document.getElementById('detail-custom-reminder').value);
-            task.reminder = customVal > 0 ? customVal : 0;
-        } else {
-            task.reminder = parseInt(reminderSelected.value) || 0;
-        }
-    } else {
-        task.reminder = 0;
-    }
+    // 提前提醒：选择时已即时写回，这里只做归一化与旧字段镜像同步
+    // （准点提醒为系统固有行为，不参与配置；外部日历任务强制清空）
+    const _isExt = !!task.extSourceId;
+    const remindersNow = _isExt ? [] : getDetailRemindersFromForm();
+    task.reminders = remindersNow;
+    task.reminder = remindersNow.length ? Math.max(...remindersNow) : 0;
     
     syncDetailRepeatInputToTask(task);
     
@@ -1336,17 +1501,29 @@ function toggleTaskMode(event) {
         document.getElementById('detail-task-description').value = description;
         if (body.trim()) {
             const lines = body.split('\n');
-            // 总是用当前文本重新生成子任务
-            task.subtasks = lines.map((line, i) => ({ id: generateId(), text: line, completed: false, originalOrder: i }));
+            // 总是用当前文本重新生成子任务；文本未变的行沿用原对象，
+            // 避免切换模式时丢失已设置的时间与提前提醒（按文本配对，插入行不会整体错位）
+            const pool = new Map();
+            (task.subtasks || []).forEach(st => {
+                const k = (st.text || '').trim();
+                if (k) pool.set(k, (pool.get(k) || []).concat([st]));
+            });
+            task.subtasks = lines.map((line, i) => {
+                const bucket = pool.get(line.trim());
+                if (bucket && bucket.length) {
+                    return { ...bucket.shift(), text: line, originalOrder: i };
+                }
+                return createSubtask(line, i);
+            });
         }
         if (!task.subtasks || task.subtasks.length === 0) {
-            task.subtasks = [{ id: generateId(), text: '', completed: false, originalOrder: 0 }];
+            task.subtasks = [createSubtask('', 0)];
         }
         // 先切换显示，再渲染子任务（确保scrollHeight正确计算）
         document.getElementById('detail-task-notes').classList.add('hidden');
         document.getElementById('detail-task-description').classList.remove('hidden');
         autoResizeDetailDescription(document.getElementById('detail-task-description'));
-        document.getElementById('subtasks-container').classList.remove('hidden');
+        _setSubtasksAreaVisible(true);
         renderSubtasks();
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
         document.getElementById('toggle-mode-btn').title = '文本模式';
@@ -1371,13 +1548,26 @@ function toggleTaskMode(event) {
         document.getElementById('detail-task-notes').value = task.notes || '';
         document.getElementById('detail-task-notes').classList.remove('hidden');
         document.getElementById('detail-task-description').classList.add('hidden');
-        document.getElementById('subtasks-container').classList.add('hidden');
+        _setSubtasksAreaVisible(false);
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul"></i>';
         document.getElementById('toggle-mode-btn').title = '切换任务模式';
     }
     // 立即写入 task.mode，确保面板打开期间的中间保存（saveData）携带正确的 mode，
     // 避免版本冲突合并时被服务器旧 mode 覆盖
     task.mode = currentTaskMode;
+}
+
+// 新建子任务的统一构造（含时间与提前提醒字段，缺省为无时间、无提前量）
+function createSubtask(text, order) {
+    return {
+        id: generateId(),
+        text: text || '',
+        completed: false,
+        originalOrder: order || 0,
+        completedAt: null,
+        startTime: null,   // 子任务独立时间；null = 无时间（不提醒）
+        reminders: []      // 仅存提前量，恒 > 0；空数组 = 仅准点提醒
+    };
 }
 
 function saveSubtasksToTask() {
@@ -1398,11 +1588,14 @@ function saveSubtasksToTask() {
             text: text,
             completed: existing ? existing.completed : false,
             originalOrder: existing && existing.originalOrder !== undefined ? existing.originalOrder : i,
-            completedAt: existing ? existing.completedAt : null
+            completedAt: existing ? existing.completedAt : null,
+            // 白名单重建：新增字段必须在此同步，否则失焦即丢
+            startTime: existing ? (existing.startTime || null) : null,
+            reminders: existing ? normalizeReminderMinutes(existing.reminders) : []
         });
     });
     if (newSubtasks.length === 0) {
-        newSubtasks.push({ id: generateId(), text: '', completed: false, originalOrder: 0 });
+        newSubtasks.push(createSubtask('', 0));
     }
     task.subtasks = newSubtasks;
     updateTaskProgressFromSubtasks(task);
@@ -1610,7 +1803,12 @@ function renderSubtasks() {
     updateDetailDescriptionPlaceholder();
 
     container.innerHTML = '';
-    const subtasks = task.subtasks || [{ id: generateId(), text: '', completed: false, originalOrder: 0 }];
+    const subtasks = task.subtasks || [createSubtask('', 0)];
+
+    // 展开的面板若对应的子任务已不存在（被删除/切换任务），清除展开状态
+    if (openSubtaskReminderPanelId && !subtasks.some(st => st.id === openSubtaskReminderPanelId)) {
+        openSubtaskReminderPanelId = null;
+    }
     
     subtasks.forEach((st, i) => {
         if (st.originalOrder === undefined) {
@@ -1625,14 +1823,24 @@ function renderSubtasks() {
     });
 
     sortedSubtasks.forEach((subtask) => {
+        // 外层容器：垂直堆叠「内层操作行 + 内联提醒面板」
+        // 注意：拖拽逻辑以 .subtask-item 为「行元素」（缓存 rect 画插入线），故外层必须是 .subtask-item
         const wrapper = document.createElement('div');
-        wrapper.className = 'flex items-center gap-2 py-1 group subtask-item relative';
+        wrapper.className = 'subtask-item relative';
+        // 面板展开态：让该行右侧保持显示铃铛（而不是回落到时间文本）
+        if (openSubtaskReminderPanelId === subtask.id) {
+            wrapper.classList.add('panel-open');
+        }
+        if (subtask.completed) {
+            wrapper.classList.add('subtask-completed', 'opacity-60');
+        }
         wrapper.dataset.subtaskId = subtask.id;
         wrapper.dataset.completed = subtask.completed ? 'true' : 'false';
-        if (subtask.completed) {
-            wrapper.classList.add('opacity-60');
-        }
-        
+
+        // 内层操作行：勾选 + 文本 + 铃铛 + 删除（group 用于删除按钮的 hover 显隐）
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 py-1 group';
+
         const checkbox = document.createElement('button');
         checkbox.className = 'w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition border-accent hover:border-accent-hover';
         if (subtask.completed) {
@@ -1656,10 +1864,11 @@ function renderSubtasks() {
         
         // 长按行任意位置 300ms 激活拖拽（Pointer Events 驱动，见上方模块说明）；
         // 判定期内移动超过容差或提前松开则静默取消，不影响点击聚焦、双击选词、拖选文本
+        // 铃铛/删除按钮、右侧时间文字、提醒面板不参与长按
         wrapper.onpointerdown = (e) => {
             if (e.pointerType === 'touch') return; // 触摸端保持原生滚动，不启用拖拽
             if (e.button !== undefined && e.button !== 0) return;
-            if (e.target.closest('button')) return; // 勾选框/删除按钮不参与长按
+            if (e.target.closest('button, .subtask-slot, .subtask-reminder-panel')) return;
             cancelSubtaskHold();
             subtaskHoldRow = wrapper;
             subtaskHoldPointerId = e.pointerId;
@@ -1672,21 +1881,546 @@ function renderSubtasks() {
             }, SUBTASK_HOLD_MS);
         };
 
+        // 右侧「共用位置」：时间文本与铃铛。
+        // 有时间文本 → 常显，悬浮到文本上只变蓝提示可点击（点击即打开提醒面板），不换显铃铛；
+        // 没有时间文本 → 未悬浮什么都不显示，悬浮该行才出铃铛。
+        // 两者都固定 20×20 高，避免悬浮时行高变化导致下方内容跳动（见 CSS 注释）。
+        const slot = document.createElement('span');
+        slot.className = 'subtask-slot';
+
+        const timeLabel = document.createElement('span');
+        timeLabel.className = 'subtask-time-label text-theme-muted';
+        _fillSubtaskTimeLabel(timeLabel, subtask.startTime);
+        timeLabel.onclick = (e) => { e.stopPropagation(); toggleSubtaskReminderPanel(subtask.id); };
+
+        // 铃铛：只在「该行没有时间文本」时作为悬浮入口出现。
+        // 不再区分「是否已配提前提醒」（原先的蓝色 + 右上角圆点已去掉）。
+        const bellBtn = document.createElement('button');
+        bellBtn.className = 'subtask-bell-btn';
+        bellBtn.innerHTML = '<i class="fas fa-bell text-xs"></i>';
+        bellBtn.title = '设置时间与提醒';
+        bellBtn.onclick = (e) => { e.stopPropagation(); toggleSubtaskReminderPanel(subtask.id); };
+
+        slot.appendChild(timeLabel);
+        slot.appendChild(bellBtn);
+
         const deleteBtn = document.createElement('button');
-        // 默认灰色，悬停变深色（hover:text-theme-primary），确认态由 JS 切换为 text-red-500
-        deleteBtn.className = 'text-theme-muted hover:text-theme-primary transition flex-shrink-0 p-1 invisible group-hover:visible';
+        // 桌面端平时不显示（CSS display:none），仅在「管理模式」出现；
+        // 触摸设备由 @media (hover: none) 常显。subtask-delete-btn 同时是这两条规则的钩子。
+        deleteBtn.className = 'subtask-delete-btn';
         deleteBtn.innerHTML = '<i class="fas fa-trash-alt text-xs"></i>';
         deleteBtn.title = '删除';
         deleteBtn.onclick = () => requestSubtaskDelete(subtask.id, deleteBtn);
 
-        wrapper.appendChild(checkbox);
-        wrapper.appendChild(input);
-        wrapper.appendChild(deleteBtn);
+        row.appendChild(checkbox);
+        row.appendChild(input);
+        row.appendChild(slot);
+        row.appendChild(deleteBtn);
+        wrapper.appendChild(row);
+
+        // 若该行处于展开态，重建提醒面板（保证重渲染后不丢失展开状态）
+        if (openSubtaskReminderPanelId === subtask.id) {
+            wrapper.appendChild(buildSubtaskReminderPanel(subtask));
+        }
+
         container.appendChild(wrapper);
 
         // 初始化textarea高度
         autoResizeTextarea(input);
     });
+}
+
+// ==================== 子任务：时间与提前提醒面板 ====================
+// 本地日期/时间字符串（YYYY-MM-DD / HH:MM），用于 input[type=date|time]
+function _toLocalDateStr(d) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function _toLocalTimeStr(d) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 子任务时间的行内文案（显示在子任务行右侧），返回两段：{ date, clock }。
+// 渲染成两行：上行是日期/相对标签（小一号、更淡），下行是时刻（主信息）。
+// 按「距今天数」分级，越近越具体：
+//   今天            → date 空 + 08:00（只显示时刻，见文档 §15）
+//   明天 / 后天      → 明天 / 08:00
+//   本周内（未过去） → 周日 / 18:00
+//   已过去 / 下周及以后 → 9/21 / 18:00；**不在本年度时带年份** → 2027/1/5 / 18:00
+// 「本周」按设置里的周起始日（settings.weekStart）划定，与项目其它周视图口径一致。
+// 已过去的日期一律带月日：否则「周三 18:00」会让人分不清是本周三还是上周三。
+// 非本年度的日期必须带年份（否则「1/5」分不清今年还是明年）；
+// 跨年那一周也不用「周X」（如 12/31 与次年 1/2 同周，写「周五」会分不清哪一年）。
+function parseSubtaskTimeLabel(iso) {
+    if (!iso) return { date: '', clock: '' };
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return { date: '', clock: '' };
+
+    const pad = n => String(n).padStart(2, '0');
+    const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const now = new Date();
+    // 非本年度的日期必须带年份：只写「1/5」分不清是今年还是明年
+    const sameYear = d.getFullYear() === now.getFullYear();
+    const md = sameYear
+        ? `${d.getMonth() + 1}/${d.getDate()}`
+        : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+
+    // 用 UTC 化的年月日算天数差，避免夏令时导致 23/25 小时误差
+    const dayDiff = Math.round(
+        (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
+            - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000
+    );
+
+    // 今天只给时刻（日期行留空）；其余档位都给「日期行 + 时刻行」两段
+    if (dayDiff === 0) return { date: '', clock: hm };
+    if (dayDiff === 1) return { date: '明天', clock: hm };
+    if (dayDiff === 2) return { date: '后天', clock: hm };
+    if (dayDiff < 0) return { date: md, clock: hm };   // 已过去：带月日，避免「本周三 / 上周三」歧义
+
+    const weekStartsOnMonday = (typeof settings !== 'undefined' && settings.weekStart === 'monday');
+    const weekStart = getWeekStartDate(now, weekStartsOnMonday);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    // 本周内**且同年**才用「周X」：跨年那一周（如 12/31 与 1/2 同周）用「周五」会分不清哪一年
+    if (sameYear && target >= weekStart && target <= weekEnd) {
+        return { date: `周${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`, clock: hm };
+    }
+    return { date: md, clock: hm };
+}
+
+// 兼容用：拼成一行字符串（测试与需要纯文本的场景）
+function formatSubtaskTimeLabel(iso) {
+    const p = parseSubtaskTimeLabel(iso);
+    return p.date ? `${p.date} ${p.clock}` : p.clock;
+}
+
+// 把时间文案填成两行（方案 B 主次）：上行日期/相对标签（小一号、更淡），下行时刻。
+// 「今天」没有日期段 → 只有时刻一行；靠 CSS 的 min-height + flex-end 与其他行底部对齐。
+function _fillSubtaskTimeLabel(el, iso) {
+    if (!el) return;
+    const parts = parseSubtaskTimeLabel(iso);
+    el.textContent = '';
+    if (!parts.clock) {
+        el.classList.add('hidden');
+        return;
+    }
+    el.classList.remove('hidden');
+    if (parts.date) {
+        const dateEl = document.createElement('span');
+        dateEl.className = 'subtask-time-date';
+        dateEl.textContent = parts.date;
+        el.appendChild(dateEl);
+    }
+    const clockEl = document.createElement('span');
+    clockEl.className = 'subtask-time-clock';
+    clockEl.textContent = parts.clock;
+    el.appendChild(clockEl);
+}
+
+// 构建子任务提醒面板（时间选择 + 提前提醒多选）
+function buildSubtaskReminderPanel(subtask) {
+    const panel = document.createElement('div');
+    // advance-collapsed：提前提醒配置区默认折叠（见下方 toggle），只留标题行 + N/5 计数
+    panel.className = 'subtask-reminder-panel advance-collapsed';
+    panel.dataset.subtaskId = subtask.id;
+
+    // —— 时间 ——
+    const timeLabel = document.createElement('div');
+    timeLabel.className = 'text-xs font-medium text-theme-secondary mb-1';
+    timeLabel.textContent = '时间';
+    panel.appendChild(timeLabel);
+
+    const timeRow = document.createElement('div');
+    timeRow.className = 'flex items-center gap-1';
+
+    // 每个输入框各自套一层 relative 容器，让快速选择下拉定位到「该输入框正下方」。
+    // 与详情面板 #detail-task-date / #detail-task-time 的结构完全一致
+    // （不能把下拉直接放进 flex 行里：absolute 元素在 flex 容器中的静态位置会跑到行尾，
+    //   导致下拉盖住输入框本身）。
+    const dateWrap = document.createElement('div');
+    dateWrap.className = 'relative flex-1 min-w-0';
+
+    const dateInput = document.createElement('input');
+    dateInput.type = 'date';
+    dateInput.className = 'subtask-date-input w-full px-2 py-1 text-xs border border-theme rounded bg-theme-secondary text-theme-primary cursor-pointer';
+
+    const datePicker = document.createElement('div');
+    datePicker.id = `subtask-date-picker-${subtask.id}`;
+    datePicker.className = 'hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto';
+
+    const timeWrap = document.createElement('div');
+    timeWrap.className = 'relative w-20 flex-shrink-0';
+
+    const timeInput = document.createElement('input');
+    timeInput.type = 'time';
+    timeInput.className = 'subtask-time-input w-full px-2 py-1 text-xs border border-theme rounded bg-theme-secondary text-theme-primary cursor-pointer';
+
+    const timePicker = document.createElement('div');
+    timePicker.id = `subtask-time-picker-${subtask.id}`;
+    timePicker.className = 'hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'flex-shrink-0 px-2 py-1 text-xs rounded border border-theme text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap';
+    clearBtn.textContent = '清除';
+    clearBtn.onclick = (e) => { e.stopPropagation(); clearSubtaskTime(subtask.id); };
+
+    // 回填：优先用子任务自己的时间；子任务尚未设时间时，默认带出所属任务的日期，
+    // 省去用户重复选择（子任务时间独立不继承，这里只是「默认值」，不写库——
+    // 时刻仍为空，所以不会因此产生提醒）
+    if (subtask.startTime) {
+        const d = new Date(subtask.startTime);
+        if (!isNaN(d.getTime())) {
+            dateInput.value = _toLocalDateStr(d);
+            timeInput.value = _toLocalTimeStr(d);
+        }
+    } else {
+        const ownerTask = tasks.find(t => t.id === currentDetailTaskId);
+        if (ownerTask && ownerTask.startTime) {
+            const td = new Date(ownerTask.startTime);
+            if (!isNaN(td.getTime())) dateInput.value = _toLocalDateStr(td);
+        }
+    }
+
+    dateInput.onclick = (e) => {
+        e.stopPropagation();
+        openDatePicker(dateInput, datePicker.id, () => saveSubtaskTimeFromPanel(subtask.id));
+    };
+    timeInput.onclick = (e) => {
+        e.stopPropagation();
+        openTimePicker(timeInput, timePicker.id, () => saveSubtaskTimeFromPanel(subtask.id));
+    };
+    // 移动端 mobile.js 会让 openDatePicker/openTimePicker 直接返回、改用浏览器原生控件
+    // （原生控件不会调用上面的 onPicked），因此必须靠 change 事件提交。
+    // 桌面端自定义选择器也会派发 change，重复提交是幂等的。
+    dateInput.onchange = () => saveSubtaskTimeFromPanel(subtask.id);
+    timeInput.onchange = () => saveSubtaskTimeFromPanel(subtask.id);
+
+    dateWrap.appendChild(dateInput);
+    dateWrap.appendChild(datePicker);
+    timeWrap.appendChild(timeInput);
+    timeWrap.appendChild(timePicker);
+    timeRow.appendChild(dateWrap);
+    timeRow.appendChild(timeWrap);
+    timeRow.appendChild(clearBtn);
+    panel.appendChild(timeRow);
+
+    // —— 提前提醒 ——
+    // 提前提醒标题行：同时是折叠开关（默认折叠，只留标题 + N/5 计数）。
+    // 用 <button> 以便键盘可达；点击冒泡到面板的 click 监听，顺带收起已展开的下拉。
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'subtask-advance-toggle w-full flex items-center justify-between border-t border-theme mt-2 pt-1 mb-1 text-left';
+    head.setAttribute('aria-expanded', 'false');
+    head.title = '展开/收起提前提醒配置';
+
+    const headLeft = document.createElement('span');
+    headLeft.className = 'flex items-center gap-1 text-xs font-medium text-theme-secondary';
+    const chevron = document.createElement('i');
+    chevron.className = 'fas fa-chevron-right subtask-advance-chevron text-[10px] transition-transform duration-150';
+    const headLabel = document.createElement('span');
+    headLabel.textContent = '提前提醒';
+    headLeft.appendChild(chevron);
+    headLeft.appendChild(headLabel);
+
+    const countEl = document.createElement('span');
+    countEl.className = 'subtask-reminder-count text-xs text-theme-muted';
+    countEl.textContent = `0/${REMINDER_MAX_COUNT}`;
+
+    head.appendChild(headLeft);
+    head.appendChild(countEl);
+    head.onclick = () => {
+        const collapsed = panel.classList.toggle('advance-collapsed');
+        head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    };
+    panel.appendChild(head);
+
+    const optionsEl = document.createElement('div');
+    optionsEl.className = 'subtask-reminder-options space-y-0.5';
+    panel.appendChild(optionsEl);
+
+    // —— 自定义提前量 ——
+    const customRow = document.createElement('div');
+    customRow.className = 'subtask-reminder-custom-row flex items-center gap-1 border-t border-theme mt-1 pt-1';
+    const customInput = document.createElement('input');
+    customInput.type = 'number';
+    customInput.min = '1';
+    customInput.max = String(REMINDER_MAX_MINUTES);
+    customInput.placeholder = '提前分钟数';
+    customInput.className = 'subtask-custom-reminder flex-1 min-w-0 px-2 py-1 text-xs border border-theme rounded bg-theme-secondary text-theme-primary';
+    const customAdd = document.createElement('button');
+    customAdd.type = 'button';
+    customAdd.className = 'px-2 py-1 text-xs rounded border border-theme text-theme-secondary hover:bg-theme-secondary transition whitespace-nowrap';
+    customAdd.textContent = '+ 添加';
+    customAdd.onclick = (e) => { e.stopPropagation(); addSubtaskCustomReminder(subtask.id); };
+    customInput.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addSubtaskCustomReminder(subtask.id); }
+    };
+    customRow.appendChild(customInput);
+    customRow.appendChild(customAdd);
+    panel.appendChild(customRow);
+
+    // 面板内点击：阻止冒泡到 document（避免触发"点击面板外关闭面板"以及详情面板的浮层关闭逻辑），
+    // 但同时收起面板内已展开的快速选择下拉——与详情面板"点击选择器外即收起"的口径一致。
+    // 注意：日期/时间输入框与其下拉项自身的 onclick 已 stopPropagation，不会走到这里。
+    panel.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeAllTimePickers();
+    });
+
+    _fillSubtaskPanelOptions(panel, subtask);
+    return panel;
+}
+
+// 渲染面板内的提前量多选列表 + 计数
+function _fillSubtaskPanelOptions(panel, subtask) {
+    const optionsEl = panel.querySelector('.subtask-reminder-options');
+    const countEl = panel.querySelector('.subtask-reminder-count');
+    const selected = getAdvanceMinutes(subtask);
+    updateAdvanceReminderCount(countEl, selected);
+    renderAdvanceReminderOptions(optionsEl, selected, subtask.startTime || null, (next) => {
+        const task = tasks.find(t => t.id === currentDetailTaskId);
+        if (!task) return;
+        const st = (task.subtasks || []).find(x => x.id === subtask.id);
+        if (!st) return;
+        st.reminders = next;
+        saveSubtasksToTask();
+        saveData();
+        refreshSubtaskReminderPanel(subtask.id);
+    }, countEl);
+}
+
+// 局部刷新：铃铛 active 态 + 右侧时间文字 + 面板内容（不动时间输入框，避免打断编辑）
+function refreshSubtaskReminderPanel(subtaskId) {
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return;
+    const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
+    if (!subtask) return;
+
+    const item = document.querySelector(`#subtasks-container .subtask-item[data-subtask-id="${subtaskId}"]`);
+    if (!item) return;
+
+    const panel = item.querySelector('.subtask-reminder-panel');
+
+    // 右侧「共用位置」里的时间文字（铃铛是否显示由 CSS 按 hover / 展开态决定，不在这里管）
+    _fillSubtaskTimeLabel(item.querySelector('.subtask-time-label'), subtask.startTime);
+
+    if (panel) _fillSubtaskPanelOptions(panel, subtask);
+}
+
+// 展开/收起子任务提醒面板（互斥：同时只展开一个）
+function toggleSubtaskReminderPanel(subtaskId) {
+    const container = document.getElementById('subtasks-container');
+    if (!container) return;
+    const item = container.querySelector(`.subtask-item[data-subtask-id="${subtaskId}"]`);
+    if (!item) return;
+
+    const existing = item.querySelector('.subtask-reminder-panel');
+    if (existing) {
+        closeSubtaskReminderPanel();
+        return;
+    }
+
+    // 互斥：折叠其他行已展开的面板
+    container.querySelectorAll('.subtask-reminder-panel').forEach(p => {
+        if (p.dataset.subtaskId !== subtaskId) {
+            p.remove();
+            _setSubtaskPanelOpen(p.dataset.subtaskId, false);
+        }
+    });
+
+    // 打开前收起详情面板的其它浮层，避免叠加
+    const rp = document.getElementById('detail-reminder-picker');
+    if (rp) rp.classList.add('hidden');
+    const rpp = document.getElementById('detail-repeat-picker');
+    if (rpp) rpp.classList.add('hidden');
+    closeAllTimePickers();
+
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return;
+    const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
+    if (!subtask) return;
+
+    item.appendChild(buildSubtaskReminderPanel(subtask));
+    openSubtaskReminderPanelId = subtaskId;
+    _setSubtaskPanelOpen(subtaskId, true);
+}
+
+// 面板展开期间让该行保持显示铃铛（而不是回落到时间文本）：
+// 否则鼠标移进面板后铃铛消失，用户看不出是哪一行处于展开态。
+function _setSubtaskPanelOpen(subtaskId, open) {
+    const container = document.getElementById('subtasks-container');
+    if (!container) return;
+    const item = container.querySelector(`.subtask-item[data-subtask-id="${subtaskId}"]`);
+    if (item) item.classList.toggle('panel-open', open);
+}
+
+// ==================== 子任务「管理模式」 ====================
+// 桌面端平时不显示每行的删除按钮（行右侧只留「时间文本 / 铃铛」共用位置），
+// 点开管理入口后才把所有删除按钮放出来，避免按钮过多。
+// 触摸设备不走这套：那边删除按钮本来就常显（见 @media (hover: none)），入口也不显示。
+
+function _setSubtasksAreaVisible(visible) {
+    // 子任务模式涉及两块内容，必须同步显隐：
+    //   #subtask-desc-row —— 详情说明行（右端挂着「编辑/管理」入口）
+    //   #subtasks-area    —— 子任务列表
+    // 二者都靠 .hidden 控制；入口本身用 opacity 占位，所以行高/宽度不会因显隐变化。
+    const area = document.getElementById('subtasks-area');
+    const descRow = document.getElementById('subtask-desc-row');
+    if (area) area.classList.toggle('hidden', !visible);
+    if (descRow) descRow.classList.toggle('hidden', !visible);
+    if (!visible) exitSubtaskManageMode(); // 离开子任务模式即退出管理态
+}
+
+function toggleSubtaskManageMode() {
+    subtaskManageMode = !subtaskManageMode;
+    _applySubtaskManageMode();
+}
+
+function exitSubtaskManageMode() {
+    if (!subtaskManageMode) return;
+    subtaskManageMode = false;
+    _applySubtaskManageMode();
+}
+
+function _applySubtaskManageMode() {
+    const container = document.getElementById('subtasks-container');
+    const btn = document.getElementById('subtask-manage-btn');
+    if (container) container.classList.toggle('subtask-manage', subtaskManageMode);
+    if (btn) {
+        btn.classList.toggle('on', subtaskManageMode);
+        btn.title = subtaskManageMode ? '完成管理' : '批量管理子任务';
+    }
+    if (subtaskManageMode) {
+        // 进入管理模式时收起已展开的提醒面板：
+        // 否则「行右侧被删除按钮替换」与「面板内的时间输入」并存，状态容易混淆
+        closeSubtaskReminderPanel();
+        resetSubtaskDeleteConfirm();
+    }
+}
+
+// 管理模式是临时状态：这些入口都必须退出，避免状态残留
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && subtaskManageMode) exitSubtaskManageMode();
+});
+
+// 关闭子任务提醒面板：先提交面板中可能被直接键入的时间，再移除面板。
+// 提前提醒是勾选即时写回的，无需在此保存。
+function closeSubtaskReminderPanel() {
+    const id = openSubtaskReminderPanelId;
+    if (!id) return;
+    commitSubtaskTimeInputs(id);          // 必须在移除面板之前读值
+    const panel = document.querySelector(`.subtask-reminder-panel[data-subtask-id="${id}"]`);
+    if (panel) panel.remove();
+    openSubtaskReminderPanelId = null;
+    _setSubtaskPanelOpen(id, false);
+}
+
+// 把面板里的日期/时间输入写回子任务（只写数据，不刷新 UI）
+// 子任务必须带确切时刻：只有日期没有时间视为「无时间」
+function commitSubtaskTimeInputs(subtaskId) {
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return false;
+    const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
+    if (!subtask) return false;
+
+    const panel = document.querySelector(`.subtask-reminder-panel[data-subtask-id="${subtaskId}"]`);
+    if (!panel) return false;
+    const dateEl = panel.querySelector('.subtask-date-input');
+    const timeEl = panel.querySelector('.subtask-time-input');
+    if (!dateEl || !timeEl) return false;
+
+    const dateStr = dateEl.value;
+    const timeStr = timeEl.value;
+    let next = null;
+    if (dateStr && timeStr) {
+        const d = new Date(`${dateStr}T${timeStr}`);
+        next = isNaN(d.getTime()) ? null : d.toISOString();
+    }
+
+    const changed = (subtask.startTime || null) !== next;
+    subtask.startTime = next;
+    saveSubtasksToTask();
+    saveData();
+    return changed;
+}
+
+// 快速选择器选中后：写入 + 局部刷新（右侧时间文字与绝对时间）
+function saveSubtaskTimeFromPanel(subtaskId) {
+    commitSubtaskTimeInputs(subtaskId);
+    refreshSubtaskReminderPanel(subtaskId);
+}
+
+// 清除子任务的时间与提前提醒
+function clearSubtaskTime(subtaskId) {
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return;
+    const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
+    if (!subtask) return;
+
+    subtask.startTime = null;
+    subtask.reminders = [];
+
+    // 清空时一并收起面板内已展开的快速选择下拉
+    closeAllTimePickers();
+
+    const panel = document.querySelector(`.subtask-reminder-panel[data-subtask-id="${subtaskId}"]`);
+    if (panel) {
+        const di = panel.querySelector('.subtask-date-input');
+        const ti = panel.querySelector('.subtask-time-input');
+        if (di) di.value = '';
+        if (ti) ti.value = '';
+        const ci = panel.querySelector('.subtask-custom-reminder');
+        if (ci) ci.value = '';
+    }
+
+    saveSubtasksToTask();
+    saveData();
+    refreshSubtaskReminderPanel(subtaskId);
+}
+
+// 自定义提前量：校验 + 添加
+function addSubtaskCustomReminder(subtaskId) {
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return;
+    const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
+    if (!subtask) return;
+
+    const panel = document.querySelector(`.subtask-reminder-panel[data-subtask-id="${subtaskId}"]`);
+    if (!panel) return;
+    const input = panel.querySelector('.subtask-custom-reminder');
+    const countEl = panel.querySelector('.subtask-reminder-count');
+    if (!input) return;
+
+    const val = parseInt(input.value, 10);
+    const cur = getAdvanceMinutes(subtask);
+    const reject = (msg) => {
+        input.classList.add('border-red-500');
+        setTimeout(() => input.classList.remove('border-red-500'), 1200);
+        if (msg) showToast(msg, 'warning');
+    };
+
+    if (isNaN(val) || val < 1 || val > REMINDER_MAX_MINUTES) {
+        reject(`请输入 1 ~ ${REMINDER_MAX_MINUTES} 之间的分钟数`);
+        return;
+    }
+    if (cur.includes(val)) {
+        reject('该提前量已存在');
+        return;
+    }
+    if (cur.length >= REMINDER_MAX_COUNT) {
+        shakeReminderLimit(countEl);
+        showToast(`最多 ${REMINDER_MAX_COUNT} 个提前提醒`, 'warning');
+        return;
+    }
+
+    subtask.reminders = normalizeReminderMinutes([...cur, val]);
+    input.value = '';
+    saveSubtasksToTask();
+    saveData();
+    refreshSubtaskReminderPanel(subtaskId);
 }
 
 function handleSubtaskReorder(draggedId, targetId, insertAfter = false) {
@@ -1752,7 +2486,7 @@ function handleSubtaskKeydown(event, subtaskId) {
         const nextOrder = nextUncompleted ? (nextUncompleted.originalOrder !== undefined ? nextUncompleted.originalOrder : task.subtasks.indexOf(nextUncompleted)) : currentOrder + 1;
         const newOriginalOrder = (currentOrder + nextOrder) / 2;
         // 新子任务包含光标后的文本
-        const newSubtask = { id: generateId(), text: textAfter, completed: false, originalOrder: newOriginalOrder };
+        const newSubtask = createSubtask(textAfter, newOriginalOrder);
         task.subtasks.splice(subtaskIndex + 1, 0, newSubtask);
         saveData();
         renderSubtasks();
@@ -1777,7 +2511,7 @@ function handleSubtaskKeydown(event, subtaskId) {
             nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
         } else {
             const maxOrder = Math.max(...task.subtasks.map(st => st.originalOrder !== undefined ? st.originalOrder : 0));
-            const newSubtask = { id: generateId(), text: '', completed: false, originalOrder: maxOrder + 1 };
+            const newSubtask = createSubtask('', maxOrder + 1);
             task.subtasks.push(newSubtask);
             saveData();
             renderSubtasks();
@@ -1857,12 +2591,18 @@ function handleSubtaskKeydown(event, subtaskId) {
     }
 }
 
-function toggleSubtaskComplete(subtaskId, completed) {
-    const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
+// 勾选/取消勾选子任务。
+// taskId 可选：提醒 Toast 触发时详情面板可能未打开（或显示别的任务），
+// 此时不能依赖 currentDetailTaskId，必须由调用方显式传入。
+function toggleSubtaskComplete(subtaskId, completed, taskId) {
+    const targetTaskId = taskId || currentDetailTaskId;
+    const taskIndex = tasks.findIndex(t => t.id === targetTaskId);
     if (taskIndex === -1) return;
     const task = tasks[taskIndex];
-    const subtask = task.subtasks.find(st => st.id === subtaskId);
+    const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
     if (subtask) {
+        // 详情面板相关 UI 仅在目标任务正是面板当前任务时刷新，避免串台
+        const isDetailTarget = (currentDetailTaskId === task.id);
         const wasCompleted = subtask.completed;
         const wasTaskCompleted = task.completed;
         subtask.completed = completed;
@@ -1872,9 +2612,11 @@ function toggleSubtaskComplete(subtaskId, completed) {
             subtask.completedAt = null;
         }
         updateTaskProgressFromSubtasks(task);
-        updateDetailCompleteButton(task.completed);
-        renderSubtasks();
-        updateProgressDisplay();
+        if (isDetailTarget) {
+            updateDetailCompleteButton(task.completed);
+            renderSubtasks();
+            updateProgressDisplay();
+        }
 
         // 因子任务全部完成而标记任务完成时，与手动完成（toggleTaskComplete）保持一致：生成下一周期重复任务
         if (task.completed && !wasTaskCompleted && task.repeat && task.repeat.type) {
@@ -2199,28 +2941,21 @@ function closeTaskDetailPanel() {
     if (currentDetailTaskId) {
         const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
         if (taskIndex !== -1) {
-            const titleFromPanel = document.getElementById('detail-task-title').value;
-            if (!titleFromPanel || !titleFromPanel.trim()) {
-                const notesFromPanel = document.getElementById('detail-task-notes');
-                let hasNotes = !!(notesFromPanel && notesFromPanel.value && notesFromPanel.value.trim());
-                // 子任务模式：描述或任一子任务文本有内容时，不算空任务
-                if (!hasNotes && currentTaskMode === 'subtasks') {
-                    const descValue = document.getElementById('detail-task-description').value;
-                    hasNotes = !!(descValue && descValue.trim())
-                        || (tasks[taskIndex].subtasks || []).some(st => st.text && st.text.trim());
-                }
-                if (!hasNotes) {
-                    tasks.splice(taskIndex, 1);
-                    saveDataImmediate();
-                    renderLists();
-                    renderView();
-                    hideDetailPanel();
-                    currentDetailTaskId = null;
-                    if (planPanelOpen) renderPlanPanel();
-                    return;
-                }
-                const defaultTitle = generateUntitledName();
-                document.getElementById('detail-task-title').value = defaultTitle;
+            // 空任务判定统一走面板档：标题/备注读 DOM（唯一权威），子任务模式下再看描述与子任务文本
+            if (isPanelTaskContentless()) {
+                tasks.splice(taskIndex, 1);
+                saveDataImmediate();
+                renderLists();
+                renderView();
+                hideDetailPanel();
+                currentDetailTaskId = null;
+                if (planPanelOpen) renderPlanPanel();
+                return;
+            }
+            // 非空任务：标题仍为空时兜底生成「未命名任务」
+            const titleInput = document.getElementById('detail-task-title');
+            if (!titleInput.value || !titleInput.value.trim()) {
+                titleInput.value = generateUntitledName();
             }
         }
         const saved = saveTaskDetail();
@@ -2369,17 +3104,8 @@ function applyDetailInputsToTask(task, options = {}) {
     const important = detailImportantState;
     const urgent = detailUrgentState;
 
-    // 提醒
-    let reminder = 0;
-    const reminderSelected = document.querySelector('input[name="detail-reminder"]:checked');
-    if (reminderSelected) {
-        if (reminderSelected.value === 'custom') {
-            const customVal = parseInt(document.getElementById('detail-custom-reminder')?.value);
-            reminder = customVal > 0 ? customVal : 0;
-        } else if (reminderSelected.value !== '0') {
-            reminder = parseInt(reminderSelected.value) || 0;
-        }
-    }
+    // 提前提醒（多选）；准点提醒为系统固有行为，不参与配置
+    const reminders = getDetailRemindersFromForm();
 
     // 重复（读取版，不写 task）
     const repeat = getDetailRepeatValueFromForm();
@@ -2450,8 +3176,12 @@ function applyDetailInputsToTask(task, options = {}) {
     _setIf(task.groupId !== groupId, () => { task.groupId = groupId; });
     _setIf(task.important !== important, () => { task.important = important; });
     _setIf(task.urgent !== urgent, () => { task.urgent = urgent; });
-    const newReminder = _isExtTask ? 0 : reminder;
-    _setIf(task.reminder !== newReminder, () => { task.reminder = newReminder; });
+    // 提前提醒：外部日历任务强制清空（附录 A-5）；旧字段 reminder 作为兼容镜像双写
+    const newReminders = _isExtTask ? [] : reminders;
+    _setIf(JSON.stringify(task.reminders || []) !== JSON.stringify(newReminders),
+        () => { task.reminders = newReminders; });
+    const newReminderMirror = newReminders.length ? Math.max(...newReminders) : 0;
+    _setIf(task.reminder !== newReminderMirror, () => { task.reminder = newReminderMirror; });
     return true;
 }
 
@@ -2621,6 +3351,8 @@ function clearTaskTime() {
     delete task.startTime;
     delete task.endTime;
     task.isAllDay = false;
+    // 清除时间后提醒失去意义（无时间则不提醒），一并清空提前提醒与旧字段镜像
+    task.reminders = [];
     task.reminder = 0;
     saveData();
     openTaskDetailPanel(task.id);
@@ -2843,10 +3575,13 @@ function updateDetailPriorityButtons() {
 
 function toggleDetailReminderPicker() {
     const picker = document.getElementById('detail-reminder-picker');
+    if (!picker) return;
+    const willOpen = picker.classList.contains('hidden');
     picker.classList.toggle('hidden');
+    if (willOpen) renderDetailReminderPanel();
 }
 
-function openTimePicker(inputEl, pickerId) {
+function openTimePicker(inputEl, pickerId, onPicked) {
     const picker = document.getElementById(pickerId);
     if (!picker) return;
 
@@ -2898,7 +3633,8 @@ function openTimePicker(inputEl, pickerId) {
                 inputEl.value = timeStr;
                 picker.classList.add('hidden');
                 inputEl.dispatchEvent(new Event('change'));
-                onDetailAllDayChange();
+                if (typeof onPicked === 'function') onPicked();
+                else onDetailAllDayChange();
             };
             picker.appendChild(item);
         }
@@ -2915,7 +3651,7 @@ function openTimePicker(inputEl, pickerId) {
     });
 }
 
-function openDatePicker(inputEl, pickerId) {
+function openDatePicker(inputEl, pickerId, onPicked) {
     const picker = document.getElementById(pickerId);
     if (!picker) return;
 
@@ -2961,7 +3697,8 @@ function openDatePicker(inputEl, pickerId) {
             inputEl.value = dateStr;
             picker.classList.add('hidden');
             inputEl.dispatchEvent(new Event('change'));
-            onDetailAllDayChange();
+            if (typeof onPicked === 'function') onPicked();
+            else onDetailAllDayChange();
         };
         picker.appendChild(item);
     }
@@ -2974,11 +3711,13 @@ function openDatePicker(inputEl, pickerId) {
     tomorrow.setDate(tomorrow.getDate() + 1);
     addDateOption('明天', tomorrow);
 
-    // 3. 本周/下周最后一个工作日（根据调休日历计算）
+    // 3. 工作周期最后一个工作日（当天上班且次日休息；工作日在节假日/调休数据中判定）
+    //    注意：这里的选项文案是「本周X / 下周X」——它是通用日期快捷项，
+    //    与重复规则的名称「工作周期最后一个工作日」无关，勿改为「本周期/下周期」。
     const shortDayNames = ['日', '一', '二', '三', '四', '五', '六'];
     const weekStartsOnMonday = settings.weekStart === 'monday';
     const currentWeekStart = getWeekStartDate(now, weekStartsOnMonday);
-    const thisWeekLastWorkday = findLastWorkdayOfWeek(currentWeekStart, weekStartsOnMonday);
+    const thisWeekLastWorkday = findLastWorkdayOfWeek(currentWeekStart);
     let lastWorkdayDate = null;
     let lastWorkdayLabel = '';
     if (thisWeekLastWorkday && thisWeekLastWorkday >= now) {
@@ -2988,7 +3727,7 @@ function openDatePicker(inputEl, pickerId) {
     } else {
         const nextWeekStart = new Date(currentWeekStart);
         nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-        const nextWeekLastWorkday = findLastWorkdayOfWeek(nextWeekStart, weekStartsOnMonday);
+        const nextWeekLastWorkday = findLastWorkdayOfWeek(nextWeekStart);
         if (nextWeekLastWorkday) {
             lastWorkdayDate = nextWeekLastWorkday;
             lastWorkdayLabel = '下周' + shortDayNames[nextWeekLastWorkday.getDay()];
@@ -3077,37 +3816,203 @@ function toggleRepeatSubmenu(el) {
     }
 }
 
-function updateDetailReminderText() {
-    const selected = document.querySelector('input[name="detail-reminder"]:checked');
-    const reminderText = document.getElementById('detail-reminder-text');
-    const customInput = document.getElementById('detail-custom-reminder');
-    
-    if (selected) {
-        switch (selected.value) {
-            case '0':
-                reminderText.textContent = '不提醒';
-                customInput.classList.add('hidden');
-                break;
-            case '5':
-                reminderText.textContent = '提前5分钟';
-                customInput.classList.add('hidden');
-                break;
-            case '1440':
-                reminderText.textContent = '提前1天';
-                customInput.classList.add('hidden');
-                break;
-            case 'custom':
-                reminderText.textContent = '自定义';
-                customInput.classList.remove('hidden');
-                const customValue = customInput.value;
-                if (customValue) {
-                    reminderText.textContent = `提前${customValue}分钟`;
-                }
-                break;
-            default:
-                reminderText.textContent = '不提醒';
+// ==================== 提前提醒：多选组件（主任务与子任务共用） ====================
+/**
+ * 渲染「提前提醒」多选列表。
+ * 准点提醒是系统固有行为（时间到达必然弹出），不在此列表、也不提供开关。
+ * @param {HTMLElement} container 列表容器
+ * @param {number[]} selected 当前已选提前量
+ * @param {string|null} baseIso 基准时间 ISO（用于右侧绝对时间显示），可空
+ * @param {(minutes:number[])=>void} onChange 选择变化回调（入参为归一化后的新集合）
+ * @param {HTMLElement|null} shakeTarget 达到上限时抖动的元素（通常是计数徽标）
+ * @param {{showAbsolute?: boolean}} [opts] showAbsolute=false 时不渲染右侧绝对时间
+ *        （主任务面板不用，因为它要缩到与收起态等宽；子任务面板保留）
+ */
+function renderAdvanceReminderOptions(container, selected, baseIso, onChange, shakeTarget, opts) {
+    if (!container) return;
+    const showAbsolute = !opts || opts.showAbsolute !== false;
+    const sel = normalizeReminderMinutes(selected);
+    const presetMinutes = REMINDER_PRESETS.map(p => p.minute);
+
+    // 预设项 + 用户自定义项（不在预设里的已选值），统一按提前量降序
+    const items = REMINDER_PRESETS.map(p => ({ minute: p.minute, label: p.label }));
+    sel.forEach(m => {
+        if (!presetMinutes.includes(m)) items.push({ minute: m, label: formatReminderMinute(m) });
+    });
+    items.sort((a, b) => b.minute - a.minute);
+
+    container.innerHTML = '';
+    items.forEach(item => {
+        const checked = sel.includes(item.minute);
+        const disabled = !checked && sel.length >= REMINDER_MAX_COUNT;
+
+        const row = document.createElement('label');
+        row.className = 'flex items-center gap-2 text-sm py-0.5 '
+            + (disabled
+                ? 'opacity-50 cursor-not-allowed text-theme-muted'
+                : 'cursor-pointer text-theme-secondary hover:text-theme-primary');
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'advance-reminder-option flex-shrink-0';
+        cb.value = String(item.minute);
+        cb.checked = checked;
+        cb.disabled = disabled;
+
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'flex-1 truncate';
+        labelSpan.textContent = item.label;
+
+        row.appendChild(cb);
+        row.appendChild(labelSpan);
+        if (showAbsolute) {
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'text-xs text-theme-muted tabular-nums flex-shrink-0';
+            timeSpan.textContent = formatReminderAbsolute(baseIso, item.minute);
+            row.appendChild(timeSpan);
         }
+
+        cb.onchange = () => {
+            let next = normalizeReminderMinutes(sel);
+            if (cb.checked) {
+                if (next.length >= REMINDER_MAX_COUNT) {
+                    cb.checked = false;
+                    shakeReminderLimit(shakeTarget);
+                    showToast(`最多 ${REMINDER_MAX_COUNT} 个提前提醒`, 'warning');
+                    return;
+                }
+                if (!next.includes(item.minute)) next.push(item.minute);
+            } else {
+                next = next.filter(m => m !== item.minute);
+            }
+            onChange(normalizeReminderMinutes(next));
+        };
+
+        container.appendChild(row);
+    });
+}
+
+// 更新「N/5」计数徽标
+function updateAdvanceReminderCount(countEl, minutes) {
+    if (!countEl) return;
+    const n = normalizeReminderMinutes(minutes).length;
+    countEl.textContent = `${n}/${REMINDER_MAX_COUNT}`;
+    countEl.classList.toggle('text-amber-500', n >= REMINDER_MAX_COUNT);
+}
+
+// 达到上限时的抖动提示
+function shakeReminderLimit(el) {
+    if (!el) return;
+    el.classList.remove('reminder-limit-shake');
+    void el.offsetWidth; // 强制重排以重启动画
+    el.classList.add('reminder-limit-shake');
+    setTimeout(() => el.classList.remove('reminder-limit-shake'), 400);
+}
+
+// ==================== 详情面板：提前提醒 ====================
+
+// 渲染详情面板的提前提醒面板（仅复选列表 + 自定义添加；不显示计数与绝对时间）
+function renderDetailReminderPanel() {
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) return;
+
+    const container = document.getElementById('detail-reminder-options');
+    // 达到上限时抖动整个下拉（本面板已无计数徽标可作为抖动目标）
+    const shakeTarget = document.getElementById('detail-reminder-picker');
+    const selected = getAdvanceMinutes(task);
+
+    // 自定义输入框支持回车添加（只绑定一次）
+    const customInput = document.getElementById('detail-custom-reminder');
+    if (customInput && !customInput.dataset.enterBound) {
+        customInput.dataset.enterBound = '1';
+        customInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); addDetailCustomReminder(); }
+        });
     }
+
+    updateDetailReminderText();
+
+    // showAbsolute: false —— 主任务面板已缩到与收起态等宽，不再渲染右侧绝对时间
+    renderAdvanceReminderOptions(container, selected, null, (next) => {
+        const t = tasks.find(x => x.id === currentDetailTaskId);
+        if (!t) return;
+        t.reminders = next;
+        t.reminder = next.length ? Math.max(...next) : 0; // 旧字段镜像
+        updateDetailReminderText();
+        renderDetailReminderPanel();
+        saveData();
+    }, shakeTarget, { showAbsolute: false });
+}
+
+// 折叠态摘要文案 + 计数徽标
+function updateDetailReminderText() {
+    const reminderText = document.getElementById('detail-reminder-text');
+    if (!reminderText) return;
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    const minutes = task ? getAdvanceMinutes(task) : [];
+    reminderText.textContent = formatReminderSummary(minutes);
+    reminderText.title = minutes.length ? minutes.map(formatReminderMinute).join('、') : REMINDER_EMPTY_LABEL;
+
+    // 按钮上的计数徽标：只在「多于 1 条」时显示。
+    // 只有 1 条时收起态摘要本身已经写明了是哪一条（如「提前 5 分钟」），
+    // 再挂一个「1」既冗余又占宽度，故隐藏。
+    const badge = document.getElementById('detail-reminder-badge');
+    if (badge) {
+        badge.textContent = String(minutes.length);
+        badge.classList.toggle('hidden', minutes.length <= 1);
+    }
+}
+
+// 从表单收集提前量（面板已渲染时以 DOM 为准，否则回退到任务数据）
+function getDetailRemindersFromForm() {
+    const container = document.getElementById('detail-reminder-options');
+    if (container && container.children.length) {
+        const fromDom = [];
+        container.querySelectorAll('input.advance-reminder-option:checked').forEach(cb => {
+            const v = parseInt(cb.value, 10);
+            if (!isNaN(v)) fromDom.push(v);
+        });
+        return normalizeReminderMinutes(fromDom);
+    }
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    return task ? getAdvanceMinutes(task) : [];
+}
+
+// 自定义提前量：校验 + 添加
+function addDetailCustomReminder() {
+    const input = document.getElementById('detail-custom-reminder');
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!input || !task) return;
+
+    const val = parseInt(input.value, 10);
+    const cur = getAdvanceMinutes(task);
+
+    const reject = (msg) => {
+        input.classList.add('border-red-500');
+        setTimeout(() => input.classList.remove('border-red-500'), 1200);
+        if (msg) showToast(msg, 'warning');
+    };
+
+    if (isNaN(val) || val < 1 || val > REMINDER_MAX_MINUTES) {
+        reject(`请输入 1 ~ ${REMINDER_MAX_MINUTES} 之间的分钟数`);
+        return;
+    }
+    if (cur.includes(val)) {
+        reject('该提前量已存在');
+        return;
+    }
+    if (cur.length >= REMINDER_MAX_COUNT) {
+        shakeReminderLimit(document.getElementById('detail-reminder-picker'));
+        showToast(`最多 ${REMINDER_MAX_COUNT} 个提前提醒`, 'warning');
+        return;
+    }
+
+    const next = normalizeReminderMinutes([...cur, val]);
+    task.reminders = next;
+    task.reminder = next.length ? Math.max(...next) : 0;
+    input.value = '';
+    renderDetailReminderPanel();
+    saveData();
 }
 
 function updateDetailRepeatText() {
@@ -3130,7 +4035,7 @@ function updateDetailRepeatText() {
         } else if (val === 'weeklyFirstWorkday') {
             repeatText.textContent = '每周首个工作日';
         } else if (val === 'weeklyLastWorkday') {
-            repeatText.textContent = '每周最后一个工作日';
+            repeatText.textContent = '工作周期最后一个工作日';
         } else if (val === 'monthly') {
             repeatText.textContent = '每月';
         } else if (val === 'monthlyFirstWorkday') {
@@ -3274,7 +4179,19 @@ function setupDetailPickerCloseHandler() {
             if (tagPicker) tagPicker.classList.add('hidden');
         });
     }
-    
+
+    // 子任务提醒面板：单击面板外（含子任务编辑框、其它行、面板空白处）保存并关闭。
+    // 与详情面板的浮层关闭口径一致（outside-click 收起）。
+    document.addEventListener('click', (e) => {
+        if (!openSubtaskReminderPanelId) return;
+        // 面板内部（含其日期/时间快速选择下拉）不关闭；面板自身的 click 已 stopPropagation，
+        // 这里再判一次以防将来把下拉移出面板
+        if (e.target.closest('.subtask-reminder-panel')) return;
+        // 铃铛按钮由自身 toggle 处理，避免"刚打开就被这条逻辑关掉"
+        if (e.target.closest('.subtask-bell-btn')) return;
+        closeSubtaskReminderPanel();
+    });
+
     document.addEventListener('click', (e) => {
         const reminderPicker = document.getElementById('detail-reminder-picker');
         const repeatPicker = document.getElementById('detail-repeat-picker');
@@ -3708,6 +4625,7 @@ function initFormHandlers() {
                     task.startTime = startDateTime ? startDateTime.toISOString() : null;
                     task.endTime = endDateTime ? endDateTime.toISOString() : null;
                     task.reminder = reminder;
+                    task.reminders = reminder > 0 ? [reminder] : [];
                     task.repeat = repeat;
                 }
             } else {
@@ -3722,6 +4640,7 @@ function initFormHandlers() {
                     startTime: startDateTime ? startDateTime.toISOString() : null,
                     endTime: endDateTime ? endDateTime.toISOString() : null,
                     reminder,
+                    reminders: reminder > 0 ? [reminder] : [],
                     repeat,
                     completed: false,
                     createdAt: new Date().toISOString()
@@ -3834,9 +4753,13 @@ function getNextRepeatOccurrence(task, opts = {}) {
         } else if (task.repeat.type === 'daily') {
             result = new Date(fromDate);
             if (task.repeat.workdayOnly) {
+                // 必须走 isWorkday（读取 holidayData 的 holidays/workdays），
+                // 不能只看 getDay()：调休周末（如「班」的周日）也是工作日，法定假日里的周中也要跳过。
                 result.setDate(result.getDate() + 1);
-                while (result.getDay() === 0 || result.getDay() === 6) {
+                let guard = 0;
+                while (!isWorkday(result) && guard < 366) {
                     result.setDate(result.getDate() + 1);
+                    guard++;
                 }
             } else {
                 result.setDate(result.getDate() + 1);
@@ -3865,23 +4788,15 @@ function getNextRepeatOccurrence(task, opts = {}) {
                 result.setDate(task.repeat.day);
             }
             if (task.repeat.beforeHoliday) {
-                const holidays = [
-                    { month: 1, day: 1 },
-                    { month: 5, day: 1 },
-                    { month: 10, day: 1 },
-                ];
-                let found = false;
-                for (const h of holidays) {
-                    const holidayDate = new Date(fromDate.getFullYear(), h.month - 1, h.day);
-                    const dayBefore = new Date(holidayDate);
-                    dayBefore.setDate(dayBefore.getDate() - 1);
-                    if (dayBefore > fromDate) {
-                        result = dayBefore;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+                // 从真实节假日数据（holidayData）解析「下一个节假日的首日」，
+                // 取其前一天作为结果。原先硬编码 1/1、5/1、10/1 三个日期，
+                // 既漏掉春节/清明/端午/中秋，也无法跟随用户导入/编辑的调休表。
+                const nextHolidayStart = findNextHolidayStart(fromDate);
+                if (nextHolidayStart) {
+                    result = new Date(nextHolidayStart);
+                    result.setDate(result.getDate() - 1);
+                } else {
+                    // 数据缺失时退回「一年后的元旦前一天」，与旧行为保持一致的兜底语义
                     result = new Date(fromDate.getFullYear() + 1, 0, 0);
                 }
             }
@@ -3890,15 +4805,12 @@ function getNextRepeatOccurrence(task, opts = {}) {
             const currentWeekStart = getWeekStartDate(fromDate, weekStartsOnMonday);
             const nextWeekStart = new Date(currentWeekStart);
             nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-            const firstWorkday = findFirstWorkdayOfWeek(nextWeekStart, weekStartsOnMonday);
+            const firstWorkday = findFirstWorkdayOfWeek(nextWeekStart);
             result = firstWorkday || new Date(fromDate.getTime() + 7 * 24 * 60 * 60 * 1000);
         } else if (task.repeat.type === 'weeklyLastWorkday') {
-            const weekStartsOnMonday = settings.weekStart === 'monday';
-            const currentWeekStart = getWeekStartDate(fromDate, weekStartsOnMonday);
-            const nextWeekStart = new Date(currentWeekStart);
-            nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-            const lastWorkday = findLastWorkdayOfWeek(nextWeekStart, weekStartsOnMonday);
-            result = lastWorkday || new Date(fromDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+            // 「工作周期最后一个工作日」= 当天上班 且 次日休息。
+            // 直接向后找下一个满足条件的日子，无需按周结算（周起始日设置不影响该判定）。
+            result = findNextLastWorkdayOfCycle(fromDate);
         } else if (task.repeat.type === 'monthlyFirstWorkday') {
             let nextMonth = fromDate.getMonth() + 1;
             let nextYear = fromDate.getFullYear();
@@ -4095,6 +5007,9 @@ function skipDetailRepeatCycle() {
         isAllDay: !!task.isAllDay,
         originalStartTime: task._originalStartTime || null,
         reminder: task.reminder,
+        reminders: getAdvanceMinutes(task),
+        // 子任务时间随周期顺延，撤销时需一并还原
+        subtaskTimes: (task.subtasks || []).map(st => ({ id: st.id, startTime: st.startTime || null })),
     };
 
     // 1. 若之前已有顺延的原始基准时间（_originalStartTime），
@@ -4123,6 +5038,20 @@ function skipDetailRepeatCycle() {
     }
     // 不改变 _originalStartTime：顺延+跳过的后续重复周期都应围绕最初设定时间
     // 不改变 task.isAllDay（从 timeInput 判空逻辑可推出，但保持原字段不变更稳）
+
+    // 子任务时间随主任务周期顺延（保持相对位置不变），使子任务提醒跟随新周期
+    if (snapshot.startTime) {
+        const deltaMs = newStartTimeDate.getTime() - new Date(snapshot.startTime).getTime();
+        if (deltaMs !== 0) {
+            (task.subtasks || []).forEach(st => {
+                if (!st.startTime) return;
+                const t = new Date(st.startTime);
+                if (!isNaN(t.getTime())) {
+                    st.startTime = new Date(t.getTime() + deltaMs).toISOString();
+                }
+            });
+        }
+    }
 
     // 保存 + 重渲染
     saveData();
@@ -4173,6 +5102,16 @@ function undoDetailSkipRepeatCycle() {
     }
     task.isAllDay = snap.isAllDay;
     task.reminder = snap.reminder;
+    if (snap.reminders !== undefined) {
+        task.reminders = snap.reminders;
+    }
+    // 还原子任务时间（周期顺延前）
+    if (Array.isArray(snap.subtaskTimes)) {
+        snap.subtaskTimes.forEach(rec => {
+            const st = (task.subtasks || []).find(s => s.id === rec.id);
+            if (st) st.startTime = rec.startTime;
+        });
+    }
     if (snap.originalStartTime) {
         task._originalStartTime = snap.originalStartTime;
     } else {
@@ -4300,9 +5239,24 @@ function toggleTaskComplete(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (task) {
         const willComplete = !task.completed;
+        // 详情面板正展示这条任务时：
+        //   · 勾成完成 → 面板同步标记完成并关闭（否则面板停在旧的「未完成」态上）
+        //   · 取消完成 → 面板保持打开，只把勾选框刷回未完成态（同一类状态不同步问题）
+        // 关闭必须放在塌陷动画与后续重渲染之前：closeTaskDetailPanel 内部的 saveTaskDetail
+        // 可能触发一次 renderView（面板里有未落盘修改时），会把已塌陷的行重建回原高度，动画白播。
+        const detailShowing = isDetailPanelShowingTask(taskId);
+        if (willComplete && detailShowing) {
+            updateDetailCompleteButton(true); // 淡出动画期间面板勾选框同步为完成态
+            closeTaskDetailPanel();           // 走正常关闭流程：先落盘面板里的标题/备注，再收起
+            // 关闭流程可能把「空任务」直接丢弃；此时对象已不在 tasks 里，不再继续勾选
+            if (!tasks.includes(task)) return;
+        }
         // 平滑过渡动画：标记完成时旧条目从左侧勾选框向右擦除、高度塌陷（下方任务向上平移补位），再延迟刷新视图
         const playFx = willComplete && _playTaskDoneCollapseFx(taskId);
         const { structuralChange } = applyTaskCompletionToggle(task);
+        if (!willComplete && detailShowing) {
+            updateDetailCompleteButton(false);
+        }
         renderLists();
         if (typeof renderTags === 'function') renderTags();
         const refresh = () => {

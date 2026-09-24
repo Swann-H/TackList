@@ -170,7 +170,7 @@ function isEventInsideOpenOverlay(e) {
 
 // 方案A：子任务逐行列表展示（最多3行，超出显示"……(已完成/总数)"）
 // colorMode: 'theme'（默认，跟随主题）| 'dark'（深色背景，如 Toast）
-function renderSubtaskListDisplay(task, colorMode = 'theme') {
+function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null) {
     // 文本模式下不显示子任务，回退到 notes 显示
     if (task.mode === 'text') return '';
     let validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
@@ -191,7 +191,12 @@ function renderSubtaskListDisplay(task, colorMode = 'theme') {
     const total = validSubtasks.length;
     const completedCount = validSubtasks.filter(st => st.completed).length;
     const maxShow = 3;
-    const showItems = validSubtasks.slice(0, maxShow);
+    // 高亮的子任务（本次到点的那一个）必须出现在列表中，即使排序上排在 3 条之后
+    let showItems = validSubtasks.slice(0, maxShow);
+    if (highlightId && !showItems.some(st => st.id === highlightId)) {
+        const target = validSubtasks.find(st => st.id === highlightId);
+        if (target) showItems = [...showItems.slice(0, maxShow - 1), target];
+    }
 
     // 颜色规则（全视图统一）：未完成跟随主题色（textMuted 带主题色相），已完成用中性灰（textSecondary）作区分
     const colors = colorMode === 'dark'
@@ -201,8 +206,16 @@ function renderSubtaskListDisplay(task, colorMode = 'theme') {
     let html = '<div class="text-xs mt-1 space-y-0.5">';
     showItems.forEach(st => {
         const icon = st.completed ? 'fa-check-circle' : 'fa-circle';
-        const cls = st.completed ? colors.completed : colors.uncompleted;
-        html += `<div class="${cls} flex items-start gap-1"><i class="far ${icon} mt-0.5 flex-shrink-0"></i><span>${escapeHtml(st.text)}</span></div>`;
+        const isActive = highlightId && st.id === highlightId;
+        // 到点的子任务：前置 caret 图标 + 高亮，一眼定位到是哪一步
+        // ⚠️ dark（Toast 深色底）不能用 text-accent：它是深蓝，压在 bg-slate-900 上对比度不足，
+        //    改用 sky-300（同为蓝系、亮度高），并加粗一档
+        const activeCls = colorMode === 'dark'
+            ? 'text-sky-300 font-semibold'
+            : 'text-accent font-medium';
+        const cls = isActive ? activeCls : (st.completed ? colors.completed : colors.uncompleted);
+        const caret = isActive ? '<i class="fas fa-caret-right mt-0.5 flex-shrink-0"></i>' : '';
+        html += `<div class="${cls} flex items-start gap-1">${caret}<i class="far ${icon} mt-0.5 flex-shrink-0"></i><span>${escapeHtml(st.text)}</span></div>`;
     });
 
     if (total > maxShow) {
@@ -245,12 +258,14 @@ function showToast(message, type = 'info', customDuration = null, title = null) 
 
     toast.className = `quest-toast flex items-center p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full cursor-pointer hover:bg-slate-800 transition-colors`;
 
+    // ⚠️ 第 1 行字号必须与第 2 行统一（都 text-sm）。历史上第 1 行是 text-xs（12px），
+    //    比正文小一号，视觉上"标题比正文还轻"。用户 2026-09-24 要求统一，别再降回 text-xs。
     toast.innerHTML = `
         <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
             <i class="fas ${theme.icon} text-lg"></i>
         </div>
         <div class="flex-1 relative z-10 flex flex-col justify-center">
-            <div class="${theme.color} text-xs font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
+            <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
                 ${displayTitle}
             </div>
             <div class="text-sm font-medium text-slate-300 leading-snug">
@@ -293,12 +308,13 @@ function showConfirmToast(message, onConfirm, onCancel) {
 
     toast.className = `quest-toast flex items-center p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full`;
 
+    // 第 1 行字号与第 2 行统一（text-sm），理由见 showToast 上方注释
     toast.innerHTML = `
         <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
             <i class="fas ${theme.icon} text-lg"></i>
         </div>
         <div class="flex-1 relative z-10 flex flex-col justify-center">
-            <div class="${theme.color} text-xs font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
+            <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
                 ${theme.defaultTitle}
             </div>
             <div class="text-sm font-medium text-slate-300 leading-snug">
@@ -334,30 +350,76 @@ function showConfirmToast(message, onConfirm, onCancel) {
 }
 
 // 构造提醒Toast第2行显示文本
-// 有子任务：显示"清单名 | 任务名"（不含notes，避免与子任务重复）；默认清单仅显示任务名
+// 有子任务：默认清单只显示正文；非默认清单显示"清单名 | 正文"
+//   正文优先取子任务模式的「详情描述」（task.description），未填写描述时回落任务名。
+//   ⚠️ 描述非空时任务名就不会出现在 Toast 里了（第 1 行是服务端拼的"时间 · 子任务名"）——
+//      这是用户确认过的口径：第 1 行保留子任务名，第 2 行让位给详情描述。
 // 无子任务：显示 message 原样（含notes或任务名）
 function buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml) {
     if (!subtaskHtml) {
         // 无子任务：message 正常显示（可能含 notes 或任务名）
         return message;
     }
-    // 有子任务：构造"清单名 | 任务名"，不含 notes
     const taskName = task ? (task.title || taskTitle) : taskTitle;
+    // 仅子任务模式（mode !== 'text'）才有详情描述；文本模式即使残留 description 字段也不参与展示
+    const description = (task && task.mode !== 'text') ? (task.description || '').trim() : '';
+    const body = description || taskName;
     if (message.includes(' | ')) {
-        // 非默认清单：显示"清单名 | 任务名"
-        return message.split(' | ')[0] + ' | ' + taskName;
+        // 非默认清单：显示"清单名 | 正文"
+        return message.split(' | ')[0] + ' | ' + body;
     }
-    // 默认清单：仅显示任务名
-    return taskName;
+    // 默认清单：仅显示正文
+    return body;
+}
+
+// 剥掉服务端标题里的提前量时机段（「 · 30 分钟后 / · 1 小时后 / · 1 天」）。
+// 该段只为系统通知栏服务（桌面通知只有一行标题，必须自带"还有多久"）；
+// 应用内 Toast 的标题行要与准点提醒保持同一套规整格式，时机改由图标徽标承载。
+// ⚠️ 只剥「时长」段：`09-23 09:00` 里的日期属于「任务时间」，必须保留。
+// ⚠️ 提前 ≥1 天那一档服务端不带「后」（`09-23 09:00 · 1 天`），所以「后」是可选后缀。
+// ⚠️ 只剥第一段（`[^·]*` 不允许跨过 ·），避免把任务名/子任务名里恰好出现的
+//    「· 30 分钟后」字样一并吃掉。
+function _stripAdvanceSuffix(title) {
+    // 捕获组用惰性匹配，避免把「·」前的空格一起吃进 $1 而留下双空格
+    return (title || '').replace(/^([^·]*?)\s*·\s*\d+\s*(?:分钟|小时|天)后?/, '$1').trim();
+}
+
+// 提前量中文全称：5 分钟 / 1 小时 / 1 天（与 server.py:_humanize_minute 同语义）
+// ⚠️ 只用于徽标的 title 悬浮提示语——紧凑徽标里塞中文会把徽标撑宽，但提示语读起来要自然。
+function _humanizeAdvance(minute) {
+    const m = parseInt(minute, 10);
+    if (!m || m <= 0) return '';
+    if (m >= 1440 && m % 1440 === 0) return (m / 1440) + ' 天';
+    if (m >= 60 && m % 60 === 0) return (m / 60) + ' 小时';
+    return m + ' 分钟';
+}
+
+// 提前量徽标文案（原方案 A 的紧凑写法）：30′ / 1h / 1d
+// ⚠️ 分钟档用 PRIME（U+2032）而不是撇号 ' / 反引号 ` / 单引号：
+//    只有它是有排版语义的「分」符号，字形窄且带斜度，10px 下也不会糊成一团。
+function _formatAdvanceBadge(minute) {
+    const m = parseInt(minute, 10);
+    if (!m || m <= 0) return '';
+    if (m >= 1440 && m % 1440 === 0) return (m / 1440) + 'd';
+    if (m >= 60 && m % 60 === 0) return (m / 60) + 'h';
+    return m + '\u2032';
 }
 
 // 构造提醒Toast第1行
 // 规则：若第2行(displayMessage)已包含任务名，则第1行只显示时间，避免重复；
 //       若第2行不含任务名（如显示notes），则第1行显示"时间 任务名"
+// 提前提醒标题形如 "08:30 · 30 分钟后"：先剥掉时机段 → 与准点提醒同格式（"08:30"）。
+// 子任务提醒标题形如 "08:50 · 10 分钟后 · 冻结代码分支"：剥掉后为 "08:50 · 冻结代码分支"，
+// 与子任务准点提醒完全一致，故含 · 时整段保留。
 function buildReminderDisplayTitle(title, task, taskTitle, displayMessage) {
+    const raw = _stripAdvanceSuffix(title);
+    // 含 · 的标题（子任务提醒）整段显示，不做裁剪
+    if (raw.includes('·')) {
+        return raw;
+    }
     // 提取纯时间部分
-    const timeMatch = title.match(/^(\d{1,2}:\d{2})/);
-    const timeOnly = timeMatch ? timeMatch[1] : title;
+    const timeMatch = raw.match(/^(\d{1,2}:\d{2})/);
+    const timeOnly = timeMatch ? timeMatch[1] : raw;
     const taskName = task ? (task.title || taskTitle) : taskTitle;
 
     // 判断第2行是否已包含任务名
@@ -376,17 +438,36 @@ function buildReminderDisplayTitle(title, task, taskTitle, displayMessage) {
 }
 
 // 任务提醒Toast - 带Focus/Done/Later/OK四个按钮，不自动消失
-function showReminderToast(title, message, taskId) {
+// opts（可选）：{ subtaskId, pendingSubtasks, reminderKind, reminderMinute }
+//   subtaskId 存在时进入「子任务提醒」模式：
+//     - 视觉与主任务区分（蓝色 + fa-list-check）
+//     - 到点的子任务在列表中高亮
+//     - DONE 语义变为「勾选该子任务」而非完成整个任务
+//     - 展示 5 秒窗口内同时到点的其他子任务
+//   reminderKind === 'advance' 时在图标正下方（6 点钟方向）挂提前量徽标，
+//   与准点提醒（无徽标）区分——标题行保持「时间 [任务名]」的规整格式，不放时机语义。
+// ⚠️ 第 1 行字号与第 2 行统一（都 text-sm），理由见 showToast 上方注释。
+// ⚠️ 第 2 行带 .reminder-toast-body（纯 CSS，-webkit-line-clamp:2）：
+//    详情描述是自由文本，不设上限时 400 字能把 Toast 撑到 534px（基线 149px）。
+//    该类同时是测试脚本定位第 2 行的稳定锚点——**别用 .text-sm 定位**，
+//    因为第 1 行现在也是 text-sm，querySelector 会先命中标题行。
+function showReminderToast(title, message, taskId, opts = {}) {
     const container = document.getElementById('toast-container');
     if (!container) return;
+
+    const subtaskId = opts.subtaskId || null;
+    const pendingSubtasks = Array.isArray(opts.pendingSubtasks) ? opts.pendingSubtasks : [];
+    // 提前提醒徽标文案（准点/稍后提醒为空串 → 不渲染徽标）
+    const advanceBadge = opts.reminderKind === 'advance'
+        ? _formatAdvanceBadge(opts.reminderMinute) : '';
 
     // 从message中提取任务名称（格式可能是"清单名 | 任务名"或纯任务名）
     const taskTitle = message.includes(' | ') ? message.split(' | ').pop() : message;
 
     // 查找任务以获取子任务信息
     const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
-    // 子任务逐行展示（深色背景模式），与日程视图显示方式一致
-    const subtaskHtml = task ? renderSubtaskListDisplay(task, 'dark') : '';
+    // 子任务逐行展示（深色背景模式），到点的子任务高亮
+    const subtaskHtml = task ? renderSubtaskListDisplay(task, 'dark', subtaskId) : '';
 
     // 第2行：根据子任务情况构造显示文本（需先计算，供第1行判断是否显示任务名）
     const displayMessage = buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml);
@@ -395,10 +476,20 @@ function showReminderToast(title, message, taskId) {
     const displayTitle = buildReminderDisplayTitle(title, task, taskTitle, displayMessage);
 
     const toast = document.createElement('div');
-    const theme = {
-        color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
-        shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', icon: 'fa-bell'
-    };
+    const theme = subtaskId
+        ? {
+            color: 'text-sky-400', border: 'border-sky-500', bg: 'bg-sky-500',
+            shadow: 'shadow-[0_0_15px_rgba(14,165,233,0.3)]', icon: 'fa-list-check'
+        }
+        : {
+            color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
+            shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', icon: 'fa-bell'
+        };
+
+    // 同时到点的其他子任务（聚合提示，避免多条 Toast 糊满屏幕）
+    const extraHtml = (subtaskId && pendingSubtasks.length)
+        ? `<div class="text-xs text-slate-400 mt-1 relative z-10">另有 ${pendingSubtasks.length} 个子任务同时到点：${escapeHtml(pendingSubtasks.join('、'))}</div>`
+        : '';
 
     toast.className = `quest-toast flex flex-col p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full`;
 
@@ -406,13 +497,15 @@ function showReminderToast(title, message, taskId) {
         <div class="flex items-center">
             <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
                 <i class="fas ${theme.icon} text-lg"></i>
+                ${advanceBadge ? `<span class="reminder-advance-badge" title="提前 ${escapeHtml(_humanizeAdvance(opts.reminderMinute))}提醒">${escapeHtml(advanceBadge)}</span>` : ''}
             </div>
-            <div class="flex-1 relative z-10 flex flex-col justify-center">
-                <div class="${theme.color} text-xs font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
+            <div class="flex-1 min-w-0 relative z-10 flex flex-col justify-center">
+                <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md truncate">
                     ${displayTitle}
                 </div>
-                ${displayMessage ? `<div class="text-sm font-medium text-slate-300 leading-snug">${displayMessage}</div>` : ''}
+                ${displayMessage ? `<div class="text-sm font-medium text-slate-300 leading-snug break-words reminder-toast-body">${displayMessage}</div>` : ''}
                 ${subtaskHtml}
+                ${extraHtml}
             </div>
         </div>
         <div class="flex gap-2 mt-3 relative z-10 justify-end">
@@ -447,11 +540,24 @@ function showReminderToast(title, message, taskId) {
         }
     });
 
-    // Done: 标记任务完成
+    // Done: 主任务提醒 → 标记任务完成；子任务提醒 → 勾选该子任务
+    // （子任务场景下若沿用"完成整个任务"会造成误操作，语义必须区分）
     doneBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         remove();
-        if (taskId && typeof toggleTaskComplete === 'function') {
+        if (!taskId) return;
+        if (subtaskId) {
+            if (typeof toggleSubtaskComplete === 'function') {
+                const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
+                const st = task ? (task.subtasks || []).find(x => x.id === subtaskId) : null;
+                if (st && !st.completed) {
+                    // 显式传 taskId：提醒弹出时详情面板可能未打开或显示别的任务
+                    toggleSubtaskComplete(subtaskId, true, taskId);
+                }
+            }
+            return;
+        }
+        if (typeof toggleTaskComplete === 'function') {
             const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
             if (task && !task.completed) {
                 toggleTaskComplete(taskId);
@@ -459,16 +565,18 @@ function showReminderToast(title, message, taskId) {
         }
     });
 
-    // Later: 稍后提醒
+    // Later: 稍后提醒（子任务场景下延迟的是该子任务）
     laterBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         remove();
         if (taskId) {
             const delayMinutes = (typeof settings !== 'undefined' && settings.snoozeDelay) ? settings.snoozeDelay : 15;
+            const payload = { taskId: taskId, delayMinutes: delayMinutes };
+            if (subtaskId) payload.subtaskId = subtaskId;
             fetch('/api/reminder/snooze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ taskId: taskId, delayMinutes: delayMinutes })
+                body: JSON.stringify(payload)
             }).catch(err => console.error('Snooze error:', err));
             if (typeof showToast === 'function') {
                 const snoozeTask = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
@@ -555,7 +663,8 @@ function showInAppNotification(title, body) {
     if (!document.hidden) {
         showToast(body || '', 'info', 8000, title);
         // 页面可见时已直接显示Toast，标记该通知为已展示，避免checkBrowserNotifications重复弹出
-        _displayedNotificationKeys.add(title + ':' + body);
+        // 键格式与 _notifKey 保持一致（末尾空 subtaskId）
+        _displayedNotificationKeys.add(title + ':' + body + ':');
     }
 }
 
@@ -567,17 +676,61 @@ let _pendingDisplayNotifs = [];
 
 function _displayNotification(n) {
     if (n.taskId) {
-        showReminderToast(n.title || 'REMINDER', n.body || '', n.taskId);
+        showReminderToast(n.title || 'REMINDER', n.body || '', n.taskId, {
+            subtaskId: n.subtaskId || null,
+            reminderKind: n.reminderKind || null,
+            reminderMinute: n.reminderMinute || 0
+        });
     } else {
         showToast(n.body || '', 'info', 8000, n.title);
     }
 }
 
+// 通知去重键：加入 subtaskId，避免同一任务同一时刻的多个子任务通知被误判为重复而丢弃
+function _notifKey(n) {
+    return (n.title || '') + ':' + (n.body || '') + ':' + (n.subtaskId || '');
+}
+
+// 取子任务文本（用于聚合提示）
+function _subtaskTextOf(taskId, subtaskId) {
+    if (typeof tasks === 'undefined') return '';
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return '';
+    const st = (task.subtasks || []).find(s => s.id === subtaskId);
+    return st ? (st.text || '') : '';
+}
+
+// 批量展示通知：同一主任务的多个子任务提醒聚合为一个 Toast，避免刷屏
+function _displayNotificationBatch(notifs) {
+    const subtaskGroups = new Map(); // taskId -> [notif, ...]
+    notifs.forEach(n => {
+        if (n.taskId && n.subtaskId) {
+            if (!subtaskGroups.has(n.taskId)) subtaskGroups.set(n.taskId, []);
+            subtaskGroups.get(n.taskId).push(n);
+        } else {
+            _displayNotification(n);
+        }
+    });
+    subtaskGroups.forEach((group, taskId) => {
+        const first = group[0];
+        const pendingSubtasks = group.slice(1)
+            .map(n => _subtaskTextOf(taskId, n.subtaskId))
+            .filter(t => t);
+        showReminderToast(first.title || 'REMINDER', first.body || '', taskId, {
+            subtaskId: first.subtaskId,
+            pendingSubtasks,
+            reminderKind: first.reminderKind || null,
+            reminderMinute: first.reminderMinute || 0
+        });
+    });
+}
+
 function checkBrowserNotifications() {
     fetch('/api/notifications').then(r => r.json()).then(notifs => {
         if (!notifs || notifs.length === 0) return;
+        const fresh = [];
         notifs.forEach(n => {
-            const key = (n.title || '') + ':' + (n.body || '');
+            const key = _notifKey(n);
             if (_displayedNotificationKeys.has(key)) {
                 // 已直接展示过，跳过
                 _displayedNotificationKeys.delete(key);
@@ -589,12 +742,13 @@ function checkBrowserNotifications() {
                 _pendingDisplayNotifs = _pendingDisplayNotifs.filter(pn => pn.category !== 'pomodoro');
             }
             if (!document.hidden) {
-                _displayNotification(n);
+                fresh.push(n);
             } else {
                 // 页面不可见时缓存通知，等页面可见时再显示
                 _pendingDisplayNotifs.push(n);
             }
         });
+        if (fresh.length) _displayNotificationBatch(fresh);
     }).catch(err => {
         console.error('Check notifications error:', err);
     });
@@ -604,14 +758,16 @@ function checkBrowserNotifications() {
 function flushPendingNotifications() {
     const notifs = _pendingDisplayNotifs.slice();
     _pendingDisplayNotifs = [];
+    const fresh = [];
     notifs.forEach(n => {
-        const key = (n.title || '') + ':' + (n.body || '');
+        const key = _notifKey(n);
         if (_displayedNotificationKeys.has(key)) {
             _displayedNotificationKeys.delete(key);
             return;
         }
-        _displayNotification(n);
+        fresh.push(n);
     });
+    if (fresh.length) _displayNotificationBatch(fresh);
 }
 
 let bgImageBrightness = 0.5;
@@ -1861,35 +2017,39 @@ function _hexToRgb(hex) {
 function generatePaletteFromAccent(hex) {
     try {
         const [r, g, b] = _hexToRgb(hex);
-        const [h, s] = _rgbToHsl(r, g, b);
+        const [h, s, l] = _rgbToHsl(r, g, b);
 
-        // Light 变体：浅色背景 + 高饱和强调色
-        const lAccent = _hslToRgb(h, Math.min(1, s + 0.15), 0.5);
-        const lAccentHover = _hslToRgb(h, Math.min(1, s + 0.15), 0.42);
-        const lAccentSecondary = _hslToRgb(h, Math.min(1, s + 0.15), 0.6);
-        const lAccentBg = _hslToRgb(h, 0.3, 0.95);
-        const lAccentBgStrong = _hslToRgb(h, 0.4, 0.9);
-        const lAccentTextDark = _hslToRgb(h, Math.min(1, s + 0.1), 0.35);
-        const lAccentLight = _hslToRgb(h, Math.min(1, s + 0.1), 0.6);
+        // ---- Light 变体：浅色背景 + 强调色 ----
         const lBgPrimary = _hslToRgb(h, 0.15, 0.97);
         const lBgSecondary = _hslToRgb(h, 0.08, 1.0);
         const lBgTertiary = _hslToRgb(h, 0.18, 0.93);
+        // 强调色：**原样保留传入的颜色**（旧行为会重写为 HSL(h, s+0.15, 0.5)，
+        // 导致「输入色 ≠ 得到色」，例如 #8b5cf6 变成 #4e00ff）；
+        // 仅当它与背景对比度不足（<3:1）时才做最小幅度的明度修正。
+        const lAccent = _ensureContrast([h, s, l], lBgPrimary, 3.0);
+        const lAccentHover = _ensureContrast([h, Math.min(1, s + 0.05), Math.max(0, l - 0.08)], lBgPrimary, 3.0);
+        const lAccentSecondary = _ensureContrast([h, Math.min(1, s + 0.05), Math.min(1, l + 0.12)], lBgPrimary, 3.0);
+        const lAccentBg = _hslToRgb(h, 0.3, 0.95);
+        const lAccentBgStrong = _hslToRgb(h, 0.4, 0.9);
+        const lAccentTextDark = _ensureContrast([h, Math.min(1, s + 0.05), Math.max(0, l - 0.15)], lBgPrimary, 4.5);
+        const lAccentLight = _ensureContrast([h, Math.min(1, s + 0.05), Math.min(1, l + 0.12)], lBgPrimary, 3.0);
         const lTextPrimary = _ensureContrast([h, 0.2, 0.12], lBgPrimary, 4.5);
         const lTextSecondary = _ensureContrast([h, 0.1, 0.4], lBgPrimary, 3.0);
         const lTextMuted = _ensureContrast([h, 0.08, 0.5], lBgPrimary, 3.0);
         const lBorder = _hslToRgb(h, 0.15, 0.88);
 
-        // Dark 变体：深色背景 + 明亮强调色
-        const dAccent = _hslToRgb(h, Math.min(1, s + 0.1), 0.62);
-        const dAccentHover = _hslToRgb(h, Math.min(1, s + 0.1), 0.72);
-        const dAccentSecondary = _hslToRgb(h, Math.min(1, s + 0.1), 0.7);
-        const dAccentBgRgb = _hslToRgb(h, Math.min(1, s + 0.1), 0.3);
-        const dAccentBgStrongRgb = _hslToRgb(h, Math.min(1, s + 0.1), 0.35);
-        const dAccentTextDark = _hslToRgb(h, Math.min(1, s + 0.05), 0.75);
-        const dAccentLight = _hslToRgb(h, Math.min(1, s + 0.05), 0.7);
+        // ---- Dark 变体：深色背景 + 强调色 ----
         const dBgPrimary = _hslToRgb(h, 0.15, 0.1);
         const dBgSecondary = _hslToRgb(h, 0.18, 0.15);
         const dBgTertiary = _hslToRgb(h, 0.15, 0.22);
+        // 同上：深色变体的强调色同样以传入颜色为准，仅在对比度不足时提亮
+        const dAccent = _ensureContrast([h, s, l], dBgPrimary, 3.0);
+        const dAccentHover = _ensureContrast([h, Math.min(1, s + 0.05), Math.min(1, l + 0.08)], dBgPrimary, 3.0);
+        const dAccentSecondary = _ensureContrast([h, Math.min(1, s + 0.05), Math.min(1, l + 0.06)], dBgPrimary, 3.0);
+        const dAccentBgRgb = _hslToRgb(h, Math.min(1, s + 0.1), 0.3);
+        const dAccentBgStrongRgb = _hslToRgb(h, Math.min(1, s + 0.1), 0.35);
+        const dAccentTextDark = _ensureContrast([h, Math.min(1, s + 0.05), Math.min(1, l + 0.2)], dBgPrimary, 4.5);
+        const dAccentLight = _ensureContrast([h, Math.min(1, s + 0.05), Math.min(1, l + 0.15)], dBgPrimary, 3.0);
         const dTextPrimary = _ensureContrast([h, 0.1, 0.95], dBgPrimary, 4.5);
         const dTextSecondary = _ensureContrast([h, 0.08, 0.75], dBgPrimary, 3.0);
         const dTextMuted = _ensureContrast([h, 0.06, 0.6], dBgPrimary, 3.0);
@@ -2054,6 +2214,35 @@ function migrateBgImagePalettes() {
         if (Object.keys(settings.customPalettes).length === 0) {
             settings.customPalettes = null;
         }
+    }
+}
+
+// 「自定义主题色」入口下线后的数据迁移（2026-09-24）：
+// 旧版本允许用户输入任意 hex 一键生成整套配色，key 为 'custom:<hex>'。
+// 该入口已移除（能力下沉为内置配色卡上的「按强调色重新派生其他层次」），故：
+//   1. 把当前选中的 custom:<hex> 迁移到**色相最接近的内置配色**，并把当时的配色对象
+//      原样写入 customPalettes[builtin:xxx]，保证迁移前后视觉不跳变；
+//   2. 清除 settings.customAccent 与所有 custom:<hex> 残留记录 —— 否则重新输入同一 hex
+//      会静默沿用旧编辑（旧实现「改 hex 就重新派生」约定里的漏洞）。
+function migrateCustomAccentToBuiltin() {
+    var tp = settings.themePalette;
+    if (tp && tp.indexOf('custom:') === 0) {
+        var target = findClosestBuiltinPalette(tp);
+        // 必须在清理前读取：resolvePaletteObject 会优先返回用户编辑过的 custom 调色板
+        var pal = resolvePaletteObject(tp);
+        if (target && pal) {
+            if (!settings.customPalettes) settings.customPalettes = {};
+            // 当前生效的是 custom:<hex>，故以内置配色为容器时以它为准（覆盖该内置配色的同名记录）
+            settings.customPalettes[target] = pal;
+        }
+        settings.themePalette = target || 'none';
+    }
+    settings.customAccent = null;
+    if (settings.customPalettes) {
+        Object.keys(settings.customPalettes).forEach(function (key) {
+            if (key.indexOf('custom:') === 0) delete settings.customPalettes[key];
+        });
+        if (Object.keys(settings.customPalettes).length === 0) settings.customPalettes = null;
     }
 }
 

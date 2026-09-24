@@ -650,7 +650,7 @@ function renderKanbanView(container) {
 
     container.innerHTML = `
         <div class="h-full flex flex-col">
-            <div class="flex-1 min-h-0 flex items-start gap-4 overflow-x-auto pb-2 pt-1" id="kanban-board">
+            <div class="flex-1 min-h-0 flex items-start gap-4 overflow-x-auto scrollbar-always pb-2 pt-1" id="kanban-board">
                 ${boardHtml}
                 ${addGroupHtml}
             </div>
@@ -658,8 +658,35 @@ function renderKanbanView(container) {
 
     // 展开列底部的哨兵元素接近视口时自动追加下一批任务（参考日程视图的懒加载方式）
     setupKanbanLazyIO(container);
+    // 底部横向滚动条：默认隐藏，指针进入滚动条所在窄条时才显示
+    setupKanbanScrollbarHover(document.getElementById('kanban-board'));
     // 折叠态默认显示数按屏幕高度动态校准（值变化时重渲染一次，重测收敛后不再触发）
     requestAnimationFrame(calibrateKanbanDefaultCount);
+}
+
+// ---------- 底部横向滚动条：悬浮才显示 ----------
+// 原生滚动条无法用纯 CSS 精确命中（::-webkit-scrollbar 伪元素不支持 :hover 自身，
+// 而给滚动容器加 :hover 会在指针位于看板任意位置时就显示，等于常显）。
+// 因此按「指针是否落在横向滚动条所占的底部窄条内」切换 .scrollbar-hover 状态类。
+// 监听挂在看板容器自身，随整板重渲染自然重建，不影响其它视图的滚动条。
+const _KANBAN_SCROLLBAR_MIN_ZONE = 14; // 滚动条实际仅 6px，留一点容错高度便于命中
+
+function setupKanbanScrollbarHover(board) {
+    if (!board) return;
+    const update = (e) => {
+        const rect = board.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX > rect.right) {
+            board.classList.remove('scrollbar-hover');
+            return;
+        }
+        // 横向滚动条高度 = offsetHeight - clientHeight（容器无边框）；
+        // overlay 滚动条下该值为 0，用最小值兜底
+        const barH = Math.max(board.offsetHeight - board.clientHeight, _KANBAN_SCROLLBAR_MIN_ZONE);
+        board.classList.toggle('scrollbar-hover', e.clientY >= rect.bottom - barH);
+    };
+    board.addEventListener('mousemove', update);
+    board.addEventListener('mouseleave', () => board.classList.remove('scrollbar-hover'));
+    // 触摸设备无 hover，保持隐藏（滚动条本身在移动端为 overlay，不影响滑动操作）
 }
 
 // ---------- 拖拽落点（任务改派） ----------
@@ -1003,7 +1030,7 @@ function kanbanQuickAdd(colKey) {
         completed: false,
         createdAt: now.toISOString(),
         mode: 'text',
-        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0 }],
+        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0, startTime: null, reminders: [] }],
         progress: 0,
         groupId: groupId
     };

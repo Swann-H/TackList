@@ -12,6 +12,13 @@ let _completedTaskInfo = [];
 let _pomodoroStartPending = false;
 // 超时保护定时器：防止网络异常导致 _pomodoroStartPending 永久保持
 let _pomodoroStartPendingTimer = null;
+// 进入番茄页前任务详情栏的展开状态：记录任务 id 与只读标志，
+// 返回主视图时按记录恢复展开（保持进入番茄页前的界面状态）
+let _pomodoroReturnDetailTaskId = null;
+let _pomodoroReturnDetailReadOnly = false;
+// startPomodoroForTask 内部会先 closePomodoroPage() 再 switchToPomodoroPage() 强制重进，
+// 这对内部调用不是用户主动「返回」，不应消费详情栏恢复标记
+let _pomodoroInternalSwitch = false;
 
 // 专注任务推荐列表缓存：避免每次打开面板都对全量 tasks（可能 5000+）执行三重 sort。
 // 仅在 tasks 变化（含多标签页同步）时由 invalidatePomodoroTaskCache() 清空。
@@ -285,7 +292,14 @@ function _fxCloseModal(modalId, onDone) {
 }
 
 function switchToPomodoroPage() {
-    // 关闭任务详情栏（避免在番茄页面上显示）
+    // 关闭任务详情栏（避免在番茄页面上显示）。
+    // 若此前面板处于展开状态，先记录其任务 id 与只读标志，
+    // 返回主视图（closePomodoroPage）时按记录恢复展开，保持进入前的界面状态
+    const detailPanelEl = document.getElementById('task-detail-panel');
+    if (detailPanelEl && !detailPanelEl.classList.contains('hidden') && currentDetailTaskId) {
+        _pomodoroReturnDetailTaskId = currentDetailTaskId;
+        _pomodoroReturnDetailReadOnly = !!detailReadOnly;
+    }
     if (typeof closeTaskDetailPanel === 'function') closeTaskDetailPanel();
     // 番茄页内容渲染（光圈扩散期间需展示完整页面，故立即渲染、仅暂停内部动画）
     const showPage = () => {
@@ -351,9 +365,25 @@ function _hidePomodoroPage() {
 }
 
 function closePomodoroPage() {
+    // 仅在番茄页真实可见（即用户主动「返回」）时消费恢复标记；
+    // startPomodoroForTask 内部的预防性 close 调用发生在页面隐藏时，不触发恢复
+    const pageEl = document.getElementById('pomodoro-page');
+    const wasVisible = pageEl && !pageEl.classList.contains('hidden') && !_pomodoroInternalSwitch;
+    const restoreDetailId = wasVisible ? _pomodoroReturnDetailTaskId : null;
+    const restoreDetailReadOnly = wasVisible ? _pomodoroReturnDetailReadOnly : false;
+    if (wasVisible) {
+        _pomodoroReturnDetailTaskId = null;
+        _pomodoroReturnDetailReadOnly = false;
+    }
+    const restoreDetailPanel = () => {
+        if (!restoreDetailId) return;
+        if (typeof tasks !== 'undefined' && Array.isArray(tasks) && !tasks.some(t => t.id === restoreDetailId)) return;
+        if (typeof openTaskDetailPanel === 'function') openTaskDetailPanel(restoreDetailId, restoreDetailReadOnly);
+    };
     if (!_fxFeatureOn()) {
         _fxPomodoroCleanup();
         _hidePomodoroPage();
+        restoreDetailPanel();
         return;
     }
     // 终止可能未完成的进入动画（快速往返场景）
@@ -373,6 +403,7 @@ function closePomodoroPage() {
         if (!page.classList.contains('fx-pomo-out')) return;
         _fxPomodoroCleanup(); // 移除 fx-pomo-out 并解除 animationend 监听
         _hidePomodoroPage();
+        restoreDetailPanel(); // 退出动画结束后再恢复详情栏，避免与光圈收拢动画叠加
     };
     _fxWaitPomodoroAnimDone(page, 'fxCircleOut', FX_FEATURE.pomoExit, finishExit);
 }
@@ -1262,8 +1293,10 @@ function startPomodoroForTask(taskId) {
         pomodoroState.state = 'focusing';
         pomodoroState.originalStartedAt = new Date().toISOString();
         startPomodoro();   // 内部统一设置 _pomodoroStartPending
+        _pomodoroInternalSwitch = true;
         closePomodoroPage();
         switchToPomodoroPage();
+        _pomodoroInternalSwitch = false;
         updatePomodoroDisplay();
     } else {
         // 暂停状态下切换任务后恢复计时（按阶段推导 state，休息暂停时应恢复为 resting）
@@ -1283,17 +1316,19 @@ function startPomodoroForTask(taskId) {
                 })
             }).catch(err => console.error('Update pomodoro task error:', err));
         }
+        _pomodoroInternalSwitch = true;
         closePomodoroPage();
         switchToPomodoroPage();
+        _pomodoroInternalSwitch = false;
         updatePomodoroDisplay();
     }
 }
 
 function startPomodoroForTaskFromDetail() {
     if (currentDetailTaskId) {
-        const taskId = currentDetailTaskId;
-        closeTaskDetailPanel();
-        startPomodoroForTask(taskId);
+        // 不在此处提前关闭详情面板：switchToPomodoroPage 会先记录面板展开状态
+        // （任务 id + 只读标志）再统一关闭，返回主视图时按记录恢复展开
+        startPomodoroForTask(currentDetailTaskId);
     }
 }
 
@@ -2595,11 +2630,11 @@ function openAddRecordDatePicker(inputEl, pickerId) {
     dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
     addDateOption('前天', dayBeforeYesterday);
 
-    // 4. 上周最后一个工作日（显示为"上周X"）
+    // 4. 上周期最后一个工作日（显示为"上周X"；当天上班且次日休息者为周期末）
     const currentWeekStart = getWeekStartDate(now, weekStartsOnMonday);
     const lastWeekStart = new Date(currentWeekStart);
     lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-    const lastWeekLastWorkday = findLastWorkdayOfWeek(lastWeekStart, weekStartsOnMonday);
+    const lastWeekLastWorkday = findLastWorkdayOfWeek(lastWeekStart);
     if (lastWeekLastWorkday) {
         const dayName = shortDayNames[lastWeekLastWorkday.getDay()];
         addDateOption('上周' + dayName, lastWeekLastWorkday);

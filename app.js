@@ -22,6 +22,8 @@ async function init() {
     await loadHolidayData();
     checkHolidayDataUpdate();
     updateHolidayCountdown();
+    // 跨天自动刷新侧边栏倒计时（日期变更时重算 days，避免挂着过夜后停在昨天）
+    if (typeof startCountdownDayRolloverWatch === 'function') startCountdownDayRolloverWatch();
     applyDisplaySettings();
     await registerUploadedFontOnLoad();
     applyFontFamily();
@@ -596,7 +598,9 @@ function applyBgCarouselDirectory(value) {
     });
 }
 
-// 「选择目录」：服务端弹出系统目录选择对话框（tkinter / PowerShell / zenity）
+// 「选择目录」：优先服务端系统对话框（tkinter / Qt / zenity 等）；
+// 服务端没有可用的图形对话框时（Linux 缺 python3-tk、无图形会话等），
+// 自动降级到内置目录浏览器——保证该按钮在任何环境下都能用。
 async function bgCarouselSelectDirectory() {
     const btn = document.getElementById('bg-carousel-pick-btn');
     if (btn) {
@@ -610,6 +614,12 @@ async function bgCarouselSelectDirectory() {
             if (dirInput) dirInput.value = result.path;
             const state = await bgCarouselUpdateConfig({ directory: result.path });
             if (state && state.success !== false) showToast('轮播目录已更新', 'success', 2000);
+        } else if (result && (result.reason === 'unavailable' || result.reason === 'error')) {
+            showToast(result.message || (result.reason === 'error'
+                ? '系统目录对话框调用失败，已切换为内置浏览器'
+                : '当前系统没有可用的目录选择对话框，已切换为内置浏览器'), 'info', 4000);
+            const dirInput = document.getElementById('bg-carousel-directory-input');
+            openBgDirBrowser(dirInput ? dirInput.value.trim() : '');
         } else if (result && result.success === false) {
             showToast('未选择目录', 'info', 2000);
         }
@@ -621,6 +631,135 @@ async function bgCarouselSelectDirectory() {
             btn.innerHTML = '<i class="fas fa-folder-open mr-2"></i>选择目录';
         }
     }
+}
+
+// ==================== 内置目录浏览器（零依赖兜底） ====================
+// 只列服务端目录下的子目录，不需要任何系统图形组件，Linux 上一定能用。
+let _dirBrowserState = { path: '', parent: '', shortcuts: [], entries: [] };
+let _dirBrowserSeq = 0;      // 请求序号：丢弃过期响应，避免慢请求覆盖新结果
+let _dirBrowserBound = false;
+
+function openBgDirBrowser(startPath) {
+    const modal = document.getElementById('bg-dir-browser-modal');
+    if (!modal) return;
+    if (!_dirBrowserBound) {
+        const list = document.getElementById('bg-dir-browser-list');
+        if (list) {
+            list.addEventListener('click', e => {
+                const row = e.target.closest('[data-dir-path]');
+                if (row) _dirBrowserLoad(row.getAttribute('data-dir-path'));
+            });
+        }
+        const shortcuts = document.getElementById('bg-dir-browser-shortcuts');
+        if (shortcuts) {
+            shortcuts.addEventListener('click', e => {
+                const chip = e.target.closest('[data-dir-path]');
+                if (chip) _dirBrowserLoad(chip.getAttribute('data-dir-path'));
+            });
+        }
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Escape') return;
+            const m = document.getElementById('bg-dir-browser-modal');
+            if (m && !m.classList.contains('hidden')) closeBgDirBrowser();
+        });
+        _dirBrowserBound = true;
+    }
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    _dirBrowserLoad(startPath || '', true);
+}
+
+function closeBgDirBrowser() {
+    const modal = document.getElementById('bg-dir-browser-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+// 确认：把当前所在目录写入轮播配置
+async function bgDirBrowserConfirm() {
+    const path = _dirBrowserState.path;
+    if (!path) {
+        showToast('请先进入一个目录', 'warning', 2500);
+        return;
+    }
+    const dirInput = document.getElementById('bg-carousel-directory-input');
+    if (dirInput) dirInput.value = path;
+    closeBgDirBrowser();
+    const state = await bgCarouselUpdateConfig({ directory: path });
+    if (state && state.success !== false) showToast('轮播目录已更新', 'success', 2000);
+}
+
+function _dirBrowserStatus(text) {
+    const el = document.getElementById('bg-dir-browser-status');
+    if (!el) return;
+    if (text) {
+        el.textContent = text;
+        el.classList.remove('hidden');
+    } else {
+        el.textContent = '';
+        el.classList.add('hidden');
+    }
+}
+
+function _dirBrowserLoad(path, allowFallback) {
+    const seq = ++_dirBrowserSeq;
+    _dirBrowserStatus('加载中…');
+    bgCarouselBrowseDirectory(path).then(state => {
+        if (seq !== _dirBrowserSeq) return;
+        if (!state || state.success === false) {
+            // 首次带路径进来且该路径不可用：退回主目录，别让用户一进来就是死路
+            if (allowFallback) {
+                showToast((state && state.message) || '该目录不可用，已回到主目录', 'warning', 3000);
+                _dirBrowserLoad('', false);
+                return;
+            }
+            _dirBrowserStatus((state && state.message) || '无法读取该目录');
+            _dirBrowserRender({ path: path || '', parent: '', shortcuts: [], entries: [] });
+            return;
+        }
+        _dirBrowserState = state;
+        _dirBrowserStatus('');
+        _dirBrowserRender(state);
+    }).catch(() => {
+        if (seq !== _dirBrowserSeq) return;
+        _dirBrowserStatus('服务端不可用');
+    });
+}
+
+function _dirBrowserRender(state) {
+    const pathInput = document.getElementById('bg-dir-browser-path');
+    if (pathInput) pathInput.value = state.path || '';
+
+    const shortcuts = document.getElementById('bg-dir-browser-shortcuts');
+    if (shortcuts) {
+        shortcuts.innerHTML = (state.shortcuts || []).map(s =>
+            '<button type="button" data-dir-path="' + escapeHtml(s.path) + '" ' +
+            'class="px-2 py-1 text-xs rounded-md border border-theme bg-theme-tertiary ' +
+            'text-theme-secondary hover:border-accent hover:text-accent-dark transition">' +
+            escapeHtml(s.name) + '</button>'
+        ).join('');
+    }
+
+    const list = document.getElementById('bg-dir-browser-list');
+    if (!list) return;
+    const rows = [];
+    if (state.parent) {
+        rows.push('<div data-dir-path="' + escapeHtml(state.parent) + '" ' +
+            'class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer hover:bg-theme-tertiary text-theme-secondary">' +
+            '<i class="fas fa-level-up-alt w-4 text-center"></i><span class="text-sm">返回上一级</span></div>');
+    }
+    (state.entries || []).forEach(e => {
+        rows.push('<div data-dir-path="' + escapeHtml(e.path) + '" ' +
+            'class="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer hover:bg-theme-tertiary text-theme-primary">' +
+            '<i class="fas fa-folder w-4 text-center text-amber-500"></i>' +
+            '<span class="text-sm truncate">' + escapeHtml(e.name) + '</span></div>');
+    });
+    if (!rows.length) {
+        rows.push('<p class="px-3 py-8 text-center text-sm text-theme-muted">该目录下没有子目录，可直接选择此目录</p>');
+    }
+    list.innerHTML = rows.join('');
+    list.scrollTop = 0;
 }
 
 // 切换间隔（数字 + 单位）：变更后以新间隔重启节奏（clamp 与服务端一致 1..365）
@@ -1925,16 +2064,8 @@ function initThemePalettePreview() {
         }
     }
 
-    // 恢复自定义强调色输入框值
-    const customInput = document.getElementById('custom-accent-input');
-    const customText = document.getElementById('custom-accent-text');
-    if (settings.customAccent) {
-        if (customInput) customInput.value = settings.customAccent;
-        if (customText) customText.value = settings.customAccent;
-    }
-
     _highlightActivePalette(settings.themePalette || 'none');
-    _renderPaletteResetButtons();
+    _renderPaletteCardButtons();
 }
 
 // 渲染内置配色预览色条（根据当前主题选择 light/dark 变体）
@@ -2239,12 +2370,12 @@ function _applyPaletteColor(paletteKey, field, hex, isPreview) {
             _paletteColorSaveTimer = null;
         }
         saveData();
-        _renderPaletteResetButtons();
+        _renderPaletteCardButtons();
     } else {
         if (_paletteColorSaveTimer) clearTimeout(_paletteColorSaveTimer);
         _paletteColorSaveTimer = setTimeout(() => {
             saveData();
-            _renderPaletteResetButtons();
+            _renderPaletteCardButtons();
         }, 400);
     }
 }
@@ -2287,23 +2418,126 @@ function resetPaletteEdit(paletteKey) {
         if (settings.themePaletteColors) {
             _renderPalettePreviews(settings.themePaletteColors);
         }
-        _renderPaletteResetButtons();
+        _renderPaletteCardButtons();
         showToast('已恢复原始配色', 'success', 2000);
     } else {
         showToast('该配色未做编辑', 'info', 2000);
     }
 }
 
-// 渲染配色卡片上的撤销按钮（仅当该配色有编辑记录时显示）
-function _renderPaletteResetButtons() {
+// 配色卡片上的操作按钮（撤销编辑 / 按强调色重新派生其他层次）
+// - 撤销按钮：该配色存在任意编辑记录时显示（没有编辑就无从撤销）
+// - 派生按钮：仅当「强调色」被改过时显示。只改了背景/文字/边框时，用户并没有
+//   「按强调色把其余层次对齐」的诉求，此时露出派生按钮只会造成困惑。
+function _renderPaletteCardButtons() {
     const paletteKeys = ['builtin:blue', 'builtin:green', 'builtin:amber', 'vibrant', 'muted', 'steady'];
     paletteKeys.forEach(key => {
+        const hasEdit = !!(settings.customPalettes && settings.customPalettes[key]);
         const btn = document.querySelector('.palette-reset-btn[data-palette-key="' + key + '"]');
-        if (btn) {
-            const hasEdit = settings.customPalettes && settings.customPalettes[key];
-            btn.style.display = hasEdit ? '' : 'none';
+        if (btn) btn.style.display = hasEdit ? '' : 'none';
+        const deriveBtn = document.querySelector('.palette-derive-btn[data-palette-key="' + key + '"]');
+        if (deriveBtn) {
+            const accentEdited = _paletteAccentEdited(key);
+            deriveBtn.style.display = accentEdited ? '' : 'none';
+            // 强调色与背景层次色相已脱节时高亮提示（用户只改了强调色段、忘了派生其余层次）
+            deriveBtn.classList.toggle('palette-derive-suggested', accentEdited && _paletteHueMismatch(key));
         }
     });
+}
+
+// 取某配色的「基准」调色板（用户未编辑时的原始值），用于比对强调色是否被改过。
+// builtin:xxx → BUILTIN_PALETTES；vibrant/muted/steady → themePaletteColors（背景图提取结果）
+function _basePaletteForKey(paletteKey) {
+    if (paletteKey.indexOf('builtin:') === 0) return BUILTIN_PALETTES[paletteKey.substring(8)] || null;
+    return (settings.themePaletteColors && settings.themePaletteColors[paletteKey]) || null;
+}
+
+// 当前主题变体下，强调色是否被用户改过（与基准值不同）。
+// 只比当前变体：_applyPaletteColor 只改当前主题那一半，未改过的那半保持原样，
+// 此时露出派生按钮点了也不会有变化，属于无效入口。
+function _paletteAccentEdited(paletteKey) {
+    try {
+        if (!settings.customPalettes || !settings.customPalettes[paletteKey]) return false;
+        const base = _basePaletteForKey(paletteKey);
+        if (!base) return false;
+        const isDark = isDarkThemeActive();
+        const pick = p => (p && p.light && p.dark) ? (isDark ? p.dark : p.light) : p;
+        const cur = pick(settings.customPalettes[paletteKey]);
+        const ref = pick(base);
+        if (!cur || !ref || !cur.accent || !ref.accent) return false;
+        return String(cur.accent).toLowerCase() !== String(ref.accent).toLowerCase();
+    } catch (e) {
+        return false;
+    }
+}
+
+// 判断某配色的强调色与背景层次是否「色相脱节」。
+// 用户在配色卡上只改强调色段时，hover/背景/文字/边框仍是旧色相，此时应提示可重新派生。
+function _paletteHueMismatch(paletteKey) {
+    try {
+        const palette = resolvePaletteObject(paletteKey);
+        if (!palette) return false;
+        const isDark = isDarkThemeActive();
+        const v = (palette.light && palette.dark) ? (isDark ? palette.dark : palette.light) : palette;
+        if (!v || !v.accent || !v.bgTertiary) return false;
+        if (!String(v.accent).startsWith('#') || !String(v.bgTertiary).startsWith('#')) return false;
+        const [ar, ag, ab] = _hexToRgb(v.accent);
+        const [ah, as] = _rgbToHsl(ar, ag, ab);
+        if (as < 0.12) return false;   // 无彩色强调色没有可比的色相
+        const [br, bg, bb] = _hexToRgb(v.bgTertiary);
+        const [bh, bs] = _rgbToHsl(br, bg, bb);
+        if (bs < 0.08) return false;   // 背景接近中性灰，不会显得不搭
+        let d = Math.abs(ah - bh);
+        if (d > 180) d = 360 - d;
+        return d > 30;
+    } catch (e) {
+        return false;
+    }
+}
+
+// 按当前强调色重新派生该配色的其他层次（各级背景、各级文字、边框、hover 等）。
+// 用途：用户只改了强调色段时一键把其余层次对齐到新色相，消除「紫按钮配绿背景」这类脱节。
+// 强调色本身原样保留，不会改动用户选定的颜色。
+function rederivePaletteLayers(paletteKey) {
+    const palette = resolvePaletteObject(paletteKey);
+    if (!palette) {
+        showToast('未找到该配色', 'warning', 2500);
+        return;
+    }
+    const dual = !!(palette.light && palette.dark);
+    const variant = dual ? (isDarkThemeActive() ? palette.dark : palette.light) : palette;
+    if (!variant || !variant.accent) {
+        showToast('该配色缺少强调色，无法重新派生', 'warning', 3000);
+        return;
+    }
+
+    const newPalette = JSON.parse(JSON.stringify(palette));
+    // 用派生结果覆盖除 accent 外的所有层次，再把 accent 写回用户当前值
+    const applyVariant = (target, src, keepAccent) => {
+        Object.keys(src).forEach(k => { if (k !== 'accent') target[k] = src[k]; });
+        target.accent = keepAccent;
+    };
+    if (dual) {
+        // 浅色/深色两个变体各自按自己的强调色派生，保证切换主题后依然协调
+        const la = newPalette.light.accent, da = newPalette.dark.accent;
+        const dl = generatePaletteFromAccent(la), dd = generatePaletteFromAccent(da);
+        if (!dl || !dd) { showToast('重新派生失败', 'error', 3000); return; }
+        applyVariant(newPalette.light, dl.light, la);
+        applyVariant(newPalette.dark, dd.dark, da);
+    } else {
+        const d = generatePaletteFromAccent(newPalette.accent);
+        if (!d) { showToast('重新派生失败', 'error', 3000); return; }
+        applyVariant(newPalette, d.light, newPalette.accent);
+    }
+
+    if (!settings.customPalettes) settings.customPalettes = {};
+    settings.customPalettes[paletteKey] = newPalette;
+    if (settings.themePalette === paletteKey) applyThemePalette(paletteKey);
+    saveData();
+    _renderBuiltinPalettePreviews();
+    if (settings.themePaletteColors) _renderPalettePreviews(settings.themePaletteColors);
+    _renderPaletteCardButtons();
+    showToast('已按强调色重新派生其他层次', 'success', 2500);
 }
 
 // 高亮当前选中的调色板卡片（扫描所有 data-palette-key 属性的卡片）
@@ -2317,41 +2551,6 @@ function _highlightActivePalette(name) {
     const noneBtn = document.getElementById('palette-none-btn');
     if (noneBtn) {
         noneBtn.classList.toggle('palette-active', name === 'none');
-    }
-}
-
-// 应用自定义强调色：从输入框读取 hex，生成调色板并应用
-function applyCustomAccent() {
-    const textInput = document.getElementById('custom-accent-text');
-    const colorInput = document.getElementById('custom-accent-input');
-    let hex = (textInput ? textInput.value : '') || (colorInput ? colorInput.value : '');
-    if (!hex) {
-        showToast('请输入或选择强调色', 'warning', 3000);
-        return;
-    }
-    if (!/^#?[0-9a-fA-F]{6}$/.test(hex.replace('#', '')) && !/^#?[0-9a-fA-F]{3}$/.test(hex.replace('#', ''))) {
-        showToast('请输入有效的十六进制颜色（如 #3b82f6）', 'error', 3000);
-        return;
-    }
-    if (!hex.startsWith('#')) hex = '#' + hex;
-    const paletteKey = 'custom:' + hex;
-    settings.customAccent = hex;
-    settings.themePalette = paletteKey;
-    applyThemePalette(paletteKey);
-    _highlightActivePalette(paletteKey);
-    saveData();
-}
-
-// 自定义强调色输入框同步（color picker 与 text input 联动）
-function syncCustomAccentInputs(source) {
-    const colorInput = document.getElementById('custom-accent-input');
-    const textInput = document.getElementById('custom-accent-text');
-    if (source === 'color' && colorInput && textInput) {
-        textInput.value = colorInput.value;
-    } else if (source === 'text' && textInput && colorInput) {
-        if (/^#?[0-9a-fA-F]{6}$/.test(textInput.value.replace('#', ''))) {
-            colorInput.value = textInput.value.startsWith('#') ? textInput.value : '#' + textInput.value;
-        }
     }
 }
 

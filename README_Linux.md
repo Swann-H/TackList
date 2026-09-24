@@ -172,6 +172,30 @@ sudo yum install python3-icalendar    # CentOS / RHEL
 cat server.log | grep "TackList Server"
 ```
 
+### Q: 设置背景图片轮换时，点「选择目录」没有弹出系统文件选择框？
+
+系统会依次尝试 `tkinter` → `PyQt5` / `PySide` → `zenity` / `kdialog` / `qarma` / `yad` 等图形目录选择组件（并会自动补齐 `DISPLAY` 等图形会话环境变量）。这些组件都缺失（或服务运行在无图形会话的环境）时，会自动切换为**内置目录浏览器**（网页内的目录树），功能不受影响。
+
+若希望使用系统原生对话框，可安装任一组件后重启服务：
+
+```bash
+# 银河麒麟 / 统信 UOS / Debian / Ubuntu（推荐）
+sudo apt install python3-tk
+
+# CentOS / RHEL / Fedora
+sudo yum install python3-tkinter
+
+# openSUSE
+sudo zypper install python3-tk
+
+# 或者安装任一命令行选择器（GTK 桌面用 zenity，KDE 桌面用 kdialog）
+sudo apt install zenity
+
+./tacklist.sh restart
+```
+
+内置目录浏览器打开的位置：优先使用输入框里的路径，路径无效时回落到用户主目录；快捷入口按 `xdg-user-dirs` 解析（中文系统的 ~/桌面、英文系统的 ~/Desktop、法语系统的 ~/Bureau 都能正确识别），支持直接输入路径跳转、逐级进入与「选择此目录」。
+
 ### Q: 如何设置开机自启动？
 
 运行 `./install.sh`，或手动创建自启动项：

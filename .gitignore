@@ -1,5 +1,6 @@
 # Runtime state
 server.log
+launcher.log
 server.pid
 server.port
 .data.lock

@@ -1035,6 +1035,46 @@ function redirectIfActiveSidebarItemHidden() {
     if (typeof filterAllTasks === 'function') filterAllTasks();
 }
 
+// ==================== 新建任务的默认清单/标签（跟随侧边栏上下文） ====================
+// 侧边栏正停留在某个清单/标签/过滤器上时，新建任务默认带入该上下文，
+// 避免「在某个清单里点添加任务，任务却落到设置里的默认清单」。
+// 只采用能唯一确定的清单/标签：过滤器同时勾选了多个清单（或多个标签）时无法判断用户意图，
+// 此时回落到设置项 defaultListId，不猜第一个。
+// 日期不参与推断（仍由设置项 defaultTaskDate / 日历传入的 presetDate 决定）。
+// 返回 { listId, tagIds, important, urgent }，null 表示「该维度无上下文、沿用设置项」。
+function getSidebarNewTaskDefaults() {
+    const out = { listId: null, tagIds: [], important: null, urgent: null };
+
+    // 1) 侧边栏选中的清单：排除归档视图(__archived__)、外部订阅聚合视图(__extsrc__:)、
+    //    清单集(isFolder)、订阅专属清单(extSourceId)与已归档清单
+    if (currentListId) {
+        const l = getList(currentListId);
+        if (l && !l.archived && !l.isFolder && !shouldHideExternalList(l)) {
+            out.listId = l.id;
+        }
+    }
+
+    // 2) 侧边栏选中的标签（单选）
+    if (currentTagIds && currentTagIds.length) {
+        out.tagIds = [currentTagIds[0]];
+    }
+
+    // 3) 侧边栏选中的过滤器：取「唯一确定」的清单/标签，以及「必须为真」的优先级
+    //    （过滤器要求重要/紧急时，新任务若不带上就会立刻从当前视图消失）
+    if (currentFilterId) {
+        const f = (settings.filters || []).find(x => x.id === currentFilterId);
+        const c = f && f.conditions;
+        if (c) {
+            if (!out.listId && Array.isArray(c.listIds) && c.listIds.length === 1) out.listId = c.listIds[0];
+            if (!out.tagIds.length && Array.isArray(c.tagIds) && c.tagIds.length === 1) out.tagIds = [c.tagIds[0]];
+            if (c.important === true) out.important = true;
+            if (c.urgent === true) out.urgent = true;
+        }
+    }
+
+    return out;
+}
+
 // ==================== 侧边栏高亮 ====================
 
 function updateSidebarHighlight() {

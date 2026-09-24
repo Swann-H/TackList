@@ -1408,7 +1408,7 @@ function renderNLPPreview(parsed) {
             'monthly': '每月',
             'yearly': '每年',
             'weeklyFirstWorkday': '每周首个工作日',
-            'weeklyLastWorkday': '每周最后一个工作日',
+            'weeklyLastWorkday': '工作周期最后一个工作日',
             'monthlyFirstWorkday': '每月首个工作日',
             'monthlyLastWorkday': '每月最后一个工作日'
         };
@@ -1516,7 +1516,7 @@ function createTaskFromNLP(parsed) {
         completed: false,
         createdAt: new Date().toISOString(),
         mode: 'text',
-        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0 }],
+        subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0, startTime: null, reminders: [] }],
         progress: 0
     };
 

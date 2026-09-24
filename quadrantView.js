@@ -638,7 +638,7 @@ function showQuadrantStagnationModal(task, days, totalCount) {
                 <i class="fas ${theme.icon} text-lg"></i>
             </div>
             <div class="flex-1 relative z-10 flex flex-col justify-center">
-                <div class="${theme.color} text-xs font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
+                <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
                     WARNING
                 </div>
                 <div class="text-sm font-medium text-slate-300 leading-snug">
@@ -705,8 +705,20 @@ function openAddTaskForQuadrant(quadrantKey) {
     const urgent = quadrantKey.includes('urgent') && !quadrantKey.includes('not-urgent');
 
     openAddTaskModal();
-    document.getElementById('task-important').checked = important;
-    document.getElementById('task-urgent').checked = urgent;
+    // 优先级必须走详情面板的状态：面板显示/保存用的是 detailImportantState / detailUrgentState，
+    // 而 #task-important / #task-urgent 属于已废弃的 add-task-modal（永远 hidden），写它们不生效。
+    // 同时直接写回任务对象：新建时 saveData() 已排入节流队列，避免首次落库仍是旧优先级。
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (task) {
+        task.important = important;
+        task.urgent = urgent;
+    }
+    detailImportantState = important;
+    detailUrgentState = urgent;
+    updateDetailPriorityButtons();
+    // openAddTaskModal 已渲染过一次（当时还是旧优先级），需再渲染一次把新卡片放进正确象限。
+    // 两次渲染在同一帧内同步完成，用户看不到中间态。
+    renderView();
 }
 
 // ---------- 四象限视图配置面板 ----------

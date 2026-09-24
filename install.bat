@@ -55,6 +55,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$n=-join([char[]](0x65E5
 :: Remove old startup shortcut if exists (from previous versions)
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$n=-join([char[]](0x65E5,0x7A0B,0x7BA1,0x7406)); $s=[Environment]::GetFolderPath('Startup'); $f=$s+'\'+$n+'.lnk'; if(Test-Path $f){Remove-Item $f -Force}"
 
+:: Clear a stale launch lock left behind by a killed/crashed launcher.
+:: Without this, the next launch waits ~110s and then gives up with
+:: "another launch in progress (pid X), waiting...".
+if exist "%APP_DIR%launch.lock" del /q "%APP_DIR%launch.lock"
+
 echo.
 echo ========================================
 echo   Install complete!
