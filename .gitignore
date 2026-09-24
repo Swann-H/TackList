@@ -37,6 +37,7 @@ Thumbs.db
 
 # Local dev test scripts (not shipped)
 test-cp.js
+inject_test_data.py
 
 # Temp artifacts
 tmp/
