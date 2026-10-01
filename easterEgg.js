@@ -111,9 +111,104 @@
             30% { background-color: rgba(255, 255, 255, 0.5); }
             100% { background-color: rgba(255, 255, 255, 0); }
         }
+
+        /* 星铸徽章：操作行一次性金色描边脉冲 */
+        .ee-row-pulse { animation: ee-row-pulse-anim 0.65s ease-out 1; }
+        @keyframes ee-row-pulse-anim {
+            0% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.55); }
+            100% { box-shadow: 0 0 0 12px rgba(251, 191, 36, 0); }
+        }
     `;
     document.head.appendChild(style);
 })();
+
+// ==================== 锚点系统 ====================
+// 彩蛋特效不再铺满全屏：触发瞬间捕获操作元素在视口中的中心坐标，
+// 粒子的生成域与绘制域收敛到锚点附近（画布仍为 fixed 全屏层，粒子可自由飞出锚点区）。
+// 坐标为触发帧快照，后续行塌陷/重渲染/DOM 删除均不影响已入队彩蛋的播放位置。
+
+function ee_fallbackAnchor() {
+    return { x: window.innerWidth / 2, y: window.innerHeight * 0.35 };
+}
+
+// 捕获元素中心点（fixed 视口坐标）
+function ee_captureAnchor(el) {
+    try {
+        if (el && el.getBoundingClientRect && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 || r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+    } catch (e) { /* 元素可能已脱离 DOM，静默回退 */ }
+    return null;
+}
+
+// 归一化锚点参数：坐标快照直接透传；元素在调用时刻捕获。
+// 调用方若在 DOM 重建后才触发彩蛋（如子任务面板 renderSubtasks 先于彩蛋触发），
+// 应提前用 ee_captureAnchor 捕获快照后传坐标对象。
+function ee_normalizeAnchor(x) {
+    if (x && typeof x.x === 'number' && typeof x.y === 'number') return x;
+    return ee_captureAnchor(x);
+}
+
+// 解析任务类彩蛋锚点：调用方直传的操作元素（点击源）优先；
+// 其次主视图中该任务第一个可见条目（与 _playTaskDoneCollapseFx 的 anchors 口径一致）；
+// 兜底视口中心偏上（覆盖改日期触发等非点击路径）
+function ee_resolveTaskAnchor(taskId, sourceEl) {
+    const fromSrc = ee_normalizeAnchor(sourceEl);
+    if (fromSrc) return fromSrc;
+    if (taskId) {
+        try {
+            const anchors = document.querySelectorAll(`[onclick*="toggleTaskComplete('${taskId}')"]`);
+            for (const el of anchors) {
+                if (el.offsetParent !== null) {
+                    const a = ee_captureAnchor(el);
+                    if (a) return a;
+                }
+            }
+        } catch (e) { /* 选择器异常时走兜底 */ }
+    }
+    return ee_fallbackAnchor();
+}
+
+// 番茄类彩蛋锚点：番茄钟圆环（回主视图播放时必然可见，播放时实时取位）
+function ee_resolvePomodoroAnchor() {
+    return ee_captureAnchor(document.getElementById('pomodoro-circle')) || ee_fallbackAnchor();
+}
+
+// 星铸徽章：为操作行加一次性金色描边脉冲（DOM 层微反馈；性能分级为 0 时不播）
+function ee_pulseRow(taskId, sourceEl) {
+    if (ee_getFxTier() === 0) return;
+    let row = null;
+    if (sourceEl && sourceEl.closest) row = sourceEl.closest('.task-row');
+    if (!row && taskId) {
+        try {
+            document.querySelectorAll(`[onclick*="toggleTaskComplete('${taskId}')"]`).forEach(el => {
+                if (!row && el.offsetParent !== null) row = el.closest('.task-row');
+            });
+        } catch (e) { /* 忽略，脉冲为可选增强 */ }
+    }
+    if (!row) return;
+    row.classList.add('ee-row-pulse');
+    setTimeout(() => row.classList.remove('ee-row-pulse'), 700);
+}
+
+// ==================== 性能分级 ====================
+// 0 = 不播 canvas 特效（仅 toast）：系统级「减弱动态效果」
+// 1 = 低配档：核心数 ≤4 或内存 ≤4GB —— 粒子约减半、时长 -30%、禁用 lighter 混合与 shadowBlur
+// 2 = 完整档
+// 注意：smoothAnimations 是「平滑过渡动画」开关（视图过渡/塌陷类 fx），
+// 彩蛋自有 easterEggEnabled 开关，此处不跨界联动，保证默认体验不变
+let ee_fxTierCache = null;
+function ee_getFxTier() {
+    if (ee_fxTierCache !== null) return ee_fxTierCache;
+    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return (ee_fxTierCache = 0);
+    }
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 8;
+    const mem = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 8;
+    if (cores <= 4 || mem <= 4) return (ee_fxTierCache = 1);
+    return (ee_fxTierCache = 2);
+}
 
 // ==================== 核心状态管理 ====================
 let eeState = {
@@ -203,13 +298,37 @@ function ee_initCanvas() {
     resize();
 }
 
+// 运行时掉帧守护：连续 5 帧间隔 >34ms（约低于 30fps）时，当前批次粒子运行时减半（每批仅一次），
+// 防止低性能终端因彩蛋卡顿；批次结束（粒子清空）后自动复位
+let _eeLastFrameTs = 0, _eeSlowFrames = 0, _eeThinned = false;
+function _eeThinOutActive() {
+    _eeThinned = true;
+    for (const p of ee_particles) {
+        if (typeof p.thinOut === 'function') p.thinOut();
+    }
+    // 独立小粒子（礼花等）直接减半；容器型粒子已由 thinOut 处理内部元素
+    if (ee_particles.length > 1) {
+        ee_particles.length = Math.max(1, Math.ceil(ee_particles.length / 2));
+    }
+}
+
 function ee_animate() {
     if (ee_particles.length === 0) {
         ee_ctx.clearRect(0, 0, ee_canvas.width, ee_canvas.height);
         cancelAnimationFrame(ee_animId);
         ee_animId = null;
+        _eeLastFrameTs = 0; _eeSlowFrames = 0; _eeThinned = false; // 复位守护状态
         return;
     }
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (_eeLastFrameTs) {
+        if (now - _eeLastFrameTs > 34) {
+            if (++_eeSlowFrames >= 5 && !_eeThinned) _eeThinOutActive();
+        } else {
+            _eeSlowFrames = 0;
+        }
+    }
+    _eeLastFrameTs = now;
     // 每次绘制前清空画布，拖尾依靠粒子自带的历史数组实现，保持背景完全透明
     ee_ctx.clearRect(0, 0, ee_canvas.width, ee_canvas.height);
     for (let i = ee_particles.length - 1; i >= 0; i--) {
@@ -275,30 +394,38 @@ class ConfettiParticle {
     isDead() { return this.life <= 0 || this.y > window.innerHeight; }
 }
 
-// 飘落绿叶粒子 (专注力爆棚) - 使用Canvas路径绘制叶子，避免离线模式emoji渲染为黑色方块
+// 飘叶粒子 (专注力爆棚) - 围绕番茄部件盘旋上升的小旋涡（锚点：番茄部件；Canvas路径绘制叶子，避免离线模式emoji渲染为黑色方块）
 class LeafParticle {
-    constructor() {
-        this.x = Math.random() * window.innerWidth;
-        this.y = -50;
-        this.vy = Math.random() * 3 + 4;
-        this.vx = 0;
+    constructor(anchor) {
+        const a = anchor || ee_resolvePomodoroAnchor();
+        const low = ee_getFxTier() <= 1;
+        // 生成于锚点周围半径 ~160px 的圆域内，缓缓盘旋上升
+        const ang = Math.random() * Math.PI * 2;
+        const dist = Math.random() * 160;
+        this.x = a.x + Math.cos(ang) * dist;
+        this.y = a.y + Math.sin(ang) * dist;
+        this.vy = -(Math.random() * 1.2 + 0.6);   // 缓缓上升
         this.angle = Math.random() * Math.PI * 2;
         this.spin = (Math.random() - 0.5) * 0.1;
-        this.size = Math.random() * 15 + 20;
+        this.size = Math.random() * 12 + 14;
+        this.life = low ? 140 : 200;
+        this.maxLife = this.life;
         const greens = ['#4caf50', '#66bb6a', '#43a047', '#388e3c', '#2e7d32', '#81c784'];
         this.color = greens[Math.floor(Math.random() * greens.length)];
     }
     update() {
+        this.life--;
         this.y += this.vy;
         this.angle += this.spin;
-        this.vx = Math.sin(this.angle) * 2;
-        this.x += this.vx;
+        // 水平正弦摆动，与上升叠加形成盘旋轨迹
+        this.x += Math.sin(this.angle) * 1.6;
     }
     draw(ctx) {
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(Math.sin(this.angle));
-        ctx.globalAlpha = this.y > window.innerHeight - 100 ? (window.innerHeight - this.y) / 100 : 0.8;
+        const p = 1 - this.life / this.maxLife;
+        ctx.globalAlpha = Math.sin(p * Math.PI) * 0.85;
         // 绘制叶子形状（纺锤形）
         const s = this.size;
         ctx.fillStyle = this.color;
@@ -316,41 +443,116 @@ class LeafParticle {
         ctx.stroke();
         ctx.restore();
     }
-    isDead() { return this.y > window.innerHeight; }
+    isDead() { return this.life <= 0; }
 }
 
-// 金色雨粒子 (百步穿杨) - 移除shadowBlur以避免大量粒子时的渲染异常
-class GoldenRainParticle {
-    constructor() {
-        this.x = Math.random() * window.innerWidth;
-        this.y = -20 - Math.random() * 100;
-        this.vx = (Math.random() - 0.5) * 1.5;
-        this.vy = Math.random() * 6 + 6;
-        this.size = Math.random() * 6 + 4;
-        this.color = ['#FFD700', '#DAA520', '#F0E68C', '#FFA500', '#FFC125'][Math.floor(Math.random() * 5)];
-        this.life = 150;
-        this.maxLife = 150;
-        this.isCircle = Math.random() > 0.5;
+// ---- 粒子通用缓动 / 颜色工具 ----
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+const _EE_HEX_CACHE = {};
+function hexToRgbaString(hex, alpha) {
+    if (!hex) return `rgba(255, 255, 255, ${alpha})`;
+    let v = _EE_HEX_CACHE[hex];
+    if (!v) {
+        const h = hex.replace('#', '');
+        v = [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+        _EE_HEX_CACHE[hex] = v;
+    }
+    return `rgba(${v[0]}, ${v[1]}, ${v[2]}, ${alpha})`;
+}
+
+// 百步穿杨粒子 - 金矢自右上飞入命中锚点，冲击环 + 金屑迸溅 (0 shadowBlur)
+class GoldenBullseyeParticle {
+    constructor(anchor) {
+        const a = anchor || ee_fallbackAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.ax = a.x; this.ay = a.y; // 靶心（锚点）
+        this.life = low ? 110 : 150;
+        this.maxLife = this.life;
+        this.aimFrames = 16; // 前 16 帧金矢飞入
+        // 金矢自右上入场，指向锚点
+        this.sx = a.x + 200;
+        this.sy = a.y - 160;
+        // 命中后迸溅的金屑（抛物线）
+        this.sparks = [];
+        const n = low ? 24 : 50;
+        for (let i = 0; i < n; i++) {
+            const ang = -Math.PI + Math.random() * Math.PI; // 上半圆抛洒
+            const speed = Math.random() * 6 + 2;
+            this.sparks.push({
+                x: this.ax, y: this.ay,
+                vx: Math.cos(ang) * speed,
+                vy: Math.sin(ang) * speed - 2,
+                size: Math.random() * 3 + 1.5,
+                color: ['#FFD700', '#DAA520', '#F0E68C', '#FFA500'][Math.floor(Math.random() * 4)]
+            });
+        }
     }
     update() {
-        this.x += this.vx; this.y += this.vy; this.life--;
+        this.life--;
+        const timeSpent = this.maxLife - this.life;
+        if (timeSpent > this.aimFrames) {
+            // 金屑抛物线：重力下坠
+            this.sparks.forEach(s => {
+                s.x += s.vx; s.y += s.vy;
+                s.vy += 0.18;
+            });
+        }
     }
     draw(ctx) {
+        const timeSpent = this.maxLife - this.life;
+        const p = Math.min(1, timeSpent / this.aimFrames); // 飞入进度
+        const ease = 1 - Math.pow(1 - p, 3); // ease-out 减速命中
         ctx.save();
-        ctx.fillStyle = this.color;
-        ctx.globalAlpha = Math.min(1, this.life / 30);
-        ctx.translate(this.x, this.y);
-        if (this.isCircle) {
-            ctx.beginPath(); ctx.arc(0, 0, this.size / 2, 0, Math.PI * 2); ctx.fill();
-        } else {
-            ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
+        ctx.globalCompositeOperation = this.low ? 'source-over' : 'lighter';
+
+        // 阶段 1：金矢飞入（描边拖尾 + 矢头）
+        if (p < 1) {
+            const tipX = this.sx + (this.ax - this.sx) * ease;
+            const tipY = this.sy + (this.ay - this.sy) * ease;
+            const ang = Math.atan2(this.ay - this.sy, this.ax - this.sx);
+            const trailLen = 46;
+            const tailX = tipX - Math.cos(ang) * trailLen;
+            const tailY = tipY - Math.sin(ang) * trailLen;
+            // 拖尾两层（Fake Glow）
+            ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(tailX, tailY); ctx.lineTo(tipX, tipY);
+            ctx.strokeStyle = 'rgba(255, 215, 0, 0.25)'; ctx.lineWidth = 8; ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(tailX, tailY); ctx.lineTo(tipX, tipY);
+            ctx.strokeStyle = 'rgba(255, 240, 180, 0.95)'; ctx.lineWidth = 2.5; ctx.stroke();
+            // 矢头（发光精灵）
+            const sz = 26;
+            ctx.drawImage(ee_glow('#FFD700'), tipX - sz / 2, tipY - sz / 2, sz, sz);
+        }
+
+        // 阶段 2：命中冲击环（自锚点扩散）
+        if (timeSpent >= this.aimFrames) {
+            const hitT = (timeSpent - this.aimFrames) / (this.maxLife - this.aimFrames);
+            const ringAlpha = Math.max(0, 1 - hitT);
+            const maxR = this.low ? 70 : 100;
+            const r = easeOutCubic(hitT) * maxR + 8;
+            // 双层冲击环
+            ctx.beginPath(); ctx.arc(this.ax, this.ay, r, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(255, 215, 0, ${ringAlpha * 0.3})`; ctx.lineWidth = 14; ctx.stroke();
+            ctx.beginPath(); ctx.arc(this.ax, this.ay, r, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(255, 245, 200, ${ringAlpha * 0.9})`; ctx.lineWidth = 3; ctx.stroke();
+
+            // 金屑（外层光晕 + 核心亮点）
+            const sparkAlpha = Math.max(0, this.life / (this.maxLife * 0.4));
+            this.sparks.forEach(s => {
+                ctx.fillStyle = hexToRgbaString(s.color, sparkAlpha * 0.35);
+                ctx.beginPath(); ctx.arc(s.x, s.y, s.size * 2.5, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = `rgba(255, 255, 255, ${sparkAlpha * 0.9})`;
+                ctx.beginPath(); ctx.arc(s.x, s.y, s.size * 0.8, 0, Math.PI * 2); ctx.fill();
+            });
         }
         ctx.restore();
     }
-    isDead() { return this.life <= 0 || this.y > window.innerHeight; }
+    thinOut() { this.sparks = this.sparks.slice(0, Math.ceil(this.sparks.length / 2)); }
+    isDead() { return this.life <= 0; }
 }
 
-// 莲花心境粒子 (清空禅意) - 多重青色柔和涟漪 + Canvas内全局白光呼吸，无DOM依赖
+// 莲花心境粒子 (清空禅意) - 多重青色柔和涟漪 + Canvas内全局白光呼吸，无DOM依赖（全屏版）
 class ZenRippleParticle {
     constructor() {
         this.x = window.innerWidth / 2;
@@ -410,41 +612,43 @@ class ZenRippleParticle {
     isDead() { return this.life <= 0; }
 }
 
-// 1. 清算旧账 - 闪电裂痕贯穿全屏 + 紫/蓝能量碎片炸开 (0 shadowBlur, 纯 Fake Glow)
+// 1. 清算旧账 - 小闪电自锚点上方劈落命中锚点 + 紫/蓝能量碎片炸开 (0 shadowBlur, 纯 Fake Glow)
 class ThunderStrikeParticle {
-    constructor() {
-        this.life = 180; // 3秒
-        this.maxLife = 180;
-        const w = window.innerWidth;
-        const h = window.innerHeight;
+    constructor(anchor) {
+        const a = anchor || ee_fallbackAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.life = low ? 110 : 150;
+        this.maxLife = this.life;
+        const topY = Math.max(-40, a.y - 160); // 闪电起点（允许出屏少许，营造天降感）
 
-        // 1. 生成曲折的闪电主干路径
+        // 1. 生成曲折的闪电主干路径：自上方劈落至锚点
         this.lightningPath = [];
-        let currentX = w * (0.2 + Math.random() * 0.6); // 顶部随机起点
-        let currentY = 0;
+        let currentX = a.x + (Math.random() - 0.5) * 60; // 顶部随机偏移
+        let currentY = topY;
         this.lightningPath.push({ x: currentX, y: currentY });
 
-        while (currentY < h) {
-            currentX += (Math.random() - 0.5) * 200; // 左右剧烈折跃
-            currentY += Math.random() * 80 + 40;     // 向下延伸
+        while (currentY < a.y - 10) {
+            currentX += (Math.random() - 0.5) * 50; // 左右折跃（幅度收敛到锚点邻域）
+            currentY += Math.random() * 35 + 15;    // 向下延伸
             this.lightningPath.push({ x: currentX, y: currentY });
         }
+        // 终点精确命中锚点
+        this.lightningPath.push({ x: a.x, y: a.y });
 
-        // 2. 在闪电节点和路径上生成爆炸的能量碎片
+        // 2. 锚点处炸开的能量碎片
         this.sparks = [];
-        this.lightningPath.forEach(point => {
-            // 每个节点炸出 8 个碎片
-            for(let i = 0; i < 8; i++) {
-                this.sparks.push({
-                    x: point.x,
-                    y: point.y,
-                    vx: (Math.random() - 0.5) * 30, // 极高的初始爆发速度
-                    vy: (Math.random() - 0.5) * 20,
-                    size: Math.random() * 3 + 1.5,
-                    color: Math.random() > 0.5 ? '180, 100, 255' : '100, 220, 255' // 电光紫与荧光蓝交织
-                });
-            }
-        });
+        const n = low ? 12 : 24;
+        for (let i = 0; i < n; i++) {
+            this.sparks.push({
+                x: a.x,
+                y: a.y,
+                vx: (Math.random() - 0.5) * 12, // 爆发速度（局部化后收敛）
+                vy: (Math.random() - 0.5) * 8 - 2,
+                size: Math.random() * 3 + 1.5,
+                color: Math.random() > 0.5 ? '180, 100, 255' : '100, 220, 255' // 电光紫与荧光蓝交织
+            });
+        }
     }
 
     update() {
@@ -452,27 +656,34 @@ class ThunderStrikeParticle {
         this.sparks.forEach(s => {
             s.x += s.vx;
             s.y += s.vy;
-            s.vx *= 0.88; // 极大的空气阻力，模拟"爆开后迅速减速"
-            s.vy *= 0.88;
-            s.vy += 0.3;  // 附加轻微重力使其缓缓下坠
+            s.vx *= 0.9; // 空气阻力，模拟"爆开后迅速减速"
+            s.vy *= 0.9;
+            s.vy += 0.25;  // 附加轻微重力使其缓缓下坠
         });
     }
 
     draw(ctx) {
         const timeSpent = this.maxLife - this.life;
-        const w = window.innerWidth;
-        const h = window.innerHeight;
 
         ctx.save();
-        ctx.globalCompositeOperation = 'lighter'; // 叠加发光
+        if (!this.low) ctx.globalCompositeOperation = 'lighter'; // 叠加发光
 
         // ================= 阶段 1：雷霆劈落 (前 15 帧) =================
         if (timeSpent < 15) {
             const strikeAlpha = 1 - (timeSpent / 15);
 
-            // 绘制白紫屏闪击强光
-            ctx.fillStyle = `rgba(220, 200, 255, ${strikeAlpha * 0.4})`;
-            ctx.fillRect(0, 0, w, h);
+            // 落点局部径向光斑（替代全屏闪白，收敛于 r=90）
+            const flash = ctx.createRadialGradient(
+                this.lightningPath[this.lightningPath.length - 1].x,
+                this.lightningPath[this.lightningPath.length - 1].y, 0,
+                this.lightningPath[this.lightningPath.length - 1].x,
+                this.lightningPath[this.lightningPath.length - 1].y, 90);
+            flash.addColorStop(0, `rgba(220, 200, 255, ${strikeAlpha * 0.55})`);
+            flash.addColorStop(1, 'rgba(220, 200, 255, 0)');
+            ctx.fillStyle = flash;
+            const fx = this.lightningPath[this.lightningPath.length - 1].x;
+            const fy = this.lightningPath[this.lightningPath.length - 1].y;
+            ctx.fillRect(fx - 90, fy - 90, 180, 180);
 
             // 绘制闪电本体 (Fake Glow 替代 shadowBlur)
             const drawLightningLayer = (width, alpha, color) => {
@@ -488,15 +699,15 @@ class ThunderStrikeParticle {
             };
 
             // 三层叠加，瞬间产生极强的发光质感
-            drawLightningLayer(20, 0.25, '150, 0, 255');  // 底层：宽厚的紫色环境光晕
-            drawLightningLayer(8, 0.6, '200, 150, 255');  // 中层：明亮的电光紫
+            drawLightningLayer(16, 0.25, '150, 0, 255');  // 底层：宽厚的紫色环境光晕
+            drawLightningLayer(6, 0.6, '200, 150, 255');  // 中层：明亮的电光紫
             drawLightningLayer(2, 1.0, '255, 255, 255');  // 顶层：纯白锐利的核心
         }
 
         // ================= 阶段 2：能量碎片消散 (全程) =================
         let sparkAlpha = 1;
         if (timeSpent < 5) sparkAlpha = timeSpent / 5; // 头 5 帧碎片渐入
-        else sparkAlpha = Math.max(0, this.life / 175); // 随后平滑淡出
+        else sparkAlpha = Math.max(0, this.life / (this.maxLife - 5)); // 随后平滑淡出
 
         this.sparks.forEach(s => {
             // Fake Glow 碎片渲染法
@@ -516,22 +727,28 @@ class ThunderStrikeParticle {
         ctx.restore();
     }
 
+    thinOut() { this.sparks = this.sparks.slice(0, Math.ceil(this.sparks.length / 2)); }
     isDead() { return this.life <= 0; }
 }
 
-// 4. 番茄三连 - 精灵之森魔法阵 (蓝绿色基调，几何魔法光环)
+// 4. 番茄三连 - 精灵之森魔法阵围绕番茄圈绽放 (蓝绿色基调，几何魔法光环)
 class FocusRippleParticle {
-    constructor() {
-        this.life = 300; this.maxLife = 300;
-        const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
-        const offset = Math.min(window.innerWidth, window.innerHeight) * 0.18;
-        
-        // 品字形三个魔法阵中心
-        this.circles = [
-            { x: cx, y: cy - offset, delay: 0 },
-            { x: cx - offset * 0.9, y: cy + offset * 0.6, delay: 40 },
-            { x: cx + offset * 0.9, y: cy + offset * 0.6, delay: 80 }
-        ];
+    constructor(anchor) {
+        const a = anchor || ee_resolvePomodoroAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.life = low ? 160 : 260; this.maxLife = this.life;
+        const offset = low ? 55 : 75;
+
+        // 品字形三个魔法阵中心（低配档收敛为单阵）
+        this.circles = low
+            ? [{ x: a.x, y: a.y, delay: 0 }]
+            : [
+                { x: a.x, y: a.y - offset, delay: 0 },
+                { x: a.x - offset * 0.9, y: a.y + offset * 0.6, delay: 40 },
+                { x: a.x + offset * 0.9, y: a.y + offset * 0.6, delay: 80 }
+            ];
+        this.maxR = low ? 50 : 70;
     }
     update() { this.life--; }
     drawMagicCircle(ctx, x, y, radius, rotation, alpha) {
@@ -569,27 +786,30 @@ class FocusRippleParticle {
     draw(ctx) {
         const timeSpent = this.maxLife - this.life;
         ctx.save();
-        ctx.globalCompositeOperation = 'screen';
+        ctx.globalCompositeOperation = this.low ? 'source-over' : 'screen';
 
         this.circles.forEach(c => {
             if (timeSpent > c.delay) {
                 const cLife = timeSpent - c.delay;
-                if (cLife < 220) {
-                    const progress = cLife / 220;
+                const cDuration = this.maxLife - c.delay;
+                if (cLife < cDuration) {
+                    const progress = cLife / cDuration;
                     // 弹簧阻尼放大效果
-                    const r = (1 - Math.pow(1 - progress, 4)) * window.innerWidth * 0.35;
+                    const r = (1 - Math.pow(1 - progress, 4)) * this.maxR;
                     const alpha = Math.sin(progress * Math.PI); // 0->1->0
                     const rotation = timeSpent * 0.02; // 魔法阵旋转
-                    
+
                     this.drawMagicCircle(ctx, c.x, c.y, r, rotation, alpha);
-                    
-                    // 绽放的生命荧光
-                    for(let i=0; i<3; i++) {
-                        const a = Math.random() * Math.PI * 2;
-                        const dist = Math.random() * r;
-                        ctx.fillStyle = `rgba(100, 255, 200, ${alpha})`;
-                        ctx.beginPath(); ctx.arc(c.x + Math.cos(a)*dist, c.y + Math.sin(a)*dist, Math.random()*3+1, 0, Math.PI*2);
-                        ctx.fill();
+
+                    // 绽放的生命荧光（低配档跳过，每帧随机点开销可省）
+                    if (!this.low) {
+                        for(let i=0; i<3; i++) {
+                            const a = Math.random() * Math.PI * 2;
+                            const dist = Math.random() * r;
+                            ctx.fillStyle = `rgba(100, 255, 200, ${alpha})`;
+                            ctx.beginPath(); ctx.arc(c.x + Math.cos(a)*dist, c.y + Math.sin(a)*dist, Math.random()*3+1, 0, Math.PI*2);
+                            ctx.fill();
+                        }
                     }
                 }
             }
@@ -599,7 +819,7 @@ class FocusRippleParticle {
     isDead() { return this.life <= 0; }
 }
 
-// 心流极光波纹粒子 (全屏Canvas) - 三条波浪线从右向左入场展开
+// 心流极光波纹粒子 (全屏Canvas) - 三条波浪线从右向左入场展开（全屏版）
 class AuroraWaveParticle {
     constructor() {
         this.time = 0;
@@ -653,7 +873,7 @@ class AuroraWaveParticle {
     isDead() { return this.life <= 0; }
 }
 
-// 2. 落日归山 - 绝美晚霞与动态重峦叠嶂 (群山剪影+体积光霞)
+// 2. 落日归山 - 绝美晚霞与动态重峦叠嶂 (群山剪影+体积光霞，全屏版)
 class SunsetHorizonParticle {
     constructor() {
         this.life = 260; this.maxLife = 260; // 约4.3秒，符合4-5秒时长要求
@@ -719,7 +939,7 @@ class SunsetHorizonParticle {
     isDead() { return this.life <= 0; }
 }
 
-// 坐忘无我粒子 (单任务专注超3小时) - 浅蓝氛围 + 缓慢上浮发光微粒
+// 坐忘无我粒子 (单任务专注超3小时) - 浅蓝氛围 + 缓慢上浮发光微粒（全屏版）
 class VoidStateParticle {
     constructor() {
         this.life = 240; // 4秒（在5秒内，保留深沉的时间流逝感）
@@ -774,20 +994,27 @@ class VoidStateParticle {
     isDead() { return this.life <= 0; }
 }
 
-// 3. 超新星爆发 - 宇宙级星系坍缩与大爆炸 (120粒子+预渲染发光，流畅60fps)
+// 3. 超新星爆发 - 锚点处星系坍缩与大爆炸 (蓄力环→粒子迸发，绘制域收敛于锚点 ±shockR)
 class SupernovaParticle {
-    constructor() {
-        this.cx = window.innerWidth / 2; this.cy = window.innerHeight / 2;
-        this.life = 300; this.maxLife = 300;
+    constructor(anchor) {
+        const a = anchor || ee_fallbackAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.cx = a.x; this.cy = a.y;
+        this.life = low ? 180 : 260;
+        this.maxLife = this.life;
+        this.chargeFrames = low ? 45 : 70; // 坍缩蓄力帧数
+        this.shockR = low ? 180 : 250;     // 冲击星云半径上限
 
-        // 120个爆炸粒子 (原500，使用发光精灵+lighter混合弥补数量)
-        this.particles = Array.from({length: 120}, () => {
+        // 爆发粒子
+        const n = low ? 32 : 70;
+        this.particles = Array.from({length: n}, () => {
             const angle = Math.random() * Math.PI * 2;
-            const speed = Math.random() * 45 + 10;
+            const speed = Math.random() * 22 + 5; // 局部化后速度收敛
             return {
                 x: this.cx, y: this.cy,
                 vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-                history: [], size: Math.random() * 3 + 1,
+                history: [], trailLen: low ? 3 : 6, size: Math.random() * 3 + 1,
                 color: ['#ffffff', '#00ffff', '#ffdd00', '#ff5500'][Math.floor(Math.random()*4)]
             };
         });
@@ -795,10 +1022,10 @@ class SupernovaParticle {
     update() {
         this.life--;
         const timeSpent = this.maxLife - this.life;
-        if (timeSpent > 70) { // 蓄力70帧后爆炸
+        if (timeSpent > this.chargeFrames) { // 蓄力后爆炸
             this.particles.forEach(p => {
                 p.history.push({x: p.x, y: p.y});
-                if (p.history.length > 6) p.history.shift(); // 6点拖尾 (原20)
+                if (p.history.length > p.trailLen) p.history.shift();
                 p.x += p.vx; p.y += p.vy;
                 p.vx *= 0.94; p.vy *= 0.94;
             });
@@ -806,36 +1033,40 @@ class SupernovaParticle {
     }
     draw(ctx) {
         const timeSpent = this.maxLife - this.life;
-        const w = window.innerWidth, h = window.innerHeight;
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
 
-        if (timeSpent <= 70) {
-            // 阶段一：黑洞坍缩引力波 (仅1次shadowBlur)
-            const progress = timeSpent / 70;
-            const r = (1 - Math.pow(progress, 3)) * w * 0.8;
-            ctx.shadowBlur = 40; ctx.shadowColor = '#00ffff';
+        if (timeSpent <= this.chargeFrames) {
+            // 阶段一：引力坍缩环（纯描边环收敛，无 shadowBlur）
+            const progress = timeSpent / this.chargeFrames;
+            const r = (1 - Math.pow(progress, 3)) * this.shockR * 0.7 + 12;
             ctx.beginPath(); ctx.arc(this.cx, this.cy, r, 0, Math.PI*2);
-            ctx.lineWidth = 20 * progress; ctx.strokeStyle = `rgba(0, 200, 255, ${progress})`; ctx.stroke();
-            ctx.shadowBlur = 0;
+            ctx.lineWidth = 12 * progress;
+            ctx.strokeStyle = `rgba(0, 200, 255, ${progress * 0.7})`; ctx.stroke();
+            // 内层亮环
+            ctx.beginPath(); ctx.arc(this.cx, this.cy, r, 0, Math.PI*2);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = `rgba(200, 250, 255, ${progress})`; ctx.stroke();
 
             // 核心高能聚集 (发光精灵替代shadowBlur)
             ctx.globalAlpha = Math.pow(progress, 4);
-            const coreSize = progress * 80;
+            const coreSize = progress * 64;
             ctx.drawImage(ee_glow('#ffffff'), this.cx - coreSize/2, this.cy - coreSize/2, coreSize, coreSize);
             ctx.globalAlpha = 1;
         } else {
             // 阶段二：超新星绚丽大爆炸
-            const expProgress = (timeSpent - 70) / 230;
+            const expProgress = (timeSpent - this.chargeFrames) / (this.maxLife - this.chargeFrames);
             const alpha = 1 - Math.pow(expProgress, 2);
 
-            // 宇宙星云背景冲击波 (仅1次createRadialGradient)
-            const nebula = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, w * expProgress * 1.2);
+            // 冲击星云（径向渐变收敛于 shockR，非全屏）
+            const nebula = ctx.createRadialGradient(this.cx, this.cy, 0, this.cx, this.cy, this.shockR * expProgress + 20);
             nebula.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.8})`);
             nebula.addColorStop(0.1, `rgba(0, 255, 255, ${alpha * 0.6})`);
             nebula.addColorStop(0.4, `rgba(150, 0, 255, ${alpha * 0.3})`);
             nebula.addColorStop(1, `rgba(0, 0, 0, 0)`);
-            ctx.fillStyle = nebula; ctx.fillRect(0,0,w,h);
+            ctx.fillStyle = nebula;
+            const R = this.shockR + 20;
+            ctx.fillRect(this.cx - R, this.cy - R, R * 2, R * 2);
 
             // 绘制流星拖尾 (无shadowBlur，依靠 lighter 混合发光)
             ctx.lineCap = 'round';
@@ -858,26 +1089,50 @@ class SupernovaParticle {
         }
         ctx.restore();
     }
+    thinOut() {
+        this.particles = this.particles.slice(0, Math.ceil(this.particles.length / 2));
+        this.particles.forEach(p => p.trailLen = Math.max(1, p.trailLen - 2));
+    }
     isDead() { return this.life <= 0; }
 }
 
-// 6. 多线程大师 - 全息神经网络与数据狂潮 (批量连线+预渲染发光节点)
+// 6. 多线程大师 - 锚点邻域的全息神经网络与数据狂潮 (批量连线+预渲染发光节点)
 class JugglerParticle {
-    constructor() {
-        this.life = 300; this.maxLife = 300;
-        const w = window.innerWidth, h = window.innerHeight;
-        // 24个神经元节点 (原30，降低O(n²)连线计算量)
-        this.nodes = Array.from({length: 24}, () => ({
-            x: Math.random() * w, y: Math.random() * h,
-            vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2,
-            size: Math.random() * 4 + 2
-        }));
+    constructor(anchor) {
+        const a = anchor || ee_fallbackAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.cx = a.x; this.cy = a.y;
+        this.fieldR = low ? 140 : 200; // 神经元游走域半径
+        this.linkDist = low ? 180 : 240; // 连线阈值
+        this.life = low ? 160 : 240; this.maxLife = this.life;
+        // 神经元节点在锚点邻域生成
+        const n = low ? 5 : 8;
+        this.nodes = Array.from({length: n}, () => {
+            const ang = Math.random() * Math.PI * 2;
+            const r = Math.random() * this.fieldR;
+            return {
+                x: this.cx + Math.cos(ang) * r,
+                y: this.cy + Math.sin(ang) * r,
+                vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2,
+                size: Math.random() * 4 + 2
+            };
+        });
         this.packets = [];
     }
     update() {
         this.life--;
-        this.nodes.forEach(n => { n.x += n.vx; n.y += n.vy; });
-        if (this.life % 5 === 0) {
+        this.nodes.forEach(n => {
+            n.x += n.vx; n.y += n.vy;
+            // 越出锚点邻域则向锚点回拉，保持网络聚拢
+            const dx = n.x - this.cx, dy = n.y - this.cy;
+            const d = Math.hypot(dx, dy);
+            if (d > this.fieldR) {
+                n.vx -= dx / d * 0.1;
+                n.vy -= dy / d * 0.1;
+            }
+        });
+        if (this.life % 6 === 0) {
             const n1 = this.nodes[Math.floor(Math.random()*this.nodes.length)];
             const n2 = this.nodes[Math.floor(Math.random()*this.nodes.length)];
             this.packets.push({ n1, n2, progress: 0, speed: Math.random()*0.05 + 0.02 });
@@ -890,7 +1145,7 @@ class JugglerParticle {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
 
-        // 批量绘制神经元连线 (单一路径+单次stroke，原276次stroke→1次)
+        // 批量绘制神经元连线 (单一路径+单次stroke)
         ctx.lineWidth = 1;
         ctx.strokeStyle = `rgba(0, 255, 255, ${alpha * 0.25})`;
         ctx.beginPath();
@@ -898,7 +1153,7 @@ class JugglerParticle {
             for (let j = i + 1; j < this.nodes.length; j++) {
                 const n1 = this.nodes[i], n2 = this.nodes[j];
                 const dist = Math.hypot(n1.x - n2.x, n1.y - n2.y);
-                if (dist < 250) {
+                if (dist < this.linkDist) {
                     ctx.moveTo(n1.x, n1.y);
                     ctx.lineTo(n2.x, n2.y);
                 }
@@ -928,91 +1183,145 @@ class JugglerParticle {
         ctx.globalAlpha = 1;
         ctx.restore();
     }
+    thinOut() { this.nodes = this.nodes.slice(0, Math.ceil(this.nodes.length / 2)); }
     isDead() { return this.life <= 0; }
 }
 
-// 7. 断舍离 - 神圣风暴/辉光席卷 (流体旋风+余烬，预渲染发光优化)
+// 7. 断舍离 - "叶落辞行"（重设计版）：
+//    触发条件是"10秒内删除3个任务"，动画与之严格对应——
+//    ① 锚点（最后被删的行原位）扬起微尘（扫除感）
+//    ② 三片秋叶剪影自原位依次飘起、旋转着升空渐隐（数量呼应删除的3个任务，"已随风而去"）
+//    ③ 收尾一道暖柔光自下而上掠过原位（清理归位的仪式感）
+//    性能：3 片叶（2 段二次贝塞尔叶形+叶脉）+ 20/10 颗微尘 + 1 条光带渐变，
+//    绘制域收敛于锚点 ±160px，无 shadowBlur、无 lighter、无拖尾历史数组。
 class LetGoParticle {
-    constructor() {
-        this.life = 300; this.maxLife = 300;
-        const w = window.innerWidth, h = window.innerHeight;
-        // 80片余烬 (原300，使用发光精灵+lighter混合弥补数量)
-        this.leaves = Array.from({length: 80}, () => ({
-            x: Math.random() * w * 0.5 - 300,
-            y: h + Math.random() * 600,
-            size: Math.random() * 5 + 2,
-            history: [],
-            color: Math.random() > 0.5 ? '#ffd700' : '#00ffff'
+    constructor(anchor) {
+        const a = anchor || ee_fallbackAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.life = low ? 140 : 200;
+        this.maxLife = this.life;
+        this.ax = a.x; this.ay = a.y;
+        // 三片辞行叶（对应删除的3个任务），依次延迟 14 帧飘起
+        const leafColors = ['rgba(205, 170, 120, 0.9)', 'rgba(190, 150, 110, 0.9)', 'rgba(215, 185, 140, 0.9)'];
+        this.leaves = [0, 14, 28].map((delay, i) => ({
+            delay,
+            x: a.x + (Math.random() - 0.5) * 70,
+            y: a.y + (Math.random() - 0.5) * 16,
+            swayPhase: Math.random() * Math.PI * 2,
+            swayAmp: 14 + Math.random() * 10, // 水平摆幅
+            rot: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.08,
+            size: 7 + Math.random() * 4,
+            color: leafColors[i]
         }));
-        // 预取发光精灵引用，避免循环内重复查缓存
-        this._glowGold = null;
-        this._glowCyan = null;
+        // 微尘（扫除扬起的细尘）
+        const n = low ? 10 : 20;
+        this.dust = Array.from({length: n}, () => ({
+            x: a.x + (Math.random() - 0.5) * 90,
+            y: a.y + (Math.random() - 0.5) * 24,
+            vx: (Math.random() - 0.5) * 1.2,
+            vy: -(Math.random() * 0.9 + 0.3),
+            size: Math.random() * 2 + 0.8,
+            phase: Math.random() * Math.PI * 2
+        }));
     }
     update() {
         this.life--;
-        const time = (this.maxLife - this.life) * 0.05;
+        const t = this.maxLife - this.life;
+        // 辞行叶：缓缓上浮 + 摆动相位推进 + 自转
         this.leaves.forEach(l => {
-            l.history.push({x: l.x, y: l.y});
-            if (l.history.length > 5) l.history.shift(); // 5点拖尾 (原8)
-            const vx = 15 + Math.sin(l.y * 0.01 + time) * 10;
-            const vy = -12 + Math.cos(l.x * 0.01 + time) * 8;
-            l.x += vx; l.y += vy;
+            if (t < l.delay) return;
+            l.y -= 0.85;
+            l.swayPhase += 0.045;
+            l.rot += l.rotSpeed;
+        });
+        // 微尘：轻飘上扬
+        this.dust.forEach(d => {
+            d.x += d.vx + Math.sin(d.phase) * 0.3;
+            d.y += d.vy;
+            d.phase += 0.03;
         });
     }
     draw(ctx) {
-        const timeSpent = this.maxLife - this.life;
-        const alpha = Math.sin((timeSpent / this.maxLife) * Math.PI);
-        const w = window.innerWidth, h = window.innerHeight;
+        const t = this.maxLife - this.life;
+        const progress = t / this.maxLife;
         ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
 
-        // 神圣风轨 (4条贝塞尔曲线，shadowBlur开销可控)
-        ctx.shadowBlur = 15; ctx.shadowColor = '#ffffff';
-        for (let i = 0; i < 4; i++) { // 原6条→4条
-            ctx.beginPath();
-            const startX = -200 + timeSpent * 20 + i * 150;
-            const startY = h - (timeSpent * 12) + i * 80;
-            ctx.moveTo(startX, startY);
-            ctx.bezierCurveTo(startX + 400, startY - 200, startX + 600, startY + 100, startX + 1000, startY - 500);
-            ctx.strokeStyle = `rgba(200, 230, 255, ${alpha * 0.3})`;
-            ctx.lineWidth = 12 - i*2; ctx.stroke();
+        // 1. 微尘扬起（前 60% 衰减殆尽）
+        if (progress < 0.6) {
+            const dustA = (1 - progress / 0.6) * 0.8;
+            this.dust.forEach(d => {
+                ctx.fillStyle = `rgba(200, 190, 175, ${dustA * 0.5})`;
+                ctx.beginPath(); ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = `rgba(255, 250, 240, ${dustA * 0.7})`;
+                ctx.beginPath(); ctx.arc(d.x, d.y, d.size * 0.45, 0, Math.PI * 2); ctx.fill();
+            });
         }
-        ctx.shadowBlur = 0; // 重置，避免影响余烬绘制
 
-        // 发光余烬拖尾 (无shadowBlur，依靠 lighter 混合发光)
-        ctx.lineCap = 'round';
+        // 2. 三片辞行叶（各自淡入淡出，旋转飘升）
         this.leaves.forEach(l => {
-            if (l.history.length > 1) {
-                ctx.beginPath();
-                ctx.moveTo(l.history[0].x, l.history[0].y);
-                for (let i = 1; i < l.history.length; i++) ctx.lineTo(l.history[i].x, l.history[i].y);
-                ctx.lineTo(l.x, l.y);
-                ctx.globalAlpha = alpha * 0.8;
-                ctx.strokeStyle = l.color; ctx.lineWidth = l.size;
-                ctx.stroke();
-            }
-            // 余烬核心发光 (预渲染精灵替代shadowBlur)
-            ctx.globalAlpha = alpha;
-            const sz = l.size * 5;
-            ctx.drawImage(ee_glow(l.color), l.x - sz/2, l.y - sz/2, sz, sz);
+            const lt = t - l.delay;
+            if (lt < 0) return;
+            const lp = lt / (this.maxLife - l.delay); // 该叶生命周期进度 0→1
+            const la = Math.sin(Math.min(1, lp) * Math.PI) * 0.95;
+            if (la <= 0.01) return;
+            const x = l.x + Math.sin(l.swayPhase) * l.swayAmp;
+            ctx.save();
+            ctx.translate(x, l.y);
+            ctx.rotate(l.rot + Math.sin(l.swayPhase) * 0.3); // 摆动连带俯仰
+            ctx.globalAlpha = la;
+            ctx.fillStyle = l.color;
+            // 叶形：两段二次贝塞尔构成的纺锤
+            ctx.beginPath();
+            ctx.moveTo(0, -l.size);
+            ctx.quadraticCurveTo(l.size * 0.7, 0, 0, l.size);
+            ctx.quadraticCurveTo(-l.size * 0.7, 0, 0, -l.size);
+            ctx.fill();
+            // 叶脉
+            ctx.strokeStyle = 'rgba(120, 90, 60, 0.6)';
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(0, -l.size * 0.8); ctx.lineTo(0, l.size * 0.8);
+            ctx.stroke();
+            ctx.restore();
         });
-        ctx.globalAlpha = 1;
+
+        // 3. 收尾柔光：一道窄光带自下而上掠过原位（清理归位）
+        if (progress > 0.7) {
+            const k = (progress - 0.7) / 0.3;
+            const bandH = 90;
+            const gy = this.ay + 20 - k * 130; // 光带中心上移
+            const gAlpha = Math.sin(k * Math.PI) * 0.35;
+            const g = ctx.createLinearGradient(0, gy - bandH / 2, 0, gy + bandH / 2);
+            g.addColorStop(0, 'rgba(255, 240, 210, 0)');
+            g.addColorStop(0.5, `rgba(255, 240, 210, ${gAlpha})`);
+            g.addColorStop(1, 'rgba(255, 240, 210, 0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(this.ax - 70, gy - bandH / 2, 140, bandH);
+        }
         ctx.restore();
     }
+    thinOut() { this.dust = this.dust.slice(0, Math.ceil(this.dust.length / 2)); }
     isDead() { return this.life <= 0; }
 }
 
-// 星铸徽章 - 五瓣玫瑰线光阵 (多层透明圆 Fake Glow 替代 shadowBlur)
+// 星铸徽章 - 五瓣玫瑰线光阵以勾选框为心绽放 (多层透明圆 Fake Glow 替代 shadowBlur)
 class StarforgedCrestParticle {
-    constructor() {
-        this.cx = window.innerWidth / 2;
-        this.cy = window.innerHeight / 2;
+    constructor(anchor) {
+        const a = anchor || ee_fallbackAnchor();
+        const low = ee_getFxTier() <= 1;
+        this.low = low;
+        this.cx = a.x;
+        this.cy = a.y;
         this.life = 240; // 4秒 (60fps)
         this.maxLife = 240;
         this.time = 0;
+        this.maxR = low ? 56 : 80; // 玫瑰线最大半径
 
         // 生成围绕徽章旋转的星尘火花
-        this.sparks = Array.from({length: 40}, () => ({
+        const n = low ? 16 : 40;
+        this.sparks = Array.from({length: n}, () => ({
             angle: Math.random() * Math.PI * 2,
             radius: Math.random() * 20, // 初始半径很小
             speed: (Math.random() - 0.5) * 0.08,
@@ -1027,8 +1336,8 @@ class StarforgedCrestParticle {
 
         this.sparks.forEach(s => {
             s.angle += s.speed;
-            // 限制火花的扩散范围，最高不超过90px
-            if (s.radius < 90) s.radius += 0.6;
+            // 限制火花的扩散范围，最高不超过 maxR*1.1
+            if (s.radius < this.maxR * 1.1) s.radius += 0.5;
         });
     }
 
@@ -1041,10 +1350,9 @@ class StarforgedCrestParticle {
         ctx.translate(this.cx, this.cy);
         ctx.globalCompositeOperation = 'lighter'; // 叠加发光混合模式
 
-        // 基础参数：限制最大半径为 100
-        const maxR = 100 * alpha;
+        const maxR = this.maxR * alpha;
 
-        // 1. 绘制极坐标 5 瓣玫瑰线 (魔法阵核心) — 仅 1 次 shadowBlur，可接受
+        // 1. 绘制极坐标 5 瓣玫瑰线 (魔法阵核心) — 仅 1 次 shadowBlur（低配档禁用）
         ctx.save();
         ctx.rotate(this.time);
         ctx.beginPath();
@@ -1058,8 +1366,10 @@ class StarforgedCrestParticle {
         }
         ctx.strokeStyle = `rgba(255, 215, 0, ${alpha * 0.9})`; // 灿烂的金色
         ctx.lineWidth = 3;
-        ctx.shadowColor = '#FF8C00';
-        ctx.shadowBlur = 15;
+        if (!this.low) {
+            ctx.shadowColor = '#FF8C00';
+            ctx.shadowBlur = 15;
+        }
         ctx.stroke();
         ctx.shadowBlur = 0; // 立即归零，避免影响后续绘制
         ctx.restore();
@@ -1101,6 +1411,7 @@ class StarforgedCrestParticle {
         ctx.restore();
     }
 
+    thinOut() { this.sparks = this.sparks.slice(0, Math.ceil(this.sparks.length / 2)); }
     isDead() { return this.life <= 0; }
 }
 
@@ -1115,25 +1426,24 @@ function ee_fireConfetti() {
     if (!ee_animId) ee_animate();
 }
 
-function ee_dropLeaves() {
+function ee_dropLeaves(anchor) {
     ee_initCanvas();
+    // 锚点化：围绕番茄圈分批飘叶（低配档总量减半）
+    const low = ee_getFxTier() <= 1;
+    const batches = low ? 4 : 5, perBatch = low ? 2 : 3;
     let count = 0;
     const interval = setInterval(() => {
-        for(let i=0; i<3; i++) ee_particles.push(new LeafParticle());
+        for(let i=0; i<perBatch; i++) ee_particles.push(new LeafParticle(anchor));
         if (!ee_animId) ee_animate();
-        if (++count > 10) clearInterval(interval);
-    }, 100);
+        if (++count > batches) clearInterval(interval);
+    }, 110);
     if (!ee_animId) ee_animate();
 }
 
-function ee_fireGoldenRain() {
+// 百步穿杨：金矢穿靶（原全屏金色雨的锚点化重设计）
+function ee_fireGoldenBullseye(anchor) {
     ee_initCanvas();
-    let count = 0;
-    const interval = setInterval(() => {
-        for (let i = 0; i < 8; i++) ee_particles.push(new GoldenRainParticle());
-        if (!ee_animId) ee_animate();
-        if (++count > 25) clearInterval(interval);
-    }, 100);
+    ee_particles.push(new GoldenBullseyeParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
@@ -1143,7 +1453,7 @@ function ee_playZenRipple() {
     if (!ee_animId) ee_animate();
 }
 
-// 心流极光：全屏Canvas流动极光波纹
+// 心流极光：全屏流动极光波纹
 function ee_playAurora() {
     ee_initCanvas();
     ee_particles.push(new AuroraWaveParticle());
@@ -1151,20 +1461,20 @@ function ee_playAurora() {
 }
 
 // 清算旧账：闪电与能量碎片
-function ee_playSettleOldScores() {
+function ee_playSettleOldScores(anchor) {
     ee_initCanvas();
-    ee_particles.push(new ThunderStrikeParticle());
+    ee_particles.push(new ThunderStrikeParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
-// 断舍离：神圣风暴席卷
-function ee_spawnDust() {
+// 断舍离：叶落辞行（三片秋叶自删除行原位飘起，呼应删除的3个任务）
+function ee_spawnDust(anchor) {
     ee_initCanvas();
-    ee_particles.push(new LetGoParticle());
+    ee_particles.push(new LetGoParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
-// 落日归山：今日任务清空时触发
+// 落日归山：今日任务清空时触发（全屏晚霞）
 function ee_playSunsetHorizon() {
     ee_initCanvas();
     ee_particles.push(new SunsetHorizonParticle());
@@ -1200,7 +1510,7 @@ function ee_checkSunsetHorizon() {
     }
 }
 
-// 坐忘无我：单任务专注超3小时触发（仅播放粒子效果，toast由调用方通过队列处理）
+// 坐忘无我：单任务专注超3小时触发（全屏浅蓝氛围，toast由调用方通过队列处理）
 function ee_playVoidState() {
     ee_initCanvas();
     ee_particles.push(new VoidStateParticle());
@@ -1208,30 +1518,30 @@ function ee_playVoidState() {
 }
 
 // 超新星爆发：耗时超3小时任务完成时触发
-function ee_playSupernova() {
+function ee_playSupernova(anchor) {
     ee_initCanvas();
-    ee_particles.push(new SupernovaParticle());
+    ee_particles.push(new SupernovaParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
 // 番茄三连：精灵之森魔法阵
-function ee_playRipple() {
+function ee_playRipple(anchor) {
     ee_initCanvas();
-    ee_particles.push(new FocusRippleParticle());
+    ee_particles.push(new FocusRippleParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
 // 多线程大师：10分钟内完成5个子任务时触发
-function ee_playJuggler() {
+function ee_playJuggler(anchor) {
     ee_initCanvas();
-    ee_particles.push(new JugglerParticle());
+    ee_particles.push(new JugglerParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
 // 星铸徽章：当日完成5个任务（及其整数倍）时触发
-function ee_playStarforgedCrest() {
+function ee_playStarforgedCrest(anchor) {
     ee_initCanvas();
-    ee_particles.push(new StarforgedCrestParticle());
+    ee_particles.push(new StarforgedCrestParticle(anchor));
     if (!ee_animId) ee_animate();
 }
 
@@ -1240,11 +1550,17 @@ function ee_playStarforgedCrest() {
 /**
  * 任务完成时调用
  * @param {Object} task - 完成的任务对象
+ * @param {HTMLElement|Object} sourceEl - 用户实际点击的操作元素（主视图复选框 /
+ *   详情面板完成按钮），或提前捕获的锚点坐标快照（子任务全完成路径，
+ *   面板重渲染后原元素已脱离 DOM）。缺省时按 taskId 找可见行，最后回退视口中心。
  */
-function easterEgg_onTaskComplete(task) {
+function easterEgg_onTaskComplete(task, sourceEl) {
     ee_checkDate();
+    // 锚点在触发瞬间捕获（视口坐标快照）：主视图勾选→实际点击的复选框；
+    // 详情面板勾选→面板完成按钮；子任务全完成→子任务复选框（调用方透传）
+    const anchor = ee_resolveTaskAnchor(task ? task.id : null, sourceEl);
 
-    // 1. 首战告捷 (今日第1个)
+    // 1. 首战告捷 (今日第1个) —— 保持全屏礼花（刻意不带锚点）
     eeState.completedTasks++;
     if (eeState.completedTasks === 1 && !eeState.triggered.firstTask) {
         eeState.triggered.firstTask = true;
@@ -1256,14 +1572,15 @@ function easterEgg_onTaskComplete(task) {
         });
     }
 
-    // 1.5 星铸徽章 (今日完成5个任务及其整数倍)
+    // 1.5 星铸徽章 (今日完成5个任务及其整数倍) —— 行金色描边脉冲 + 玫瑰线在勾选框绽放
     if (eeState.completedTasks > 0 && eeState.completedTasks % 5 === 0) {
+        ee_pulseRow(task ? task.id : null, sourceEl);
         ee_trigger({
             icon: '🏅',
             message: '星铸徽章',
             desc: `行云流水！今日已累计攻克 ${eeState.completedTasks} 个任务`,
             effectFn: ee_playStarforgedCrest
-        });
+        }, anchor);
     }
 
     // 2. 清算旧账 (逾期7天以上)
@@ -1275,7 +1592,7 @@ function easterEgg_onTaskComplete(task) {
                 message: '清算旧账！',
                 desc: '完成了逾期7天以上的任务',
                 effectFn: ee_playSettleOldScores
-            });
+            }, anchor);
         }
     }
 
@@ -1287,12 +1604,12 @@ function easterEgg_onTaskComplete(task) {
                 icon: '🏆',
                 message: `史诗成就：击破 ${totalCompleted} 个任务！`,
                 desc: '累计完成任务的百次里程碑',
-                effectFn: ee_fireGoldenRain
-            });
+                effectFn: ee_fireGoldenBullseye
+            }, anchor);
         }
     }
 
-    // 4. 清空禅意 (清单被清零)
+    // 4. 清空禅意 (清单被清零，全屏涟漪)
     if (task && task.listId && typeof tasks !== 'undefined' && typeof lists !== 'undefined') {
         const listTasks = tasks.filter(t => t.listId === task.listId);
         const remaining = listTasks.filter(t => !t.completed).length;
@@ -1307,7 +1624,7 @@ function easterEgg_onTaskComplete(task) {
         }
     }
 
-    // 5. 落日归山 (今日任务全部清空)
+    // 5. 落日归山 (今日任务全部清空，全屏晚霞)
     ee_checkSunsetHorizon();
 
     // 6. 超新星爆发 (耗时超3小时的任务完成)
@@ -1320,7 +1637,7 @@ function easterEgg_onTaskComplete(task) {
                 message: '超新星爆发！',
                 desc: '史诗级肝帝成就：完成了耗时超3小时的巨型任务',
                 effectFn: ee_playSupernova
-            });
+            }, anchor);
         }
     }
 }
@@ -1410,9 +1727,13 @@ function easterEgg_onPomodoroStart() {
  * 当主视图（默认首页视图）被打开时调用，也会在直接触发彩蛋时被调用
  */
 let ee_flushing = false; // 是否正在顺序播放彩蛋
-// Toast 完整生命周期时长（入场0.8s + 停留4.5s + 出场0.7s ≈ 6s）
-// 与 ee_showToast 中 setTimeout(remove, 6500) 对齐
-const EE_TOAST_LIFECYCLE_MS = 6500;
+// 特效主时长：锚点动画的最长持续（低配档更短）。特效起播是渲染压力峰值
+// （粒子满额 + 画布初始化），横幅须等特效主体完成后才入场，错开两处峰值。
+const EE_FX_LEAD_MS = 3600;
+// 队列步进：特效先播 EE_FX_LEAD_MS → 横幅弹出（生命周期约 6.5s，入场+停留）→
+// 再等横幅停留主体播完进入下一个。此时横幅仅剩 CSS 退场（transform/opacity），
+// 与下一个特效起播并存压力可忽略。
+const EE_QUEUE_STEP_MS = 7600;
 
 function ee_flushPendingEffects() {
     if (eeState.pendingEffects.length === 0) return;
@@ -1430,14 +1751,14 @@ function ee_flushPendingEffects() {
             return;
         }
         const effect = eeState.pendingEffects.shift();
-        // 先显示 toast 完整过程（从右进入→停留→从左消失）
-        ee_showToast(effect.icon, effect.message, effect.desc);
-        // 等 toast 完整生命周期结束后，再播放对应的彩蛋动画，避免同时渲染造成浏览器卡顿
-        setTimeout(() => {
-            if (effect.effectFn) effect.effectFn();
-            // 等待彩蛋动画大致结束后再播放下一个（彩蛋动画总时长≤5s，此处取 4500ms）
-            setTimeout(playNext, 4500);
-        }, EE_TOAST_LIFECYCLE_MS);
+        // 1. 先播放锚点特效（渲染压力峰值：粒子满额起播）
+        if (effect.effectFn && ee_getFxTier() > 0) {
+            try { effect.effectFn(effect.anchor); } catch (e) { /* 特效失败不影响队列 */ }
+        }
+        // 2. 特效主体完成后（粒子已衰减过半）横幅才入场，避免与特效起播同帧竞争渲染
+        setTimeout(() => ee_showToast(effect.icon, effect.message, effect.desc), EE_FX_LEAD_MS);
+        // 3. 等横幅停留主体播完，进入下一个
+        setTimeout(playNext, EE_QUEUE_STEP_MS);
     };
     playNext();
 }
@@ -1445,19 +1766,25 @@ function ee_flushPendingEffects() {
 /**
  * 将彩蛋效果加入待显示队列
  * 番茄专注类彩蛋统一在返回默认视图时显示，确保用户一定可见
+ * @param {Object} effect - 彩蛋效果描述
+ * @param {Object} anchor - 操作点视口坐标快照（可选；专注类彩蛋播放时自行解析番茄圈锚点）
  */
-function ee_enqueueOrShow(effect) {
+function ee_enqueueOrShow(effect, anchor) {
     // 设置项 easterEggEnabled：关闭时不入队
     if (settings && settings.easterEggEnabled === false) return;
+    if (anchor) effect.anchor = anchor;
     eeState.pendingEffects.push(effect);
 }
 
 /**
  * 直接触发彩蛋效果（入队并立即尝试刷新队列）
  * 用于任务完成等场景，保证多个彩蛋按顺序播放而非同时
+ * @param {Object} effect - 彩蛋效果描述
+ * @param {Object} anchor - 操作点视口坐标快照（可选，缺省时粒子内自行兜底）
  */
-function ee_trigger(effect) {
+function ee_trigger(effect, anchor) {
     if (settings && settings.easterEggEnabled === false) return;
+    if (anchor) effect.anchor = anchor;
     eeState.pendingEffects.push(effect);
     ee_flushPendingEffects();
 }
@@ -1482,32 +1809,36 @@ function ee_getTaskFocusMinutes(taskId) {
 /**
  * 子任务完成时调用（多线程大师触发）
  * 在10分钟内连续完成5个子任务时触发
+ * @param {HTMLElement|Object} sourceEl - 被勾选的子任务复选框元素，或提前捕获的锚点坐标快照
  */
-function easterEgg_onSubtaskComplete() {
+function easterEgg_onSubtaskComplete(sourceEl) {
     ee_checkDate();
     const now = Date.now();
     // 清理10分钟前的记录
     eeState.recentSubtaskCompletes = eeState.recentSubtaskCompletes.filter(t => now - t < 10 * 60 * 1000);
     eeState.recentSubtaskCompletes.push(now);
 
-    // 10分钟内完成5个子任务时触发
+    // 10分钟内完成5个子任务时触发（锚点=最后勾选的子任务复选框，即用户指尖）
     if (eeState.recentSubtaskCompletes.length >= 5) {
         eeState.recentSubtaskCompletes = []; // 触发后清空，避免短时间内重复触发
+        const anchor = ee_normalizeAnchor(sourceEl) || ee_fallbackAnchor();
         ee_trigger({
             icon: '⚡',
             message: '多线程大师！',
             desc: '10分钟内连破5关，绝佳的节奏感',
             effectFn: ee_playJuggler
-        });
+        }, anchor);
     }
 }
 
 /**
  * 断舍离：任务删除时调用
- * @param {HTMLElement} taskElement - 被删除的任务 DOM 节点
+ * @param {HTMLElement} taskElement - 被删除的任务 DOM 节点（在删除前捕获锚点）
  */
 function easterEgg_onTaskDelete(taskElement) {
     const now = Date.now();
+    // 锚点在元素移除前捕获（风卷余烬自原位飘散）
+    const anchor = ee_captureAnchor(taskElement) || ee_fallbackAnchor();
     eeState.recentDeletes = eeState.recentDeletes.filter(time => now - time < 10000);
     eeState.recentDeletes.push(now);
 
@@ -1518,7 +1849,7 @@ function easterEgg_onTaskDelete(taskElement) {
             message: '懂得放下，也是极简的智慧',
             desc: '10秒内删除了3个任务',
             effectFn: ee_spawnDust
-        });
+        }, anchor);
     }
 }
 

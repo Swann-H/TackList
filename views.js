@@ -120,6 +120,11 @@ function _updateViewTabIndicator() {
         if (pill) pill.remove();
         return;
     }
+    // 隐藏态守卫：主内容被隐藏（如番茄专注页）或标签栏 display:none（移动端）时，
+    // 按钮的 offsetWidth/offsetLeft 均为 0，照常写入会把指示条塌缩成 0×0，
+    // 待主内容恢复可见后高亮底色即消失（激活按钮仅剩白色文字）。
+    // 此时跳过测量、保留指示条原有几何属性，待可见时再重新同步。
+    if (active.offsetWidth === 0 || active.offsetHeight === 0) return;
     const isFirstPlace = !pill;
     if (isFirstPlace) {
         pill = document.createElement('div');

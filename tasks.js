@@ -1282,7 +1282,9 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     deleteDetailConfirming = false;
     const deleteBtn = document.getElementById('detail-delete-btn');
     if (deleteBtn) {
-        deleteBtn.textContent = '删除任务';
+        // 只改文字节点，不能写 deleteBtn.textContent —— 那会把里面的 <i> 图标一起抹掉
+        setDetailDeleteLabel('删除任务');
+        deleteBtn.classList.remove('is-confirming');
         deleteBtn.style.cssText = '';
     }
     
@@ -1292,8 +1294,15 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     // 添加标题自动调整高度
     setupTitleAutoResize();
 
+    // 绑定标题/备注的输入自动保存：收起态与书写态共用同一套防抖落盘（第十七轮起
+    // 收起态也移除了「保存」按钮，改为自动保存；关闭 / 切任务时仍会再兜一次全量保存）
+    setupWriteModeAutoSave();
+
     // 添加子任务模式描述框的输入监听（高度自适应 + 实时写入任务对象）
     setupDetailDescriptionInput();
+
+    // 书写态：刷新面包屑与属性区空属性过滤
+    syncDetailWriteModeUI();
 
     // 在面板显示后再调整标题高度（延迟确保DOM已渲染）
     setTimeout(() => {
@@ -1555,6 +1564,8 @@ function toggleTaskMode(event) {
     // 立即写入 task.mode，确保面板打开期间的中间保存（saveData）携带正确的 mode，
     // 避免版本冲突合并时被服务器旧 mode 覆盖
     task.mode = currentTaskMode;
+    // 模式切换后详情文本元素变化（notes <-> description+subtasks），重算毛玻璃带纵向范围
+    requestAnimationFrame(updateWriteModeGlassBounds);
 }
 
 // 新建子任务的统一构造（含时间与提前提醒字段，缺省为无时间、无提前量）
@@ -1848,7 +1859,7 @@ function renderSubtasks() {
             checkbox.classList.remove('border-accent');
             checkbox.innerHTML = '<i class="fas fa-check text-[8px] text-white"></i>';
         }
-        checkbox.onclick = () => toggleSubtaskComplete(subtask.id, !subtask.completed);
+        checkbox.onclick = () => toggleSubtaskComplete(subtask.id, !subtask.completed, null, checkbox);
         
         const input = document.createElement('textarea');
         input.value = subtask.text;
@@ -2594,7 +2605,11 @@ function handleSubtaskKeydown(event, subtaskId) {
 // 勾选/取消勾选子任务。
 // taskId 可选：提醒 Toast 触发时详情面板可能未打开（或显示别的任务），
 // 此时不能依赖 currentDetailTaskId，必须由调用方显式传入。
-function toggleSubtaskComplete(subtaskId, completed, taskId) {
+// sourceEl 可选：被点击的子任务复选框，用于彩蛋锚点捕获。
+function toggleSubtaskComplete(subtaskId, completed, taskId, sourceEl) {
+    // 彩蛋锚点须在详情面板重渲染（renderSubtasks）前捕获为坐标快照，
+    // 否则原复选框元素脱离 DOM 后 getBoundingClientRect 全零导致回退
+    const eeAnchor = (typeof ee_captureAnchor === 'function') ? ee_captureAnchor(sourceEl) : null;
     const targetTaskId = taskId || currentDetailTaskId;
     const taskIndex = tasks.findIndex(t => t.id === targetTaskId);
     if (taskIndex === -1) return;
@@ -2641,16 +2656,16 @@ function toggleSubtaskComplete(subtaskId, completed, taskId) {
             renderView();
         }
 
-        // 触发彩蛋效果（子任务完成时）
+        // 触发彩蛋效果（子任务完成时）：锚点取用户刚勾选的子任务复选框（eeAnchor 快照）
         if (completed && !wasCompleted) {
             if (typeof easterEgg_onSubtaskComplete === 'function') {
-                easterEgg_onSubtaskComplete();
+                easterEgg_onSubtaskComplete(eeAnchor);
             }
         }
 
         // 子任务全部完成导致父任务标记为已完成时，通知番茄专注退回"一般专注"
         if (task.completed && !wasTaskCompleted) {
-            easterEgg_onTaskComplete(task);
+            easterEgg_onTaskComplete(task, eeAnchor);
             if (typeof onFocusTaskCompleted === 'function') {
                 onFocusTaskCompleted(task.id);
             }
@@ -2850,9 +2865,13 @@ function toggleTaskDetailComplete() {
     // 与主视图勾选一致：标记完成时在当前视图中对该任务条目播放塌陷动画（下方任务上移补位）
     const playFx = !task.completed && _playTaskDoneCollapseFx(task.id);
 
-    const { structuralChange } = applyTaskCompletionToggle(task);
+    // 彩蛋锚点：同步栈内读取当前点击事件源（详情面板完成按钮，内联 onclick 触发）
+    const detailSource = (typeof window !== 'undefined' && window.event && window.event.target) || null;
+    const { structuralChange } = applyTaskCompletionToggle(task, detailSource);
 
     updateDetailCompleteButton(task.completed);
+    // 书写态：完成圈勾选弹一下（纯 scale，合成层，updateDetailCompleteButton 不会重建按钮）
+    if (_wmFxOn()) _wmFxPlay(document.getElementById('detail-task-complete-btn'), 'wm-pop', 0.2);
     // 完成状态变更后：若已完成则隐藏跳过按钮，撤销快照也一并失效
     refreshDetailSkipCycleButton();
     if (task.completed) {
@@ -2916,6 +2935,12 @@ function setupDateTimeInteractions() {
 }
 
 function closeTaskDetailPanel() {
+    // 书写态下关闭面板：先撤掉展开态（内部会 flush 自动保存），避免 body 上的 detail-write-mode 残留
+    if (typeof exitDetailWriteMode === 'function') exitDetailWriteMode();
+    // 面板马上要 display:none，还在排队的场景对切动画已无意义；
+    // 若不取消，残留的 wm-morph-out 会给 #task-detail-panel 挂 animation，
+    // 与下一次打开面板的 panel-fade-in 抢同一个属性，导致入场动画被顶掉。
+    if (typeof _wmMorphCancel === 'function') _wmMorphCancel();
     // 模态浮层模式：关闭时恢复原样式
     if (_taskDetailModalMode) {
         const modalPanel = document.getElementById('task-detail-panel');
@@ -3460,7 +3485,24 @@ function toggleDetailTimeMenu() {
         if (task && typeof isExternalTask === 'function' && isExternalTask(task)) return;
     }
     const menu = document.getElementById('detail-time-menu');
-    menu.classList.toggle('hidden');
+    if (!menu) return;
+    const willOpen = menu.classList.contains('hidden');
+    menu.classList.remove('wm-menu-in', 'wm-menu-out');
+    if (!_wmFxOn()) { menu.classList.toggle('hidden'); return; }
+    const fade = _wmFxSeconds('--wm-fx-fade', 0.16);
+    if (willOpen) {
+        menu.classList.remove('hidden');
+        _wmFxPlay(menu, 'wm-menu-in', fade);
+    } else {
+        // 收起：先播淡出（期间 pointer-events:none），动画结束再真正 hidden，
+        // 否则 display:none 会立刻杀掉动画，看起来还是「瞬间消失」
+        menu.classList.add('wm-menu-out');
+        clearTimeout(menu._wmMenuOutTimer);
+        menu._wmMenuOutTimer = setTimeout(() => {
+            menu.classList.remove('wm-menu-out');
+            menu.classList.add('hidden');
+        }, Math.max(60, fade * 1000));
+    }
 }
 
 function toggleDetailListPicker() {
@@ -3469,66 +3511,111 @@ function toggleDetailListPicker() {
         // 关闭标签选择器
         document.getElementById('detail-tag-picker').classList.add('hidden');
         picker.classList.remove('hidden');
+        if (_wmFxOn()) _wmFxPlay(picker, 'wm-pop-in', _wmFxSeconds('--wm-fx-fade', 0.16));
     } else {
         picker.classList.add('hidden');
+        picker.classList.remove('wm-pop-in');
     }
 }
 
 function updateDetailTimeBtnText() {
-    const dateValue = document.getElementById('detail-task-date').value;
-    const timeValue = document.getElementById('detail-task-time').value;
+    const dateEl = document.getElementById('detail-task-date');
+    const timeEl = document.getElementById('detail-task-time');
+    const endContainer = document.getElementById('detail-end-time-container');
+    const endDateEl = document.getElementById('detail-task-end-date');
+    const endTimeEl = document.getElementById('detail-task-end-time');
+    const dateValue = dateEl ? dateEl.value : '';
+    const timeValue = timeEl ? timeEl.value : '';
     const isAllDay = !timeValue;
-    const btnText = document.getElementById('detail-time-btn-text');
-    
+    const isRange = endContainer ? !endContainer.classList.contains('hidden') : false;
+    const endDateValue = (isRange && endDateEl) ? endDateEl.value : '';
+    const endTimeValue = (isRange && endTimeEl) ? endTimeEl.value : '';
+
+    // ---- 1) 收起态顶栏按钮：单行文案（原逻辑保持不变） ----
+    let text = '设置时间';
+
     if (dateValue) {
         const date = new Date(dateValue);
         const dateStr = fmtMD(date);
         if (isAllDay) {
-            const isRange = !document.getElementById('detail-end-time-container').classList.contains('hidden');
-            if (isRange) {
-                const endDateValue = document.getElementById('detail-task-end-date').value;
-                if (endDateValue && endDateValue !== dateValue) {
-                    const endDate = new Date(endDateValue);
-                    btnText.textContent = fmtMDRange(date, endDate) + ' (全天)';
-                } else {
-                    btnText.textContent = dateStr + ' (全天)';
-                }
+            if (isRange && endDateValue && endDateValue !== dateValue) {
+                text = fmtMDRange(date, new Date(endDateValue)) + ' (全天)';
             } else {
-                btnText.textContent = dateStr + ' (全天)';
+                text = dateStr + ' (全天)';
             }
         } else if (timeValue) {
-            const isRange = !document.getElementById('detail-end-time-container').classList.contains('hidden');
             if (isRange) {
-                const endDateValue = document.getElementById('detail-task-end-date').value;
-                const endTimeValue = document.getElementById('detail-task-end-time').value;
                 let endStr = '';
                 if (endDateValue) {
-                    const endDate = new Date(endDateValue);
                     const sameDay = dateValue === endDateValue;
                     if (sameDay) {
                         endStr = endTimeValue || '';
                     } else {
-                        endStr = fmtMD(endDate);
-                        if (endTimeValue) {
-                            endStr += ' ' + endTimeValue;
-                        }
+                        endStr = fmtMD(new Date(endDateValue));
+                        if (endTimeValue) endStr += ' ' + endTimeValue;
                     }
                 }
-                btnText.textContent = dateStr + ' ' + timeValue + ' - ' + (endStr || '...');
+                text = dateStr + ' ' + timeValue + ' - ' + (endStr || '...');
             } else {
-                btnText.textContent = dateStr + ' ' + timeValue;
+                text = dateStr + ' ' + timeValue;
             }
         } else {
-            btnText.textContent = dateStr;
+            text = dateStr;
         }
-    } else {
-        btnText.textContent = '设置时间';
     }
+
+    const btnText = document.getElementById('detail-time-btn-text');
+    if (btnText) btnText.textContent = text;
+
+    // ---- 2) 书写态摘要条：日期与时间合并成一个信息格，再各自独立的「提前 / 重复」 ----
+    // 合并后的文案直接复用上面算出的 text —— 跨天时（如「1月2日 22:00 - 1月3日 02:00」
+    // 或「1月2日 - 1月5日 (全天)」）日期与时间必须在同一格才读得连贯，
+    // 显示规则与收起态顶栏按钮完全一致。
+    const segDatetime = dateValue ? text : '';
+
+    const reminderEl = document.getElementById('detail-reminder-text');
+    const repeatEl = document.getElementById('detail-repeat-text');
+    const reminderText = reminderEl ? reminderEl.textContent.trim() : '';
+    const repeatText = repeatEl ? repeatEl.textContent.trim() : '';
+    const reminderEmpty = (typeof REMINDER_EMPTY_LABEL !== 'undefined') ? REMINDER_EMPTY_LABEL : '不提前提醒';
+    // 提醒 / 重复各自独立成段：不要求必须先有任务时间
+    // （「跳过此周期」按钮同样只要求配置了重复，见 refreshDetailSkipCycleButton）
+    const segReminder = (reminderText && reminderText !== reminderEmpty) ? reminderText : '';
+    const segRepeat = (repeatText && repeatText !== '不重复') ? repeatText : '';
+    const hasAny = !!(segDatetime || segReminder || segRepeat);
+
+    setWriteModeTimeSegments({
+        datetime: segDatetime,
+        reminder: segReminder,
+        repeat: segRepeat,
+        empty: hasAny ? '' : '设置时间'
+    });
+}
+
+/* 书写态时间摘要条：逐段写入文案并按空值隐藏。
+   段位：datetime（日期+时间合并）/ reminder / repeat / empty。
+   四段都是按钮，点任意一段都走同一个 toggleDetailTimeMenu()（展开同一套完整设置面板）。
+   隐藏必须靠 .hidden 类 + CSS 里的 !important —— Tailwind 的 .hidden 与本类的 display
+   特指度相同，谁后注入谁生效，不能赌注入顺序。 */
+function setWriteModeTimeSegments(values) {
+    const host = document.getElementById('detail-time-trigger-wm');
+    if (!host) return;
+    Object.keys(values).forEach(function (part) {
+        const seg = host.querySelector('.wm-time-seg[data-part="' + part + '"]');
+        if (!seg) return;
+        const val = values[part] || '';
+        const span = seg.querySelector('span');
+        if (span) span.textContent = val;
+        seg.classList.toggle('hidden', !val);
+    });
 }
 
 function updateDetailListBtnText() {
     const listIcon = document.getElementById('detail-list-icon');
     const listNameEl = document.getElementById('detail-list-name');
+    // 书写态虚线框内（方案 C / 第八轮）：清单颜色圆点 + 清单名，与任务视图每任务右侧一致
+    const listDotEl = document.getElementById('detail-list-dot');
+    const listNameWmEl = document.getElementById('detail-list-name-wm');
     const selectedList = lists.find(l => l.id === detailSelectedListId);
     if (selectedList) {
         if (listIcon && selectedList.color) {
@@ -3537,9 +3624,21 @@ function updateDetailListBtnText() {
         if (listNameEl) {
             listNameEl.textContent = selectedList.name;
         }
+        if (listDotEl) {
+            listDotEl.style.backgroundColor = selectedList.color || 'transparent';
+        }
+        if (listNameWmEl) {
+            listNameWmEl.textContent = selectedList.name;
+        }
     } else {
         if (listNameEl) {
             listNameEl.textContent = '';
+        }
+        if (listDotEl) {
+            listDotEl.style.backgroundColor = 'transparent';
+        }
+        if (listNameWmEl) {
+            listNameWmEl.textContent = '';
         }
     }
 }
@@ -3961,6 +4060,9 @@ function updateDetailReminderText() {
         badge.textContent = String(minutes.length);
         badge.classList.toggle('hidden', minutes.length <= 1);
     }
+
+    // 提醒段是书写态摘要条的四段之一，这里改完文案要顺手刷新它
+    if (typeof updateDetailTimeBtnText === 'function') updateDetailTimeBtnText();
 }
 
 // 从表单收集提前量（面板已渲染时以 DOM 为准，否则回退到任务数据）
@@ -4061,6 +4163,8 @@ function updateDetailRepeatText() {
     }
     // 重复配置变化时同步刷新「跳过此周期」按钮（新任务配置重复后立即出现，取消重复后立即隐藏）
     refreshDetailSkipCycleButton();
+    // 重复段是书写态摘要条的四段之一，这里改完文案要顺手刷新它
+    if (typeof updateDetailTimeBtnText === 'function') updateDetailTimeBtnText();
 }
 
 let deleteDetailConfirming = false;
@@ -4099,17 +4203,28 @@ function deleteTaskFromDetail() {
     deleteDetailConfirming = true;
     const btn = document.getElementById('detail-delete-btn');
     if (btn) {
-        btn.textContent = '确认删除';
-        btn.style.cssText = 'flex: 1 1 0%; padding: 0.5rem 1rem; background-color: #dc2626 !important; color: #ffffff !important; border: none !important; border-radius: 0.5rem; cursor: pointer; transition: all 0.15s;';
+        // 同上：只改文字，保留 <i> 图标。is-confirming 供书写态渲染红色实心圆
+        setDetailDeleteLabel('确认删除');
+        btn.classList.add('is-confirming');
     }
     
     setTimeout(() => {
         deleteDetailConfirming = false;
         if (btn) {
-            btn.textContent = '删除任务';
+            setDetailDeleteLabel('删除任务');
+            btn.classList.remove('is-confirming');
             btn.style.cssText = '';
         }
     }, 3000);
+}
+
+/** 只更新「删除任务」按钮的文字节点，保留其中的图标元素。
+ *  直接写 btn.textContent 会把 <i class="fas fa-trash"> 一并抹掉（曾导致书写态只剩文字）。 */
+function setDetailDeleteLabel(label) {
+    const el = document.getElementById('detail-delete-label');
+    if (el) { el.textContent = label; return; }
+    const btn = document.getElementById('detail-delete-btn');
+    if (btn) btn.textContent = label;   // 兜底：DOM 结构异常时退回整体赋值
 }
 
 function closeDetailPickers() {
@@ -4172,7 +4287,10 @@ function setupDetailPickerCloseHandler() {
             
             // 点击在选择器内部不关闭
             if (e.target.closest('#detail-list-picker') || e.target.closest('#detail-tag-picker')) return;
-            // 点击切换按钮不关闭（由按钮自己处理）
+            // 点击切换按钮不关闭（由按钮自己处理）。
+            // 注：书写态虚线框内的清单段 #detail-list-display 现已改为「仅展示」——不再调
+            // toggleDetailListPicker()，故无需再把它纳入「不关闭」白名单；清单选择改由按钮簇的
+            // #detail-list-btn（<button>）触发，原 button 匹配条件已覆盖。
             if (e.target.closest('button[onclick*="toggleDetailListPicker"]') || e.target.closest('button[onclick*="toggleDetailTagPicker"]')) return;
             
             if (listPicker) listPicker.classList.add('hidden');
@@ -5140,9 +5258,10 @@ function undoDetailSkipRepeatCycle() {
  * 切换任务完成状态的核心逻辑（不含 UI 刷新）。
  * 供 toggleTaskComplete / toggleTaskDetailComplete 共用，锁住保存口径与完成通知的一致性。
  * @param {object} task - 任务对象
+ * @param {HTMLElement|Object} sourceEl - 彩蛋锚点源：点击的复选框/完成按钮元素，或坐标快照
  * @returns {{wasCompleted: boolean, structuralChange: boolean}}
  */
-function applyTaskCompletionToggle(task) {
+function applyTaskCompletionToggle(task, sourceEl) {
     const wasCompleted = task.completed;
     task.completed = !task.completed;
     task.completedAt = task.completed ? new Date().toISOString() : null;
@@ -5161,9 +5280,9 @@ function applyTaskCompletionToggle(task) {
         saveTaskPatch(task.id);
     }
 
-    // 触发彩蛋效果 + 通知番茄专注（任务完成时）
+    // 触发彩蛋效果 + 通知番茄专注（任务完成时）：锚点取用户实际点击源
     if (task.completed && !wasCompleted) {
-        easterEgg_onTaskComplete(task);
+        easterEgg_onTaskComplete(task, sourceEl);
         if (typeof onFocusTaskCompleted === 'function') {
             onFocusTaskCompleted(task.id);
         }
@@ -5253,7 +5372,10 @@ function toggleTaskComplete(taskId) {
         }
         // 平滑过渡动画：标记完成时旧条目从左侧勾选框向右擦除、高度塌陷（下方任务向上平移补位），再延迟刷新视图
         const playFx = willComplete && _playTaskDoneCollapseFx(taskId);
-        const { structuralChange } = applyTaskCompletionToggle(task);
+        // 彩蛋锚点：同步栈内读取当前点击事件源（主视图/看板/周月等各视图复选框，内联 onclick 触发）。
+        // 即便上面关闭了同任务的详情面板，window.event 仍指向用户实际点击的主视图复选框，不受面板状态影响
+        const clickSource = (typeof window !== 'undefined' && window.event && window.event.target) || null;
+        const { structuralChange } = applyTaskCompletionToggle(task, clickSource);
         if (!willComplete && detailShowing) {
             updateDetailCompleteButton(false);
         }
@@ -5463,8 +5585,10 @@ function toggleDetailTagPicker() {
         const form = document.getElementById('detail-new-tag-form');
         if (form) { form.classList.add('hidden'); form.classList.remove('flex'); }
         renderDetailTagPills();
+        if (_wmFxOn()) _wmFxPlay(picker, 'wm-pop-in', _wmFxSeconds('--wm-fx-fade', 0.16));
     } else {
         picker.classList.add('hidden');
+        picker.classList.remove('wm-pop-in');
     }
 }
 
@@ -5764,3 +5888,445 @@ function deleteTagInput() {
         }
     }, 3000);
 }
+
+/* ==================== 沉浸书写态（展开态） ====================
+ * 布局基线：方案一 —— 主视图被挤占消失（display:none），侧栏保留，详情面板占满剩余空间。
+ * 本区块只负责状态机、自动保存与属性区过滤；视觉全部由 index.html 中
+ * body.detail-write-mode 的样式块承担，收起态不受任何影响。
+ */
+
+let _writeModeSaveTimer = null;
+let _writeModeAutoSaveBound = false;
+
+function isDetailWriteMode() {
+    return document.body.classList.contains('detail-write-mode');
+}
+
+/* 自动保存是否生效：详情面板打开（收起态 / 书写态皆可）且不是只读（归档清单）时生效。
+   第十七轮起收起态也改为自动保存（移除了「保存」按钮），所以门禁不能再只看书写态。
+   只读态下所有输入被 disabled，本来也不会触发 input，这里再兜一层避免误写归档任务。 */
+function isDetailAutoSaveActive() {
+    if (typeof detailReadOnly !== 'undefined' && detailReadOnly) return false;
+    const panel = document.getElementById('task-detail-panel');
+    return !!panel && !panel.classList.contains('hidden');
+}
+
+// 自动保存间隔（毫秒）。两态都没有「保存」按钮，输入后按此间隔防抖落盘。
+function writeModeAutoSaveDelay() {
+    const v = (typeof settings !== 'undefined') ? Number(settings.autoSaveDelay) : NaN;
+    return (Number.isFinite(v) && v >= 0) ? v : 500;
+}
+
+function scheduleWriteModeAutoSave() {
+    if (!isDetailAutoSaveActive()) return;
+    if (_writeModeSaveTimer) clearTimeout(_writeModeSaveTimer);
+    _writeModeSaveTimer = setTimeout(function () {
+        _writeModeSaveTimer = null;
+        if (typeof saveTaskDetailWithoutClose === 'function') saveTaskDetailWithoutClose();
+    }, writeModeAutoSaveDelay());
+}
+
+// 退出 / 切任务 / 切番茄页前调用：把待落盘的编辑立即写回
+function flushWriteModeAutoSave() {
+    if (_writeModeSaveTimer) {
+        clearTimeout(_writeModeSaveTimer);
+        _writeModeSaveTimer = null;
+    }
+    if (isDetailAutoSaveActive() && typeof saveTaskDetailWithoutClose === 'function') {
+        saveTaskDetailWithoutClose();
+    }
+}
+
+function setupWriteModeAutoSave() {
+    if (_writeModeAutoSaveBound) return;
+    const title = document.getElementById('detail-task-title');
+    const notes = document.getElementById('detail-task-notes');
+    if (!title || !notes) return;
+    const onEdit = function () { scheduleWriteModeAutoSave(); };
+    title.addEventListener('input', onEdit);
+    notes.addEventListener('input', onEdit);
+    // 时间类属性变化后同样触发防抖保存
+    ['detail-task-date', 'detail-task-time', 'detail-task-end-date', 'detail-task-end-time'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', function () {
+            scheduleWriteModeAutoSave();
+        });
+    });
+    _writeModeAutoSaveBound = true;
+}
+
+function syncDetailWriteModeUI() {
+    setupWriteModeAutoSave();
+    if (!isDetailWriteMode()) return;
+    updateWriteModeCrumb();
+    syncWriteModeTimeMenu();
+}
+
+/** 书写态的时间区是「摘要 → 点击展开」两级结构：
+ *  - 摘要条文案与收起态顶栏按钮共用 updateDetailTimeBtnText() 写出的同一份文案
+ *  - 进入书写态时强制回到收起（默认只显示任务时间） */
+function syncWriteModeTimeMenu() {
+    const menu = document.getElementById('detail-time-menu');
+    if (menu) menu.classList.add('hidden');
+    if (typeof updateDetailTimeBtnText === 'function') updateDetailTimeBtnText();
+}
+
+/* ---------- 正文容器宽度三档 ---------- */
+const WRITE_MODE_WIDTHS = ['standard', 'wide', 'full'];
+const WRITE_MODE_WIDTH_LABEL = { standard: '标准', wide: '宽', full: '全屏' };
+
+function applyWriteModeWidth(width) {
+    const b = document.body;
+    b.classList.remove('wm-w-900', 'wm-w-full');
+    if (width === 'wide') b.classList.add('wm-w-900');
+    else if (width === 'full') b.classList.add('wm-w-full');
+    const btn = document.getElementById('detail-width-btn');
+    if (btn) btn.title = '正文宽度：' + (WRITE_MODE_WIDTH_LABEL[width] || '标准') + '（点击切换）';
+}
+
+function cycleWriteModeWidth() {
+    const cur = (typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard';
+    const idx = WRITE_MODE_WIDTHS.indexOf(cur);
+    const next = WRITE_MODE_WIDTHS[(idx + 1) % WRITE_MODE_WIDTHS.length];
+    if (typeof settings !== 'undefined') settings.writeModeWidth = next;
+    applyWriteModeWidth(next);
+    // 宽度本身瞬切（动画 width 会重排，低端机必卡），用一次 opacity 凹陷掩盖突变
+    _wmBodyFx('wm-fx-width');
+    if (typeof saveData === 'function') saveData();
+    updateWriteModeGlassBounds();
+}
+
+/* ---------- 背景图模式毛玻璃：正文列玻璃带纵向范围 ----------
+   玻璃带是 #task-detail-panel::before（top/bottom 由 --wm-glass-top / --wm-glass-bottom 驱动）。
+   原来 top:0 bottom:0 贯穿整屏，显得呆板；这里改为「从任务标题顶端 -> 详情文本最后一行」，
+   随文字实际位置动态计算。仅书写态 + 有背景图时才有意义（::before 的 backdrop-filter 由
+   body.has-bg-image.detail-write-mode 控制），但变量始终计算无害。 */
+let _wmGlassInited = false;
+
+// 文本框可能是 flex-1 被拉伸，其 scrollHeight 会等于拉伸后的框高而非文本高度；
+// 临时撤掉 flex-grow 让它收缩到内容再测 scrollHeight。关键：先锁住当前宽度，否则撤 flex 后
+// 文本框会塌缩到 min-content 宽度导致文字大量换行、scrollHeight 被撑高（实测一句短文本被算成 399px）。
+// 还要临时清掉 CSS 的 min-height（详情框 computed min-height≈399px，单句文本会因此被算成 399px 高，
+// 而用户要的是「玻璃带止于最后一行文字」，必须量真实文本高度而非编辑框最小高度）。
+// 测完立即还原（同步执行、无闪烁）。
+function _textElContentHeight(el) {
+    if (!el || el.tagName !== 'TEXTAREA') return el ? el.offsetHeight : 0;
+    const cs = getComputedStyle(el);
+    // scrollHeight 含上下 padding；书写态给正文底部留了约半屏空白（padding-bottom:46vh），
+    // 「最后一行文字」的底边必须把这段 padding 扣掉，否则毛玻璃带会多出半屏（见 10.11）。
+    const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const prevFlex = el.style.flex, prevHeight = el.style.height, prevWidth = el.style.width, prevMinH = el.style.minHeight;
+    // 量高时把 height 设成 auto，会令文本框暂时不再溢出 → 浏览器把 scrollTop 夹回 0；
+    // 恢复高度后 scrollTop 不会自动回来。因此必须存/还原滚动位置，否则每次 input/scroll 都会跳回顶部。
+    const prevScrollTop = el.scrollTop;
+    el.style.width = el.clientWidth + 'px';
+    el.style.flex = '0 0 auto';
+    el.style.height = 'auto';
+    el.style.minHeight = '0px';
+    const h = Math.max(0, el.scrollHeight - padY);
+    el.style.flex = prevFlex;
+    el.style.height = prevHeight;
+    el.style.width = prevWidth;
+    el.style.minHeight = prevMinH;
+    el.scrollTop = prevScrollTop;
+    return h;
+}
+
+function updateWriteModeGlassBounds() {
+    const panel = document.getElementById('task-detail-panel');
+    if (!panel || !document.body.classList.contains('detail-write-mode')) return;
+    const titleRow = document.getElementById('detail-title-row');
+    if (!titleRow) return;
+    const cs = getComputedStyle(panel);
+    const borderTop = parseFloat(cs.borderTopWidth) || 0;
+    const borderBottom = parseFloat(cs.borderBottomWidth) || 0;
+    const panelRect = panel.getBoundingClientRect();
+    const titleRect = titleRow.getBoundingClientRect();
+    const top = Math.max(0, Math.round(titleRect.top - panelRect.top - borderTop));
+
+    // 「详情文本最后一行」的底边：notes / description 文本框按内容高度取；
+    // 子任务模式改取 #subtask-content 底边；取最大值，确保覆盖到真实最后一行文字。
+    // 注意：书写态正文框自身是滚动容器（padding-bottom 撑出可滚空间），
+    // 最后一行在「视口」中的位置 = 框顶 + 内容高 - scrollTop。必须减去 scrollTop，
+    // 玻璃带底边才会随滚动一起上移 —— 滚到底时最后一行落到屏幕中部，玻璃带也止于屏幕中部
+    // （否则带子会一直铺到屏幕底，看起来像用空白把文字推到中间，见 10.12）。
+    let textBottom = titleRect.bottom;
+    // 必须检查「真实渲染高度」而非 offsetParent：#subtask-content 是可见容器，仅子节点隐藏，
+    // 若用 offsetParent 会误判为可见并取其底边（≈ 正文区底）污染范围。
+    const visible = (el) => el && el.offsetHeight > 0;
+    const notes = document.getElementById('detail-task-notes');
+    const desc = document.getElementById('detail-task-description');
+    const subtaskContent = document.getElementById('subtask-content');
+    if (visible(notes)) {
+        const nr = notes.getBoundingClientRect();
+        textBottom = Math.max(textBottom, nr.top + _textElContentHeight(notes) - (notes.scrollTop || 0));
+    }
+    if (visible(desc)) {
+        const dr = desc.getBoundingClientRect();
+        textBottom = Math.max(textBottom, dr.top + _textElContentHeight(desc) - (desc.scrollTop || 0));
+    }
+    if (visible(subtaskContent)) {
+        const sr = subtaskContent.getBoundingClientRect();
+        textBottom = Math.max(textBottom, sr.bottom);
+    }
+    const bottom = Math.max(0, Math.round(panelRect.bottom - textBottom - borderBottom));
+    panel.style.setProperty('--wm-glass-top', top + 'px');
+    panel.style.setProperty('--wm-glass-bottom', bottom + 'px');
+}
+
+function _initWmGlass() {
+    if (_wmGlassInited) return;
+    _wmGlassInited = true;
+    ['detail-task-notes', 'detail-task-description', 'subtask-content'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        // 文本输入（notes/desc）改变内容高度时重算
+        el.addEventListener('input', updateWriteModeGlassBounds);
+        // 高度自然变化（描述框自适应、子任务列表增减）时重算
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(updateWriteModeGlassBounds).observe(el);
+        }
+    });
+    window.addEventListener('resize', () => {
+        if (document.body.classList.contains('detail-write-mode')) updateWriteModeGlassBounds();
+    });
+    // 滚动时玻璃带底边必须跟随「最后一行文字」的视口位置（见 10.12），
+    // 所以正文框 / 正文容器滚动过程中也要重算。用 rAF 节流，避免高频滚动反复重排。
+    let glassRaf = 0;
+    const onScroll = () => {
+        if (glassRaf) return;
+        glassRaf = requestAnimationFrame(() => {
+            glassRaf = 0;
+            if (document.body.classList.contains('detail-write-mode')) updateWriteModeGlassBounds();
+        });
+    };
+    ['detail-body', 'detail-task-notes', 'detail-task-description'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('scroll', onScroll, { passive: true });
+    });
+}
+
+/* ---------- 属性区 ---------- */
+/* 第二轮曾在此实现「按任务值过滤空属性 / 折叠开关」，已废弃：
+   属性区改回与收起态一致的两级结构（摘要条 + 点击展开的完整设置），
+   展开后所有字段都要可见可填，过滤空属性反而会让「提醒 / 重复」无法设置。 */
+
+function updateWriteModeCrumb() {
+    const el = document.getElementById('detail-crumb');
+    if (!el) return;
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    if (!task) { el.textContent = ''; el.title = ''; return; }
+    const list = (typeof lists !== 'undefined') ? lists.find(l => l.id === task.listId) : null;
+    const text = (list ? list.name : '任务') + ' › ' + (task.title || '无标题');
+    el.textContent = text;
+    el.title = text;
+}
+
+/* ---------- 书写态交互动效编排（第七轮） ----------
+ * 门控：设置项「界面交互动效」= settings.smoothAnimations → body.fx-smooth，
+ *       且系统未开启「减少动态效果」。CSS 侧另有 prefers-reduced-motion 兜底块（双保险）。
+ * 红线：只动 opacity / transform（合成层，不触发 layout / paint），
+ *       绝不动 width / max-width / margin（重排），绝不动 backdrop-filter（逐像素重算，全站最贵）。
+ * 低端机：app.js 探测后给 body 挂 .fx-low，--wm-fx-* 变量被覆盖（时长砍半、去错峰、不位移）。
+ */
+function _wmFxOn() {
+    if (typeof settings === 'undefined' || settings.smoothAnimations !== true) return false;
+    try {
+        if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    } catch (e) { /* 环境不支持 matchMedia 时按「已开启」处理，CSS 媒体查询仍会兜底 */ }
+    return true;
+}
+
+// 读 --wm-fx-* 变量（秒）。从 body 读而非 :root —— body.fx-low 会覆盖这些变量，读 body 才能拿到生效值
+function _wmFxSeconds(name, fallback) {
+    try {
+        const raw = getComputedStyle(document.body).getPropertyValue(name).trim();
+        if (!raw) return fallback;
+        const n = parseFloat(raw);
+        if (isNaN(n)) return fallback;
+        return raw.indexOf('ms') >= 0 ? n / 1000 : n;
+    } catch (e) { return fallback; }
+}
+
+// 单次播放。先摘类 + 强制回流，保证连点也能重播（不回流的话浏览器认为类没变，动画不会重启）
+function _wmFxPlay(el, cls, seconds) {
+    if (!el) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+    const key = '_wmFxTimer_' + cls;
+    clearTimeout(el[key]);
+    el[key] = setTimeout(() => el.classList.remove(cls), Math.max(60, seconds * 1000 + 80));
+}
+
+// 挂在 body 上的成组微动效（目前只剩 wm-fx-width：正文宽度三档的 opacity 凹陷）
+function _wmBodyFx(cls) {
+    if (!_wmFxOn()) return;
+    const b = document.body;
+    b.classList.remove(cls);
+    void b.offsetWidth;
+    b.classList.add(cls);
+    const key = '_wmFxTimer_' + cls;
+    clearTimeout(b[key]);
+    b[key] = setTimeout(() => b.classList.remove(cls),
+        Math.max(60, _wmFxSeconds('--wm-fx-fade', 0.16) * 1000 + 80));
+}
+
+/* ---------- 场景对切控制器（第十五轮） ----------
+ * 取代旧的 wm-fx-enter / wm-fx-exit：
+ *   · 旧版动的是九个内容块的 translateY(+6px)，向下溢出 6px → 文档多出滚动条 →
+ *     视口窄 10px → #background-image（fixed + cover）被重算 → 背景图先缩小再放大。
+ *   · 新版只动两个元素（#main-content / #task-detail-panel），且全部是 opacity + transform，
+ *     同时用 overflow:hidden 彻底断掉滚动条这条路（CSS 侧 body.wm-morph-* / .detail-write-mode）。
+ *
+ * 调用时机必须在「骨架切换的同一帧」：
+ *   dir='in' 时要赶在 #main-content 被 display:none 之前把 wm-morph-in 挂上，
+ *   否则主视图已经被抹掉，配合 fade-out 无处可播（见 enterDetailWriteMode）。
+ * 返回本段动画时长（秒）；动效关闭 / 系统减弱动态时返回 0，交由 CSS 直接瞬切。
+ */
+let _wmMorphTimer = null;
+let _wmMorphEndEl = null;
+let _wmMorphEndHandler = null;
+
+// 中途放弃（面板被关闭 / 二次切换）时立即收尾，避免残留类与别的入场动画抢同一个元素
+function _wmMorphCancel() {
+    if (_wmMorphTimer) {
+        clearTimeout(_wmMorphTimer);
+        _wmMorphTimer = null;
+    }
+    if (_wmMorphEndEl && _wmMorphEndHandler) {
+        _wmMorphEndEl.removeEventListener('animationend', _wmMorphEndHandler);
+        _wmMorphEndEl = _wmMorphEndHandler = null;
+    }
+    document.body.classList.remove('wm-morph-in', 'wm-morph-out');
+    document.body.style.removeProperty('--wm-morph-left');
+}
+
+function _wmMorphBegin(dir) {
+    const cls = 'wm-morph-' + dir;
+    const other = dir === 'in' ? 'wm-morph-out' : 'wm-morph-in';
+    _wmMorphCancel();
+    if (!_wmFxOn()) return 0;
+    const b = document.body;
+    const panel = document.getElementById('task-detail-panel');
+    // 面板上若残留打开时的 panel-fade-in / 关闭时的 panel-fade-out：
+    // 它与 morph 动画同为「id + 3 类」特异性，靠源码顺序压制；一旦 morph 类被摘掉，
+    // 被压制的 fxPanelIn / fxPanelOut 会立即重新起跑，面板在落帧后再滑一次（实测两次 0.25s
+    // 叠加，观感就是「滑进来又滑回去」）。入场/出场早已播完，这里直接清干净。
+    if (panel) panel.classList.remove('panel-fade-in', 'panel-fade-out');
+    b.classList.remove(other);
+    // 进入要让 fixed 面板先等于「书写态最终几何」，左边界取侧边栏真实宽度（不硬编码 260px）
+    if (dir === 'in') {
+        const sb = document.getElementById('sidebar');
+        if (sb) b.style.setProperty('--wm-morph-left', Math.round(sb.getBoundingClientRect().width) + 'px');
+    }
+    b.classList.remove(cls);
+    void b.offsetWidth;  // 连点时强制重播
+    b.classList.add(cls);
+    const seconds = _wmFxSeconds('--wm-morph-dur', 0.26);
+    // 收尾优先听 animationend —— 低端机上主线程会被这次布局切换拖住，纯计时器可能在动画
+    // 还没跑完（甚至还没起步）时就摘类，落帧出现跳变；计时器仅作兜底。
+    if (panel) {
+        _wmMorphEndHandler = function (e) {
+            if (!e || e.target !== panel) return;   // 子元素的动画会冒泡上来
+            const name = e.animationName || '';
+            if (dir === 'in' ? name !== 'wmPanelIn' : name !== 'wmPanelOut') return;
+            settle();
+        };
+        _wmMorphEndEl = panel;
+        panel.addEventListener('animationend', _wmMorphEndHandler);
+    }
+    function settle() {
+        if (_wmMorphTimer) { clearTimeout(_wmMorphTimer); _wmMorphTimer = null; }
+        if (_wmMorphEndEl && _wmMorphEndHandler) {
+            _wmMorphEndEl.removeEventListener('animationend', _wmMorphEndHandler);
+            _wmMorphEndEl = _wmMorphEndHandler = null;
+        }
+        b.classList.remove(cls);
+        b.style.removeProperty('--wm-morph-left');
+        // 落帧后按真实几何（无 transform 偏移）重算背景图模式的毛玻璃带
+        if (typeof updateWriteModeGlassBounds === 'function') updateWriteModeGlassBounds();
+    }
+    _wmMorphTimer = setTimeout(settle, Math.max(200, seconds * 2000 + 600));
+    return seconds;
+}
+
+/* ---------- 进入 / 退出 ---------- */
+function enterDetailWriteMode() {
+    if (!currentDetailTaskId) return;
+    // 进入前先把收起态的编辑落盘，避免布局切换期间丢失
+    if (typeof saveTaskDetailWithoutClose === 'function') saveTaskDetailWithoutClose();
+    // 场景对切：必须先于（或同帧于）detail-write-mode —— 挂晚了主视图已被 display:none 抹掉，
+    // 「原地退场」的 fade-out 就无处可播了。返回值用于落帧后精算毛玻璃带。
+    const morphSec = _wmMorphBegin('in');
+    document.body.classList.add('detail-write-mode');
+    applyWriteModeWidth((typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard');
+    updateWriteModeCrumb();
+    syncWriteModeTimeMenu();
+    const dismiss = document.getElementById('detail-dismiss-btn');
+    if (dismiss) dismiss.title = '返回（Esc）';
+    // 标题放大为 32px 后重算高度（内联 max-height:120px 已由 CSS 放开到 320px）
+    const titleEl = document.getElementById('detail-task-title');
+    if (titleEl && typeof autoResizeTextarea === 'function') autoResizeTextarea(titleEl);
+    // 进入书写态时同步框内「所属清单」圆点+名称（防御：确保即使此前未走 openTaskDetailPanel 的刷新路径也已填充）
+    updateDetailListBtnText();
+    // 背景图模式：按实际文字位置计算毛玻璃带纵向范围（标题顶端 -> 详情文本末行），避免贯穿整屏
+    _initWmGlass();
+    requestAnimationFrame(() => requestAnimationFrame(updateWriteModeGlassBounds));
+    // 场景对切期间面板带 transform，getBoundingClientRect 会带偏移，范围会算偏；
+    // 落帧（morph 结束 + 余量）后再精算一次 —— 与 _wmMorphBegin 的 settle 双保险。
+    setTimeout(updateWriteModeGlassBounds, Math.round(morphSec * 1000) + 200);
+}
+
+function exitDetailWriteMode() {
+    if (!isDetailWriteMode()) return;
+    flushWriteModeAutoSave();
+    document.body.classList.remove('detail-write-mode');
+    const dismiss = document.getElementById('detail-dismiss-btn');
+    if (dismiss) dismiss.title = '关闭';
+    // 场景对切（进入的严格逆过程）：布局已瞬时回到三栏，主视图淡入归位 + 面板收拢落定
+    _wmMorphBegin('out');
+}
+
+function toggleDetailWriteMode() {
+    if (isDetailWriteMode()) exitDetailWriteMode();
+    else enterDetailWriteMode();
+}
+
+// 顶栏统一的退出按钮：收起态 = 关闭面板，书写态 = 返回三栏布局
+function onDetailDismiss() {
+    if (isDetailWriteMode()) exitDetailWriteMode();
+    else closeTaskDetailPanel();
+}
+
+/* ---------- Esc 退出书写态 ----------
+ * 详情面板原本不响应 Esc（quadrantView.js 注释「详情面板不受 Esc 影响」），
+ * 这里只在书写态接管。冒泡阶段 + defaultPrevented 双重让位：
+ * 命令面板 / 各类 picker / 番茄页若已处理掉 Esc，此处不再响应。 */
+function _writeModeOverlayOpen() {
+    const sels = [
+        '#detail-time-menu div[id$="-picker"]',
+        '#detail-list-picker',
+        '#detail-tag-picker',
+        '.modal-overlay',
+        '[id$="-modal"]'
+    ];
+    for (let i = 0; i < sels.length; i++) {
+        const nodes = document.querySelectorAll(sels[i]);
+        for (let j = 0; j < nodes.length; j++) {
+            const n = nodes[j];
+            if (n && !n.classList.contains('hidden') && n.offsetParent !== null) return true;
+        }
+    }
+    return false;
+}
+
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (e.defaultPrevented) return;
+    if (!isDetailWriteMode()) return;
+    if (_writeModeOverlayOpen()) return;
+    e.preventDefault();
+    exitDetailWriteMode();
+});

@@ -421,6 +421,13 @@ function updateHolidayCountdown() {
     }
 }
 
+// 自动保存间隔（毫秒）：默认 500，可在「设置 → 视图与外观 → 自动保存间隔」调整。
+// 书写态没有保存按钮，输入停止后按此间隔落盘，故做成全局可配而非写死常量。
+function getAutoSaveDelay() {
+    const v = (typeof settings !== 'undefined') ? Number(settings.autoSaveDelay) : NaN;
+    return (Number.isFinite(v) && v >= 0) ? v : 500;
+}
+
 function saveData() {
     // 结构性变更（增删/改期/设置等）经此保存，令日程视图流水线缓存失效
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
@@ -429,12 +436,12 @@ function saveData() {
     if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
     // 本地 tasks 已变更，番茄任务推荐列表缓存同样需要失效，下次打开面板时重新排序
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
-    // 节流：500ms 内只发送一次，避免高频写入冲突
+    // 节流：getAutoSaveDelay() 毫秒内只发送一次，避免高频写入冲突
     _saveInFlight = true; // 标记保存正在进行（含节流等待期），防止 refreshDataFromServer 覆盖本地数据
     if (_saveDataTimerId) {
         clearTimeout(_saveDataTimerId);
     }
-    _saveDataTimerId = setTimeout(_doSaveData, 500);
+    _saveDataTimerId = setTimeout(_doSaveData, getAutoSaveDelay());
 }
 
 function _doSaveData() {

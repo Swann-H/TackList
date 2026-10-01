@@ -337,6 +337,12 @@ function openSettingsModal() {
     document.getElementById('settings-default-urgent').checked = settings.defaultUrgent || false;
     document.getElementById('settings-default-duration').value = settings.defaultDuration !== undefined ? settings.defaultDuration : 30;
     document.getElementById('settings-week-start').value = settings.weekStart || 'monday';
+    // 书写态正文宽度（standard 720 / wide 900 / full 拉满）
+    const _wWidth = document.getElementById('settings-write-mode-width');
+    if (_wWidth) _wWidth.value = settings.writeModeWidth || 'standard';
+    // 自动保存间隔（毫秒）。书写态没有保存按钮，输入停止后按此间隔落盘。
+    const _asDelay = document.getElementById('settings-auto-save-delay');
+    if (_asDelay) _asDelay.value = String(settings.autoSaveDelay !== undefined && settings.autoSaveDelay !== null ? settings.autoSaveDelay : 500);
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
@@ -1071,6 +1077,13 @@ function saveSettings(silent) {
     settings.defaultUrgent = document.getElementById('settings-default-urgent').checked;
     settings.defaultDuration = parseInt(document.getElementById('settings-default-duration').value) || 30;
     settings.weekStart = document.getElementById('settings-week-start').value;
+    const _wWidthEl = document.getElementById('settings-write-mode-width');
+    if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'standard';
+    const _asDelayEl = document.getElementById('settings-auto-save-delay');
+    if (_asDelayEl) {
+        const _d = parseInt(_asDelayEl.value, 10);
+        settings.autoSaveDelay = Number.isFinite(_d) && _d >= 0 ? _d : 500;
+    }
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
@@ -1181,6 +1194,16 @@ function saveSettings(silent) {
     }
 }
 
+// 低端设备探测：给 body 挂 .fx-low，让「界面交互动效」在低端机上自动降级
+// （--wm-fx-* 变量被覆盖：时长砍半、stagger 归零取消错峰、位移归零只留淡入）
+// 阈值与 easterEgg.js 的 ee_getFxTier() 一致；取不到硬件信息时按「不降级」处理，
+// 避免隐私模式 / 老浏览器把正常机器误判成低端机。
+function _isLowEndDevice() {
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 8;
+    const mem = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 8;
+    return cores <= 4 || mem <= 4;
+}
+
 // 应用显示类设置（节假日倒计时可见性等）
 function applyDisplaySettings() {
     const holidayBox = document.getElementById('holiday-countdown');
@@ -1205,6 +1228,9 @@ function applyDisplaySettings() {
     document.body.classList.toggle('fx-smooth', settings.smoothAnimations === true);
     // 场景过渡动效开关（开启时 body.fx-feature 激活番茄专注/正念小事/答案之书/设置弹窗的主题化过渡）
     document.body.classList.toggle('fx-feature', settings.featureAnimations === true);
+    // 低端设备档位（body.fx-low）：动效开关已开时自动降级 —— 时长砍半、取消错峰、不加位移。
+    // 阈值与 easterEgg.js 的 ee_getFxTier() 保持一致（逻辑核 ≤4 或 deviceMemory ≤4）。
+    document.body.classList.toggle('fx-low', _isLowEndDevice());
     // 开关切换后刷新视图按钮（激活态高亮在指示条/背景色两种形态间切换）
     if (typeof updateViewButtons === 'function') updateViewButtons();
 

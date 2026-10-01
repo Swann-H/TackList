@@ -2085,6 +2085,605 @@
                仅保留 transform 过渡（fx-depth-back 深度效果用）。 */
             :root.fx-q-vt body.fx-smooth #main-content { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         }
+        /* ============ 任务详情栏底部停靠区：收起态与书写态同款（第十七轮） ============
+           收起态原先是「整栏宽 + 多条横向分割线 + 带文字的方形按钮」，书写态则是
+           「标签靠右 / 进度虚线框 / 6 个 40px 圆钮」。这里把书写态那一套提到两态共用的作用域，
+           两态只差几何：
+             · 收起态：铺满面板内容宽度（面板 384px − 左右各 16px = 352px），圆钮间距自动均分
+             · 书写态：280px 右对齐（= 6×40 + 5×8），由下方 body.detail-write-mode 块覆盖
+           ⚠️ 重要 / 紧急的激活态是 updateDetailPriorityButtons() 写的**内联**
+           background-color: rgba(...,0.15)，所以描边色 / 文字色必须 !important 才压得住，
+           而 .wm-circle 的 background **不能**加 !important —— 否则激活淡底会被抹掉。 */
+        #detail-tags-display {
+            max-width: 384px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 4px 16px 8px !important;
+            border-top: none !important;
+            justify-content: flex-end;
+            max-height: 72px;
+            overflow-y: auto;
+        }
+        /* 进度：只描边、不填底 —— 中间与背景同色，用一圈虚线强调色提示「可拖拽调整」 */
+        #progress-container {
+            /* 100% 是面板内容宽（384px），减掉左右各 16px 后与标签 / 按钮簇同为 352px；
+               窄屏（移动端全屏面板）由 max-width 夹到 352px 居中 */
+            width: calc(100% - 32px);
+            max-width: 384px;
+            margin: 0 auto 8px !important;
+            border: 1.5px dashed var(--accent-color, #3b82f6) !important;
+            border-radius: 8px !important;
+            padding: 6px 8px !important;
+            background: transparent !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            overflow: hidden;
+        }
+        #detail-actions {
+            max-width: 384px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 0 16px 16px;
+            border-top: none !important;
+            background: transparent;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            /* 必须显式定位：下面的清单/标签气泡用 bottom:calc(100% + 8px)，
+               块级元素 position 默认是 static，不加这条气泡的包含块会退到
+               #task-detail-panel，直接被顶到面板上方（书写态踩过同一个坑）。 */
+            position: relative;
+        }
+        #detail-actions > div { margin-bottom: 0 !important; }
+        /* 两组按钮（重要/紧急/标签/清单 与 开始专注/删除）摊平成一条 6 颗圆钮：
+           display:contents 让按钮直接参与 #detail-actions 的 flex 排布，
+           justify-content:space-between 才能在 352px 内自动均分间距。
+           书写态下 6×40 + 5×8 = 280px，与原来「两组之间 8px 间距」的观感完全一致。 */
+        #detail-actions > div:first-child,
+        #detail-actions > #detail-action-row-main { display: contents; }
+        #detail-previous-list { order: 9; flex: 0 0 100%; }
+
+        /* 6 个圆钮：默认圆形空心描边 + 同色图标，悬浮实心填充 + 白图标
+           —— 与主视图右上角 #header-actions 的范式一致 */
+        .wm-circle {
+            flex: none !important;
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            border-radius: 9999px !important;
+            /* 必须 !important：按钮 HTML 上挂着 Tailwind 的 .border（border-width:1px），
+               与 .wm-circle 特指度相同，谁后注入谁生效 —— 不加会被压回 1px。 */
+            border-width: 2px !important;
+            border-style: solid !important;
+            font-size: 15px;
+            background: transparent;
+        }
+        /* 图标跟随按钮色：否则 <i> 自带的 Tailwind text-*-500 与清单色的内联 color
+           会盖住按钮色，悬浮实心时变成「彩色图标压在实色圆上」 */
+        .wm-circle i { margin: 0 !important; color: inherit !important; }
+        #detail-tag-btn { border-color: #14b8a6 !important; color: #14b8a6 !important; }
+        #detail-tag-btn:hover { background: #14b8a6 !important; border-color: #14b8a6 !important; color: #fff !important; }
+        /* 所属清单：主题强调色（不按清单自身颜色着色，否则「描边色 = 图标色」这条范式失效） */
+        #detail-list-btn { border-color: var(--accent-color, #3b82f6) !important; color: var(--accent-color, #3b82f6) !important; }
+        #detail-list-btn:hover { background: var(--accent-color, #3b82f6) !important; border-color: var(--accent-color, #3b82f6) !important; color: #fff !important; }
+        #detail-task-important { border-color: #eab308 !important; color: #eab308 !important; }
+        #detail-task-important:hover { background: #eab308 !important; border-color: #eab308 !important; color: #fff !important; }
+        #detail-task-urgent { border-color: #f97316 !important; color: #f97316 !important; }
+        #detail-task-urgent:hover { background: #f97316 !important; border-color: #f97316 !important; color: #fff !important; }
+        #detail-focus-btn { border-color: #22c55e !important; color: #22c55e !important; }
+        #detail-focus-btn:hover { background: #22c55e !important; border-color: #22c55e !important; color: #fff !important; }
+        #detail-delete-btn { border-color: #ef4444 !important; color: #ef4444 !important; }
+        #detail-delete-btn:hover { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
+        /* 二次确认态用红色实心圆表达，不靠文字（deleteTaskFromDetail 加 is-confirming 类） */
+        #detail-delete-btn.is-confirming { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
+        /* 圆钮一律纯图标：清单名已由进度虚线框内的「色点 + 名称」承载，不再重复显示 */
+        #detail-list-name { display: none; }
+        #detail-focus-btn > span.wm-hide,
+        #detail-delete-label { display: none !important; }
+
+        /* 清单 / 标签选择器：锚在圆钮簇正上方的气泡（两态同一口径） */
+        #detail-list-picker,
+        #detail-tag-picker {
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 16px;
+            right: 16px;
+            margin-bottom: 0 !important;
+            max-height: 50vh;
+            overflow-y: auto;
+            z-index: 40;
+            background: var(--bg-secondary, #fff);
+            border-radius: 8px;
+        }
+
+        /* ============ 沉浸书写态（body.detail-write-mode） ============ */
+        /* 显隐助手：wm-only 仅书写态显示，wm-hide 仅收起态显示。
+           两者都不改动元素自身的 display 类型（收起态完全不干预），只在书写态切到 none / inline-flex。 */
+        .wm-only { display: none !important; }
+        body.detail-write-mode .wm-only { display: inline-flex !important; align-items: center; justify-content: center; }
+        body.detail-write-mode .wm-only.wm-block { display: block !important; }
+        body.detail-write-mode .wm-hide { display: none !important; }
+
+        @media (min-width: 769px) {
+            /* 主视图被挤占消失（非浮层覆盖）；面板恢复为 flex 兄弟占满侧栏右侧全部空间。
+               用 relative 而非 static：既参与 flex 占位，又给右下角悬浮簇提供定位上下文。 */
+            body.detail-write-mode #main-content { display: none; }
+            body.detail-write-mode #task-detail-panel {
+                position: relative !important;
+                flex: 1 1 auto !important;
+                width: auto !important;
+                max-width: none !important;
+            }
+            /* 收起态靠 margin-right 让位；书写态主视图已消失，让位值必须清零 */
+            body.detail-write-mode.fx-detail-open #main-content { margin-right: 0; }
+
+            /* 正文容器宽度三档：标准 720 / 宽 900 / 全屏（拉满可用宽度） */
+            body.detail-write-mode { --wm-width: 720px; --wm-pad: 24px; }
+            body.detail-write-mode.wm-w-900 { --wm-width: 900px; }
+            body.detail-write-mode.wm-w-full { --wm-width: 100%; --wm-pad: 40px; }
+            body.detail-write-mode #detail-topbar > :first-child,
+            body.detail-write-mode #detail-title-row,
+            body.detail-write-mode #detail-time-menu,
+            body.detail-write-mode #detail-body {
+                width: 100%;
+                max-width: calc(var(--wm-width) + var(--wm-pad) * 2);
+                margin-left: auto;
+                margin-right: auto;
+                padding-left: var(--wm-pad);
+                padding-right: var(--wm-pad);
+            }
+            /* 用 flex order 把「时间摘要 + 时间菜单」从顶栏下方挪到标题下方，
+               不改动 DOM 顺序 —— 收起态依赖原顺序（菜单在标题上方展开）。 */
+            body.detail-write-mode #detail-topbar { order: 0; }
+            body.detail-write-mode #detail-title-row { order: 1; }
+            body.detail-write-mode #detail-time-menu { order: 3; }
+
+            /* 顶栏 chrome 化：去掉分割线，退为纯导航层。
+               内边距按「主视图 #header-actions 圆形按钮的位置」对齐 —— 实测主视图按钮
+               顶边 y=28、右边缘距视口右 24px，这里用 padding 28px 24px 把书写态的按钮
+               推到同一个坐标（此前是 10px / 贴死视口右缘）。 */
+            body.detail-write-mode #detail-topbar {
+                border-bottom: none !important;
+                background: transparent;
+                padding: 28px 24px 12px 24px;
+            }
+            /* 面包屑「清单 › 任务名」在书写态隐藏：标题已下放到正文 H1，顶部不需要再念一遍 */
+            body.detail-write-mode #detail-crumb { display: none !important; }
+
+            /* ---- 右上角按钮：与主视图 #header-actions 的圆形图标按钮同规格 ----
+               主视图范式：w-10 h-10 rounded-full border-2 border-{色}-500 text-{色}-500
+                          hover:bg-{色}-500 hover:text-white，容器 gap-3(12px)。
+               这里再加「按下态」：active:bg-{色}-600 active:scale-95
+               —— 取自「设置节假日与调休」界面返回按钮（它是全站唯一带 active 态的圆形钮）。
+               只作用于书写态：收起态保持原来的紧凑方形 ghost 按钮。 */
+            body.detail-write-mode #detail-topbar > div:last-child { gap: 12px; }
+            body.detail-write-mode #detail-width-btn,
+            body.detail-write-mode #toggle-mode-btn,
+            body.detail-write-mode #detail-dismiss-btn {
+                width: 40px;
+                height: 40px;
+                padding: 0;
+                border-radius: 9999px !important;
+                border: 2px solid;
+                display: flex !important;
+                align-items: center;
+                justify-content: center;
+                background: transparent;
+                transition: background-color .15s, border-color .15s, color .15s, transform .1s;
+            }
+            /* 图标继承按钮色（与主视图一致）：不加这条，<i> 自带的 text-theme-muted 会盖住描边色 */
+            body.detail-write-mode #detail-width-btn i,
+            body.detail-write-mode #toggle-mode-btn i,
+            body.detail-write-mode #detail-dismiss-btn i {
+                margin: 0 !important;
+                color: inherit !important;
+                font-size: 15px;
+            }
+            /* 正文宽度 —— purple-500 / 600（与主视图「添加任务」同色） */
+            body.detail-write-mode #detail-width-btn { border-color: #a855f7 !important; color: #a855f7 !important; }
+            body.detail-write-mode #detail-width-btn:hover { background: #a855f7 !important; border-color: #a855f7 !important; color: #fff !important; }
+            body.detail-write-mode #detail-width-btn:active { background: #9333ea !important; border-color: #9333ea !important; color: #fff !important; transform: scale(.95); }
+            /* 切换任务模式 —— indigo-500 / 600（与主视图「视图配置」同色） */
+            body.detail-write-mode #toggle-mode-btn { border-color: #6366f1 !important; color: #6366f1 !important; }
+            body.detail-write-mode #toggle-mode-btn:hover { background: #6366f1 !important; border-color: #6366f1 !important; color: #fff !important; }
+            body.detail-write-mode #toggle-mode-btn:active { background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important; transform: scale(.95); }
+            /* 返回 —— 直接沿用「设置节假日与调休」界面返回按钮：
+               border-slate-400 text-slate-500 hover:bg-slate-500 hover:text-white
+               active:bg-slate-600 active:scale-95 */
+            body.detail-write-mode #detail-dismiss-btn { border-color: #94a3b8 !important; color: #64748b !important; }
+            body.detail-write-mode #detail-dismiss-btn:hover { background: #64748b !important; border-color: #64748b !important; color: #fff !important; }
+            body.detail-write-mode #detail-dismiss-btn:active { background: #475569 !important; border-color: #475569 !important; color: #fff !important; transform: scale(.95); }
+
+            /* 标题：从 20px 放大为 32px 一级标题，与正文同容器同左边缘 */
+            body.detail-write-mode #detail-title-row { border-bottom: none !important; padding-top: 8px; padding-bottom: 4px; }
+            body.detail-write-mode #detail-task-complete-btn { width: 28px; height: 28px; margin-top: 6px; }
+            /* 标题放大为 32px 后，textarea 内联的 max-height:120px 会裁掉第二行，
+               此处放开上限（内联样式需用 !important 覆盖） */
+            body.detail-write-mode #detail-task-title { font-size: 32px; line-height: 1.3; font-weight: 600; max-height: 320px !important; }
+
+            /* 设置时间区：书写态沿用收起态的「摘要 → 点击展开」两级结构，
+               展开后用自适应网格铺开，字段宽度随正文宽度档位变化。
+               注意 #detail-time-menu 的 space-y-3 依赖直接子元素，故不做任何包裹层，
+               否则收起态各行会失去间距而叠在一起。 */
+            /* 摘要条（书写态专属触发入口）：把「任务时间 / 提前 / 重复」拆成三段可单独点击的
+               属性（沿用旧版属性行的「图标 + 值」显示规则），其中第一段是「日期 + 时间」合并
+               后的综合展示；空项自动隐藏，全空时回退成一颗「设置时间」占位。
+               点任意一段都展开同一套完整设置面板（与收起态一致）。 */
+            /* 摘要条：与标题行共用同一条 max-width 容器与同样的居中方式，
+               左边缘因此落在**标题文字**所在的竖线上 —— 容器 padding 之外再补 40px
+               = 完成圈 28 + #detail-title-row 的 gap-3(12)。
+               （不要再给 justify-content: center，否则又回到居中。） */
+            body.detail-write-mode #detail-time-trigger-wm {
+                order: 2;
+                align-self: stretch;
+                width: 100%;
+                max-width: calc(var(--wm-width) + var(--wm-pad) * 2);
+                margin-left: auto;
+                margin-right: auto;
+                padding-left: calc(var(--wm-pad) + 40px);
+                padding-right: var(--wm-pad);
+                display: flex !important;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 0 2px;
+                margin-top: 2px;
+                margin-bottom: 2px;
+                border: none;
+                background: transparent;
+                font-size: 13px;
+                color: var(--text-secondary, #6b7280);
+            }
+            body.detail-write-mode .wm-time-seg {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 3px 8px;
+                border: 0;
+                border-radius: 6px;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+                font-size: 13px;
+                line-height: 1.4;
+                white-space: nowrap;
+                cursor: pointer;
+                transition: background-color .15s, color .15s;
+            }
+            body.detail-write-mode .wm-time-seg i { color: var(--text-muted, #9b9a97); font-size: 12px; }
+            body.detail-write-mode .wm-time-seg:hover { background: var(--bg-tertiary, #f3f4f6); color: var(--text-primary, #111827); }
+            body.detail-write-mode .wm-time-seg:hover i { color: var(--text-primary, #111827); }
+            /* 空项隐藏：必须自己带 !important —— Tailwind 的 .hidden 与本类的 display 特指度相同，
+               谁后注入谁生效，不能赌注入顺序 */
+            body.detail-write-mode .wm-time-seg.hidden { display: none !important; }
+            /* 占位态（没有任何时间信息）：保留一点点「可点击」的提示 */
+            body.detail-write-mode #detail-time-trigger-wm .wm-time-seg[data-part="empty"] { color: var(--text-muted, #9b9a97); }
+            /* 展开态：:not(.hidden) 是关键 —— 否则 !important 的 display 会压过 Tailwind 的 .hidden，
+               菜单会永远展开（收起态同一坑，见 memory） */
+            body.detail-write-mode #detail-time-menu:not(.hidden) {
+                display: grid !important;
+                /* ⚠️ 不要用 repeat(auto-fit, minmax(200px, 1fr))：auto-fit 在「固有尺寸」阶段
+                   会按 max-width 推出 4 条 200px 轨道，其 min-content 因此约 872px；
+                   而面板是 flex 项（自动最小尺寸 = min-content），会被撑得比视口还宽 →
+                   1024px 及以下整块溢出窗口。显式列数 + minmax(0, 1fr) 的最小贡献是 0，
+                   不会有这个问题。列数按视口断点切换（面板宽 = 视口 − 260px 侧栏）。 */
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px 14px;
+                align-items: center;
+                border: 1px solid var(--border-color, #e5e7eb) !important;
+                border-radius: 10px;
+                padding: 12px 14px !important;
+                margin-top: 8px;
+                margin-bottom: 10px;
+                min-width: 0;
+            }
+            /* 面板够宽时铺成四列（字段宽度仍在 200px 上下，与收起态的观感一致） */
+            @media (min-width: 1024px) {
+                body.detail-write-mode #detail-time-menu:not(.hidden) {
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                }
+            }
+            /* 两个 .grid 容器退化为「透明盒子」，让字段直接参与上面的自适应网格 */
+            body.detail-write-mode #detail-time-menu > .grid:not(.hidden) { display: contents !important; }
+            /* 首行（「时间」标题 + 跳过此周期 / 撤销 / 时间段 / 清除时间）横跨整行 */
+            body.detail-write-mode #detail-time-menu > div:first-child { grid-column: 1 / -1; }
+            /* picker 是 absolute left-0 right-0：网格单元变宽后必须定宽，否则撑满整格 */
+            body.detail-write-mode #detail-time-menu .relative > div[id$="-picker"] {
+                left: auto !important;
+                right: auto !important;
+                width: 288px;
+            }
+            /* 字段本体保持收起态的样子（有边框的输入框 / 按钮），只是变宽 */
+            body.detail-write-mode #detail-time-menu .relative { min-width: 0; }
+
+            /* 正文：加大字号与行高，像一张可延展的纸 */
+            body.detail-write-mode #detail-body { order: 4; padding-top: 4px; padding-bottom: 16px; }
+            /* 书写视觉中部（第十一轮）：底部留约半屏空白，使文本到达底部、最后一行时仍可继续
+               下滚，让光标所在行落到屏幕中部。 */
+            body.detail-write-mode #detail-task-notes {
+                font-size: 16px;
+                line-height: 1.8;
+                min-height: 42vh;
+                /* 底部留约半屏空白：滚到底时最后一行正好落到屏幕中部（实测 vh=950 时
+                   最后一行顶部 y≈468，屏幕中线 475）。 */
+                padding-bottom: 46vh;
+            }
+
+            /* 底部停靠区（第十一轮）：书写态下整体移出文档流、绝对定位于面板底部（右下角），
+               浮在正文之上 —— 这样 #detail-body（flex:1）就能一直延伸到面板/屏幕最底部。
+               空白区域 pointer-events:none，避免遮挡正文的点击/选择；子元素恢复可交互。
+               子元素（标签/进度/按钮簇）仍靠 align-self:flex-end + margin 右对齐，布局不变。 */
+            body.detail-write-mode #detail-dock {
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: flex-end;
+                pointer-events: none;
+                z-index: 20;
+            }
+            body.detail-write-mode #detail-dock > * { pointer-events: auto; }
+            /* 时间戳行保持整宽、且不拦截正文点击（纯展示） */
+            body.detail-write-mode #detail-dock > #detail-timestamps-display {
+                align-self: stretch;
+                pointer-events: none;
+            }
+
+            /* 标签 / 进度：书写态移到右下角按钮上方，与按钮簇同宽（280px）右对齐。
+               改为文档流内布局（不再 absolute），因此正文无需再留大块 padding-bottom。
+               ⚠️ 无分割线 / 虚线框 / 圆钮配色等样式已与收起态共用上方「底部停靠区」块，
+               这里只覆盖书写态独有的几何（280px + 右对齐 24px）；改样式请改共用块，
+               不要在这里补第二份，否则两态会漂移。 */
+            body.detail-write-mode #detail-timestamps-display { order: 5; }
+            body.detail-write-mode #detail-tags-display {
+                order: 6;
+                align-self: flex-end;
+                width: 280px;
+                margin: 0 24px 8px auto !important;
+                padding: 0 !important;
+            }
+            body.detail-write-mode #progress-container {
+                order: 7;
+                align-self: flex-end;
+                width: 280px;
+                margin: 0 24px 8px auto !important;
+            }
+
+            /* 底部按钮区 → 右下角圆形簇（文档流内右对齐，位于标签/进度下方） */
+            body.detail-write-mode #detail-actions {
+                order: 8;
+                align-self: flex-end;
+                width: 280px;
+                margin: 0 24px 24px auto;
+                padding: 0;
+                z-index: 30;
+            }
+            /* 清单/标签选择器：书写态下气泡与圆钮簇同宽（280px）并右对齐（共用块已给
+               position:absolute + bottom:calc(100% + 8px) + 圆角 8px，底边与虚线框对齐）。 */
+            body.detail-write-mode #detail-list-picker,
+            body.detail-write-mode #detail-tag-picker {
+                left: auto !important;
+                right: 0;
+                width: 280px;
+            }
+            body.detail-write-mode #detail-previous-list { display: none; }
+
+            /* ============ 背景图片模式：毛玻璃只覆盖「正文列」与「右下停靠区」 ============
+               原来 body.has-bg-image #task-detail-panel.bg-theme-secondary 会给整块面板加
+               backdrop-filter，于是整个书写态区域（含左右两侧的留白）都被糊掉一片。
+               这里把面板自身的模糊撤掉，改为两块独立的毛玻璃：
+                 1) 正文列 —— 一条与 --wm-width 同宽、从「任务标题顶端」纵向延伸到「详情文本最后一行」的玻璃带
+                    （不再贯穿整屏；纵向范围由 JS 的 updateWriteModeGlassBounds 按实际文字位置计算，短文本时玻璃带明显变矮）；
+                 2) 右下停靠区 —— 标签 / 进度 / 按钮簇三块拼成的连续玻璃块。
+               两块都随「正文宽度」三档（标准 720 / 宽 900 / 全屏）自动变宽变窄。 */
+            body.has-bg-image.detail-write-mode #task-detail-panel,
+            body.has-bg-image.detail-write-mode #task-detail-panel.bg-theme-secondary {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+            }
+            /* 正文列玻璃带：z-index:-1 让它压在内容之下（否则会把文字一起糊掉） */
+            body.has-bg-image.detail-write-mode #task-detail-panel::before {
+                content: '';
+                position: absolute;
+                /* 垂直范围由 JS 动态计算：从任务标题顶端 -> 详情文本最后一行，
+                   不再贯穿整屏（见 updateWriteModeGlassBounds）。未计算时回退整高。 */
+                top: var(--wm-glass-top, 0);
+                bottom: var(--wm-glass-bottom, 0);
+                left: 50%;
+                transform: translateX(-50%);
+                width: calc(var(--wm-width) + var(--wm-pad) * 2);
+                max-width: 100%;
+                backdrop-filter: blur(var(--bg-blur, 12px));
+                -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+                pointer-events: none;
+                z-index: -1;
+            }
+            /* 右下停靠区（标签 / 进度 / 按钮簇）：**不加毛玻璃**，背景图下保持全透明。
+               毛玻璃只留给正文列那条玻璃带 —— 停靠区是操作区，糊一层反而让图标发虚。
+               （曾经用 padding-bottom 顶替 margin-bottom 让三块玻璃边缘相接，现在没有玻璃了，
+               恢复写态原有的间距即可。） */
+            /* 进度容器已在写态通用规则里统一为「透明 + 虚线强调色框」，
+               这里只需要兜住它别被别处再叠一层模糊。 */
+            body.has-bg-image.detail-write-mode #detail-tags-display,
+            body.has-bg-image.detail-write-mode #detail-actions {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+                background: transparent !important;
+                border-radius: 0 !important;
+            }
+            body.has-bg-image.detail-write-mode #progress-container {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+            }
+
+            /* ============ 进入 / 退出书写态：「场景对切」过渡（第十五轮重写） ============
+               作用域：body.fx-smooth（设置项「界面交互动效」smoothAnimations），
+               并由 JS 门控 _wmFxOn() 与下方 reduced-motion 块双重兜底。
+
+               【为什么废弃旧方案】
+                 1. 背景图「先缩小再放大」的元凶就是旧 wm-fx-enter：九块内容做 translateY(+6px)
+                    向下溢出 6px（文档高度 900 → 906），闪现纵向滚动条，视口宽度瞬变
+                    1440 → 1430，而 #background-image 是 position:fixed + width:100% +
+                    background-size:cover —— 容器一窄，cover 立刻重算，整张背景图缩放一帧；
+                    动画结束（约 0.5s 后）溢出消失、滚动条收回，背景再缩放回去。
+                 2. 骨架切换（主视图 display:none / 面板 384 → 拉满）完全瞬切，只有内容块错峰，
+                    视觉上仍是「跳一下」。
+
+               ⚠️ 性能红线（低性能机器也要流畅，逐条遵守）：
+                 1. 只动 transform / opacity —— 走合成层，不触发布局与重绘。
+                 2. 绝不动 width / max-width / margin —— 标题 32px、正文三档宽度、各 picker
+                    都挂在面板子树上，动宽度会逐帧重排整棵子树（低端机必卡）。
+                 3. 绝不动 backdrop-filter —— 毛玻璃逐像素重算，是全站最贵的属性。
+                 4. 不用 View Transitions —— 切换时 #main-content 会 display:none，
+                    VT 需要整页快照，低端机开销明显且消失元素会「空盒飞」。
+                 5. 参与动画的元素压到最少：进入/退出各自只有 2 个（#main-content 与
+                    #task-detail-panel），内容继承父级面板的 opacity/transform，不再单独排队。
+                 6. 三档自动降级：body.fx-low（低端设备）+ prefers-reduced-motion（系统）。
+
+               做法：把切换拆成「两层 additional起来的观感」——
+                 · 进入：主视图**原地**（保持被 384px 面板挤压的窄布局，不让它同时变宽）
+                   淡出并轻微下沉；面板与此同时以「略小 → 落定」的缩放淡入铺满可用宽度。
+                   两者约 260ms 内交叠完成，感知就是「书写页展开覆盖主视图」。
+                 · 退出：主视图淡入归位，面板以「略大 → 落定」的收拢淡入回到右侧 384px 栏，
+                   与进入严格对称（同一个时长、同一条曲线、同一个 transform-origin）。
+                 · 过渡期间由 .wm-morph-in / .wm-morph-out 强制面板保持 fixed 且**等于书写态
+                   最终几何**（left = 侧边栏实际宽度，由 JS 注入 --wm-morph-left），动画结束后
+                   摘类落回文档流 —— 两种状态的几何完全一致，所以落帧无跳变。 */
+            :root {
+                --wm-fx-ease: cubic-bezier(0.4, 0, 0.2, 1);  /* 与四象限 --q-vt-ease 同源 */
+                --wm-fx-shift: 6px;                          /* 上行位移 */
+                --wm-fx-fade: 0.16s;                         /* 微过渡（菜单 / 气泡 / 宽度切换） */
+                --wm-morph-dur: 0.26s;                       /* 场景对切主体时长（展开 / 收起共用） */
+                --wm-morph-ease: cubic-bezier(0.4, 0, 0.2, 1);
+                --wm-morph-shift: 10px;                      /* 主视图淡出/淡入时的纵向让位 */
+                --wm-morph-scale-in: 0.982;                  /* 进入：面板起始略小，展开落定 */
+                --wm-morph-scale-out: 1.02;                  /* 退出：面板起始略大，收拢落定 */
+            }
+            /* 低端设备档位：由 app.js 探测（CPU 核 ≤4 或 deviceMemory ≤4）后给 body 挂 .fx-low。
+               位移与缩放全部降为 1/0（只留 opacity），时长砍半 —— 逐帧成本再降一档。 */
+            body.fx-low {
+                --wm-fx-shift: 0px;
+                --wm-fx-fade: 0.08s;
+                --wm-morph-dur: 0.14s;
+                --wm-morph-shift: 0px;
+                --wm-morph-scale-in: 1;
+                --wm-morph-scale-out: 1;
+            }
+            @keyframes wmRise {
+                from { opacity: 0; transform: translateY(var(--wm-fx-shift)); }
+                to   { opacity: 1; transform: translateY(0); }
+            }
+            @keyframes wmFadeOut { from { opacity: 1; } to { opacity: 0; } }
+            /* 场景对切四条：主视图退 / 主视图归 / 面板展开落定 / 面板收拢落定 */
+            @keyframes wmMainOut {
+                from { opacity: 1; transform: scale(1) translateY(0); }
+                to   { opacity: 0; transform: scale(0.99) translateY(var(--wm-morph-shift)); }
+            }
+            @keyframes wmMainIn {
+                from { opacity: 0; transform: scale(0.99) translateY(var(--wm-morph-shift)); }
+                to   { opacity: 1; transform: scale(1) translateY(0); }
+            }
+            @keyframes wmPanelIn {
+                from { opacity: 0.25; transform: scale(var(--wm-morph-scale-in)); }
+                to   { opacity: 1; transform: scale(1); }
+            }
+            @keyframes wmPanelOut {
+                from { opacity: 0.25; transform: scale(var(--wm-morph-scale-out)); }
+                to   { opacity: 1; transform: scale(1); }
+            }
+            /* 宽度三档切换：不改宽度，只用一段 opacity 凹陷掩盖瞬时跳变 */
+            @keyframes wmWidthSwap { 0% { opacity: 1; } 45% { opacity: .55; } 100% { opacity: 1; } }
+            /* 完成圈勾选：一次轻弹，不位移不改色 */
+            @keyframes wmPop { 0% { transform: scale(1); } 45% { transform: scale(1.18); } 100% { transform: scale(1); } }
+
+            /* ---- 1) 进入书写态：主视图原地退场 + 面板展开落定 ----
+               必须在添加 detail-write-mode 的同一帧挂上 .wm-morph-in（JS 侧 _wmMorphBegin 保证），
+               否则主视图会先被 display:none 抹掉，fade-out 无处可播。
+               主视图必须锁住 margin-right:24rem —— 不然让位值归零会让它瞬间变宽、任务列表整屏重排。 */
+            body.fx-smooth.wm-morph-in #main-content {
+                display: flex !important;
+                margin-right: 24rem !important;
+                pointer-events: none;
+                will-change: opacity, transform;
+                animation: wmMainOut var(--wm-morph-dur) var(--wm-morph-ease) both;
+            }
+            body.fx-smooth.wm-morph-in #task-detail-panel {
+                position: fixed !important;
+                top: 0; right: 0; bottom: 0;
+                left: var(--wm-morph-left, 260px);
+                width: auto !important;
+                max-width: none !important;
+                height: auto !important;
+                will-change: opacity, transform;
+                transform-origin: 100% 50%;
+                animation: wmPanelIn var(--wm-morph-dur) var(--wm-morph-ease) both;
+            }
+
+            /* ---- 2) 退出书写态：布局已瞬时回到三栏，主视图淡入归位 + 面板收拢落定 ----
+               退出时 detail-write-mode 已摘除，#main-content 自动恢复 display:flex 与 24rem 让位，
+               面板也回到 fx-smooth 的 fixed 右侧栏，所以这里只需补两条 animation，不动任何几何。 */
+            body.fx-smooth.wm-morph-out #main-content {
+                will-change: opacity, transform;
+                animation: wmMainIn var(--wm-morph-dur) var(--wm-morph-ease) both;
+            }
+            body.fx-smooth.wm-morph-out #task-detail-panel {
+                will-change: opacity, transform;
+                transform-origin: 100% 50%;
+                animation: wmPanelOut var(--wm-morph-dur) var(--wm-morph-ease) both;
+            }
+
+            /* ---- 3) 滚动条是「背景图缩放」的唯一来源，全程锁死 ----
+               切换期间任意一个像素的纵向溢出都会顶出滚动条 → 视口变窄 → 固定的
+               #background-image（cover）被重算。写态本身也一并锁：书台是定高的，
+               纵向滚动交给 #detail-body 自己，不需要文档级滚动。 */
+            body.detail-write-mode,
+            body.wm-morph-in,
+            body.wm-morph-out { overflow: hidden; }
+
+            /* ---- 4) 时间设置菜单展开 / 收起 ----
+               收起时 pointer-events:none —— 淡出期间元素仍在，别被点到。 */
+            body.fx-smooth #detail-time-menu.wm-menu-in  { animation: wmRise var(--wm-fx-fade) var(--wm-fx-ease) both; }
+            body.fx-smooth #detail-time-menu.wm-menu-out { animation: wmFadeOut var(--wm-fx-fade) ease both; pointer-events: none; }
+
+            /* ---- 5) 正文宽度三档切换：只做 opacity 凹陷，绝不动画宽度 ---- */
+            body.fx-smooth.wm-fx-width #detail-topbar > :first-child,
+            body.fx-smooth.wm-fx-width #detail-title-row,
+            body.fx-smooth.wm-fx-width #detail-time-menu:not(.hidden),
+            body.fx-smooth.wm-fx-width #detail-body {
+                animation: wmWidthSwap var(--wm-fx-fade) ease both;
+            }
+
+            /* ---- 6) 标签 / 清单气泡 ---- */
+            body.fx-smooth #detail-tag-picker.wm-pop-in,
+            body.fx-smooth #detail-list-picker.wm-pop-in { animation: wmRise var(--wm-fx-fade) var(--wm-fx-ease) both; }
+
+            /* ---- 7) 完成圈勾选反馈 ---- */
+            body.fx-smooth #detail-task-complete-btn.wm-pop { animation: wmPop .2s var(--wm-fx-ease) both; }
+
+            /* 系统级减弱动态：全部关掉（与 JS 门控互为兜底） */
+            @media (prefers-reduced-motion: reduce) {
+                body.fx-smooth.wm-morph-in #main-content,
+                body.fx-smooth.wm-morph-in #task-detail-panel,
+                body.fx-smooth.wm-morph-out #main-content,
+                body.fx-smooth.wm-morph-out #task-detail-panel,
+                body.fx-smooth #detail-time-menu.wm-menu-in,
+                body.fx-smooth #detail-time-menu.wm-menu-out,
+                body.fx-smooth.wm-fx-width #detail-topbar > :first-child,
+                body.fx-smooth.wm-fx-width #detail-title-row,
+                body.fx-smooth.wm-fx-width #detail-time-menu,
+                body.fx-smooth.wm-fx-width #detail-body,
+                body.fx-smooth #detail-tag-picker.wm-pop-in,
+                body.fx-smooth #detail-list-picker.wm-pop-in,
+                body.fx-smooth #detail-task-complete-btn.wm-pop { animation: none !important; }
+            }
+        }
         @keyframes fxPanelIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
         @keyframes fxPanelOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
         /* 视图切换：方向性滑动过渡（切换到右侧视图时内容整体向左流动：旧视图左移淡出，新视图自右接续滑入，反之亦然） */
@@ -3100,24 +3699,62 @@
         
         <!-- 任务详情面板 -->
         <aside id="task-detail-panel" class="hidden w-96 bg-theme-secondary border-l border-theme flex flex-col h-screen relative z-40" data-page-node-id="1EOheI9RS7tthTk9BrRnRn">
-            <!-- 顶部工具栏 -->
-            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0" data-page-node-id="kwc45skNYVo1tcy2bUlkyC">
-                <button type="button" onclick="toggleDetailTimeMenu()" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-theme-primary hover:bg-theme-tertiary transition" data-page-node-id="1sbo94pOBUxKCTUeFVLqZH">
-                    <span id="detail-time-btn-text" data-page-node-id="XcOi3fCP9RXcLFQQg9H2Vk">设置时间</span>
-                    <i class="fas fa-chevron-down text-xs" data-page-node-id="HPgYVCBAKlcoW8vACz3dX9"></i>
-                </button>
-                <div class="flex items-center gap-2" data-page-node-id="UDEmrlDxIagGzMPvHBBdY4">
+            <!-- 顶部工具栏（书写态下 chrome 化：面包屑 + 正文宽度 + 统一退出按钮） -->
+            <div id="detail-topbar" class="p-4 flex items-center justify-between flex-shrink-0" data-page-node-id="kwc45skNYVo1tcy2bUlkyC">
+                <div class="flex items-center gap-2 min-w-0">
+                    <button type="button" onclick="toggleDetailTimeMenu()" class="wm-hide flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-theme-primary hover:bg-theme-tertiary transition" data-page-node-id="1sbo94pOBUxKCTUeFVLqZH">
+                        <span id="detail-time-btn-text" data-page-node-id="XcOi3fCP9RXcLFQQg9H2Vk">设置时间</span>
+                        <i class="fas fa-chevron-down text-xs" data-page-node-id="HPgYVCBAKlcoW8vACz3dX9"></i>
+                    </button>
+                    <!-- 书写态面包屑：与正文容器同宽居中，令上下只有一条对齐线 -->
+                    <span id="detail-crumb" class="wm-only text-sm text-theme-muted truncate"></span>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0" data-page-node-id="UDEmrlDxIagGzMPvHBBdY4">
+                    <button type="button" id="detail-width-btn" onclick="cycleWriteModeWidth()" class="wm-only p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" title="正文宽度">
+                        <i class="fas fa-text-width"></i>
+                    </button>
+                    <!-- 任务模式切换（文本 ⇄ 子任务）：收起态与书写态都要有，位置固定在
+                         正文宽度按钮与「退出/返回」按钮之间 —— DOM 顺序即视觉顺序，
+                         书写态下正好落在返回按钮左侧。 -->
                     <button onclick="toggleTaskMode(event)" class="p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" id="toggle-mode-btn" title="切换任务模式" data-page-node-id="5CWOFh68KMqFudKaEyqjEn">
                         <i class="fas fa-list-ul" data-page-node-id="oRX1OLWg1tGDSDb0t92GRJ"></i>
                     </button>
-                    <button onclick="closeTaskDetailPanel()" class="p-2 hover:bg-theme-tertiary rounded-lg transition" data-page-node-id="1OJGe3dCXmeHSpPMKFW6QC">
-                        <i class="fas fa-times text-theme-muted" data-page-node-id="3gLmskoiCYXHdLhoYq6EnR"></i>
+                    <!-- 进入书写态的入口（仅收起态）。展开态由同位置的返回按钮退出，两者不并存 -->
+                    <button type="button" onclick="toggleDetailWriteMode()" class="wm-hide p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" id="detail-expand-btn" title="展开书写">
+                        <i class="fas fa-expand"></i>
+                    </button>
+                    <!-- 统一的退出按钮：收起态 = 关闭面板，书写态 = 返回三栏布局（图标随态切换，位置与风格不变） -->
+                    <button type="button" id="detail-dismiss-btn" onclick="onDetailDismiss()" class="p-2 hover:bg-theme-tertiary rounded-lg transition" title="关闭">
+                        <i class="fas fa-times text-theme-muted wm-hide" data-page-node-id="3gLmskoiCYXHdLhoYq6EnR"></i>
+                        <i class="fas fa-arrow-left text-theme-muted wm-only"></i>
                     </button>
                 </div>
             </div>
 
-            <!-- 时间设定二级菜单（内联展开） -->
-            <div id="detail-time-menu" class="hidden border-b border-theme p-4 space-y-3 flex-shrink-0" data-page-node-id="JCPK7psIT023k6QT0wRDWb">
+            <!-- 书写态专属：任务时间摘要（三段各自可点，点任意一段都展开下方完整的时间/提醒/重复设置）。
+                 第一段把「日期 + 时间」合并成一个信息格，综合展示任务时间 —— 跨天时
+                 （如「1月2日 22:00 - 1月3日 02:00」「1月2日 - 1月5日 (全天)」）读起来才连贯；
+                 文案直接复用收起态顶栏按钮的同一份字符串，显示规则完全一致。
+                 空项由 setWriteModeTimeSegments() 逐段隐藏，三段全空时回退成「设置时间」占位。
+                 刻意不带 data-page-node-id：离线版镜像脚本按 node id 顺序做映射，
+                 新增节点不参与映射才不会打乱对齐。 -->
+            <div id="detail-time-trigger-wm" class="wm-only" role="group" aria-label="任务时间">
+                <button type="button" class="wm-time-seg" data-part="datetime" onclick="toggleDetailTimeMenu()" title="设置日期与时间">
+                    <i class="far fa-calendar"></i><span id="detail-time-seg-datetime"></span>
+                </button>
+                <button type="button" class="wm-time-seg" data-part="reminder" onclick="toggleDetailTimeMenu()" title="设置提前提醒">
+                    <i class="fas fa-bell"></i><span id="detail-time-seg-reminder"></span>
+                </button>
+                <button type="button" class="wm-time-seg" data-part="repeat" onclick="toggleDetailTimeMenu()" title="设置重复">
+                    <i class="fas fa-redo"></i><span id="detail-time-seg-repeat"></span>
+                </button>
+                <button type="button" class="wm-time-seg hidden" data-part="empty" onclick="toggleDetailTimeMenu()" title="设置时间">
+                    <i class="far fa-calendar"></i><span id="detail-time-btn-text-wm">设置时间</span>
+                </button>
+            </div>
+
+            <!-- 时间设定二级菜单（内联展开）。书写态下由上方摘要条控制展开，布局改为自适应网格 -->
+            <div id="detail-time-menu" class="hidden p-4 space-y-3 flex-shrink-0" data-page-node-id="JCPK7psIT023k6QT0wRDWb">
                 <div class="flex items-center justify-between" data-page-node-id="LC5klesNj7AIfg6EqJ3iAp">
                     <span class="text-xs font-medium text-theme-secondary" data-page-node-id="IfHxJ2FhSN8J3ez5DncUzh">时间</span>
                     <div class="flex items-center gap-3" data-page-node-id="rKmA4FpgHbC7FiCwI9GtwM">
@@ -3272,17 +3909,17 @@
                     </div>
                 </div>
             </div>
-            
-            <!-- 任务标题编辑 -->
-            <div class="p-4 border-b border-theme flex items-start gap-3 flex-shrink-0" data-page-node-id="M8uGC3aGDYyOv8lc0y9muO">
+
+            <!-- 任务标题编辑（书写态下放大为一级标题，与正文同一容器宽度） -->
+            <div id="detail-title-row" class="p-4 pb-2 flex items-start gap-3 flex-shrink-0" data-page-node-id="M8uGC3aGDYyOv8lc0y9muO">
                 <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-accent flex items-center justify-center transition flex-shrink-0 mt-1" id="detail-task-complete-btn" data-page-node-id="gZL0aFa95YVyCkThWHuxOm">
                     <i class="fas fa-check text-xs hidden" data-page-node-id="HGqBAK0rQI5fLEm0HUPyOq"></i>
                 </button>
                 <textarea id="detail-task-title" placeholder="任务标题" rows="1" class="flex-1 text-xl font-medium bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" style="min-height: 32px; max-height: 120px;"></textarea>
             </div>
-            
+
             <!-- 任务详情编辑 -->
-            <div class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col" data-page-node-id="XGDPqpDyhB6LHOMSSKsbVh">
+            <div id="detail-body" class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col" data-page-node-id="XGDPqpDyhB6LHOMSSKsbVh">
                 <textarea id="detail-task-notes" placeholder="任务详情描述" class="w-full flex-1 bg-transparent border-none outline-none resize-none text-theme-primary min-h-[120px]"></textarea>
                 <!-- 子任务模式下的任务详情描述（置于子任务列表上方） -->
                 <!-- 子任务内容块：说明行 + 列表。hover 整块任一处都显示「编辑」入口 -->
@@ -3302,42 +3939,49 @@
                 </div>
             </div>
             
+            <!-- 底部停靠区：书写态下整体移出文档流、绝对定位于面板底部（右下角），浮在正文之上，
+                 使正文编写区（#detail-body）能一直延伸到屏幕最底部（见 10.11）。 -->
+            <div id="detail-dock">
             <!-- 任务创建/完成时间显示（标签区上方，仅已完成任务显示） -->
             <div id="detail-timestamps-display" class="px-4 pt-3 pb-1 flex-col gap-1 text-sm text-theme-secondary hidden" data-page-node-id="I1m0G1EFw31FS79sc0WWLK">
             </div>
 
             <!-- 任务标签显示（进度上方） -->
-            <div id="detail-tags-display" class="px-4 pt-3 pb-2 border-t border-theme flex flex-wrap flex-shrink-0 min-h-0" data-page-node-id="3eEvyDigMJ1COqeTQuaN2C">
+            <div id="detail-tags-display" class="px-4 pt-3 pb-2 flex flex-wrap flex-shrink-0 min-h-0" data-page-node-id="3eEvyDigMJ1COqeTQuaN2C">
             </div>
             
             <!-- 任务进度设置 -->
-            <div class="relative border-t border-theme p-2 cursor-pointer flex-shrink-0 select-none" id="progress-container" onmousedown="startProgressDrag(event)" data-page-node-id="VnIRPhe8dGIzJ5haorzTXq">
+            <div class="relative p-2 cursor-pointer flex-shrink-0 select-none" id="progress-container" onmousedown="startProgressDrag(event)" data-page-node-id="VnIRPhe8dGIzJ5haorzTXq">
                 <div class="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-accent to-purple-500" id="progress-bar" style="width: 0%;" data-page-node-id="HaOotuuSP9Q6VCKojICzaF"></div>
-                <div class="flex items-center justify-between text-xs" data-page-node-id="XgRmKQnHXzkiPErggOdHJA">
-                    <div id="detail-focus-duration" class="flex items-center gap-1 text-theme-secondary" data-page-node-id="ItUUaiH7Tpc3cnXQp9God9">
+                <div class="flex items-center justify-between text-xs gap-2" data-page-node-id="XgRmKQnHXzkiPErggOdHJA">
+                    <span id="detail-list-display" title="所属清单" class="flex items-center gap-1 min-w-0 flex-1 max-w-[48%] text-theme-secondary">
+                        <span id="detail-list-dot" class="w-2 h-2 rounded-full flex-shrink-0"></span>
+                        <span id="detail-list-name-wm" class="truncate"></span>
+                    </span>
+                    <div id="detail-focus-duration" class="flex items-center gap-1 text-theme-secondary flex-shrink-0" data-page-node-id="ItUUaiH7Tpc3cnXQp9God9">
                         <i class="fas fa-stopwatch text-red-500" data-page-node-id="4yiv9ExA7Zha1NNlsTPUzh"></i>
                         <span id="focus-duration-text" data-page-node-id="XqovkcS2fCPhOsDLDtUqiT">0m</span>
                     </div>
-                    <div class="flex items-center gap-1 text-theme-secondary" data-page-node-id="oFHiGZLjUmErj4WzJs71Sa">
+                    <div class="flex items-center gap-1 text-theme-secondary flex-shrink-0" data-page-node-id="oFHiGZLjUmErj4WzJs71Sa">
                         <i class="fas fa-flag mr-1" data-page-node-id="lKjyz2LIbMUEMvCGhnDMLy"></i>
                         <span id="progress-text" data-page-node-id="sGgpmUPonBonzRdPcCIy3y">0%</span>
                     </div>
                 </div>
             </div>
             
-            <!-- 底部快捷按钮 -->
-            <div class="p-4 border-t border-theme flex-shrink-0" data-page-node-id="FHed5JDSxP0vBh3xksdRwc">
+            <!-- 底部快捷按钮（书写态下整体改为右下角圆形悬浮簇） -->
+            <div id="detail-actions" class="flex-shrink-0" data-page-node-id="FHed5JDSxP0vBh3xksdRwc">
                 <div class="flex gap-2 mb-3" data-page-node-id="7nASKrHImt4RoEx7LkcMew">
-                    <button type="button" id="detail-task-important" onclick="toggleDetailImportant()" title="重要" class="flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" data-page-node-id="ySiXoYVYJ6DE40e6xOHyau">
+                    <button type="button" id="detail-task-important" onclick="toggleDetailImportant()" title="重要" class="wm-circle flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" data-page-node-id="ySiXoYVYJ6DE40e6xOHyau">
                         <i class="fas fa-star text-yellow-500" data-page-node-id="5HrmXCjJ6bbAsa8HejWcL4"></i>
                     </button>
-                    <button type="button" id="detail-task-urgent" onclick="toggleDetailUrgent()" title="紧急" class="flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" data-page-node-id="gmTgma5MjQi1HLwV9LAdyI">
+                    <button type="button" id="detail-task-urgent" onclick="toggleDetailUrgent()" title="紧急" class="wm-circle flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" data-page-node-id="gmTgma5MjQi1HLwV9LAdyI">
                         <i class="fas fa-fire text-red-500" data-page-node-id="h7zFEHIVsPDU7Gr5B5PyTN"></i>
                     </button>
-                    <button type="button" onclick="toggleDetailTagPicker()" title="标签" class="flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" data-page-node-id="MXv9pMa6P62BBcISVvAN0d">
+                    <button type="button" id="detail-tag-btn" onclick="toggleDetailTagPicker()" title="标签" class="wm-circle flex items-center justify-center w-10 h-10 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" data-page-node-id="MXv9pMa6P62BBcISVvAN0d">
                         <i class="fas fa-tag text-green-500" data-page-node-id="M6ylb1yWXdZyXlcGrqFE7H"></i>
                     </button>
-                    <button type="button" onclick="toggleDetailListPicker()" title="所属清单" class="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition text-sm max-w-[160px] truncate" data-page-node-id="A6pvJ4HideyCUvjkNMDbBC">
+                    <button type="button" id="detail-list-btn" onclick="toggleDetailListPicker()" title="所属清单" class="wm-circle flex items-center gap-1.5 h-10 px-3 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition text-sm max-w-[160px] truncate" data-page-node-id="A6pvJ4HideyCUvjkNMDbBC">
                         <i id="detail-list-icon" class="fas fa-folder flex-shrink-0" data-page-node-id="YvBlAhoJcq5u2ASupANieH"></i>
                         <span id="detail-list-name" class="truncate" data-page-node-id="lqIlSDGVZShK9w8rKD6RFF"></span>
                     </button>
@@ -3360,14 +4004,18 @@
                 <div id="detail-previous-list" class="hidden mb-3 text-sm text-theme-muted" data-page-node-id="YNb3ZANxAaG9W6Kp5yBd8s">
                     <i class="fas fa-info-circle mr-1" data-page-node-id="jhNNv4p9woY7L8iXA2GUBJ"></i>原清单：<span id="detail-previous-list-name" data-page-node-id="XBPgvCsIXDst1LRcRYtLod"></span>
                 </div>
-                <div class="flex gap-2" data-page-node-id="tvjRwCOgBZAEVipLDtFzAR">
-                    <button onclick="deleteTaskFromDetail()" id="detail-delete-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition text-sm" data-page-node-id="0FFTALohIUhu0bvVvqJ8eL">删除任务</button>
-                    <button onclick="startPomodoroForTaskFromDetail()" id="detail-focus-btn" class="flex-1 px-4 py-2 border border-green-500 text-green-500 rounded-lg hover:bg-green-50 transition text-sm" data-page-node-id="nuYG4yxqNCddMxYdayIZC8">
-                        <i class="fas fa-stopwatch mr-1" data-page-node-id="H95dhBl6oerUOKrbAZz8Uv"></i>开始专注
+                <div id="detail-action-row-main" class="flex gap-2" data-page-node-id="tvjRwCOgBZAEVipLDtFzAR">
+                    <!-- 开始专注：图标改为与侧边栏「番茄专注」（#sidebar-pomodoro-btn）一致的实心时钟
+                         （fas fa-clock），始终实心，不再用 .pomodoro-focus-btn 的描边↔实心双图标机制 -->
+                    <button type="button" onclick="exitDetailWriteMode();startPomodoroForTaskFromDetail()" id="detail-focus-btn" class="wm-circle flex-1 px-4 py-2 border border-green-500 text-green-500 rounded-lg hover:bg-green-50 transition text-sm flex items-center justify-center" data-page-node-id="nuYG4yxqNCddMxYdayIZC8" title="开始专注">
+                        <i class="fas fa-clock mr-1"></i><span class="wm-hide">开始专注</span>
                     </button>
-                    <button onclick="saveTaskDetail()" class="flex-1 px-4 py-2 border border-accent text-accent rounded-lg hover:bg-accent-soft transition text-sm" data-page-node-id="l0pK18UYwpLT2NS7maNXu9">保存</button>
+                    <button type="button" onclick="exitDetailWriteMode();deleteTaskFromDetail()" id="detail-delete-btn" class="wm-circle flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition text-sm flex items-center justify-center" data-page-node-id="0FFTALohIUhu0bvVvqJ8eL" title="删除任务">
+                        <i class="fas fa-trash"></i><span id="detail-delete-label" class="wm-hide">删除任务</span>
+                    </button>
                 </div>
             </div>
+            </div><!-- /#detail-dock -->
         </aside>
     </div>
     
@@ -4221,6 +4869,31 @@
                                 <select id="settings-week-start" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="r3XPV70CCWzgsVSDr7aRX0">
                                     <option value="monday" data-page-node-id="3gLswxfINosOPgOpHZECI0">周一</option>
                                     <option value="sunday" data-page-node-id="f5YPvaNXesSlMHIqEPmHar">周日</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">书写态正文宽度</label>
+                                    <p class="text-xs text-theme-secondary">沉浸书写态下正文的可读宽度，顶栏图标可随时循环切换</p>
+                                </div>
+                                <select id="settings-write-mode-width" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="standard">标准</option>
+                                    <option value="wide">宽</option>
+                                    <option value="full">全屏</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">自动保存间隔</label>
+                                    <p class="text-xs text-theme-secondary">停止输入后多久自动保存；书写态没有保存按钮，依赖此项</p>
+                                </div>
+                                <select id="settings-auto-save-delay" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                                    <option value="0">即时</option>
+                                    <option value="300">0.3 秒</option>
+                                    <option value="500">0.5 秒</option>
+                                    <option value="1000">1 秒</option>
+                                    <option value="2000">2 秒</option>
+                                    <option value="5000">5 秒</option>
                                 </select>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="3yCkNuvfMFyTlnYBLTncnP">

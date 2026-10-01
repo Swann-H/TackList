@@ -357,6 +357,10 @@ function _hidePomodoroPage() {
     document.getElementById('pomodoro-page').classList.add('hidden');
     document.getElementById('sidebar-bottom-buttons').classList.remove('hidden');
     document.getElementById('main-content').classList.remove('hidden');
+    // 主内容恢复可见后重新测量视图切换高亮指示条：
+    // 番茄页期间的全屏切换/窗口缩放会触发 resize，若指示条在隐藏态被测量会塌缩，
+    // 返回主页时必须重新同步，确保当前视图高亮底色正常呈现
+    if (typeof _updateViewTabIndicator === 'function') _updateViewTabIndicator();
     clearMainViewBackground();
     // 从番茄专注页面返回主视图时，刷新待显示的彩蛋效果
     if (typeof ee_flushPendingEffects === 'function') {
@@ -1326,6 +1330,9 @@ function startPomodoroForTask(taskId) {
 
 function startPomodoroForTaskFromDetail() {
     if (currentDetailTaskId) {
+        // 收起态也走自动保存（第十七轮），切走前把待落盘的编辑立即写回，
+        // 否则标题/备注的改动要等防抖间隔才落盘（书写态由 exitDetailWriteMode 负责 flush）
+        if (typeof flushWriteModeAutoSave === 'function') flushWriteModeAutoSave();
         // 不在此处提前关闭详情面板：switchToPomodoroPage 会先记录面板展开状态
         // （任务 id + 只读标志）再统一关闭，返回主视图时按记录恢复展开
         startPomodoroForTask(currentDetailTaskId);
