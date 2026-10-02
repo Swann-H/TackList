@@ -39,6 +39,77 @@ function _isQuadrantMobile() {
     return typeof isMobileView === 'function' && isMobileView();
 }
 
+// ==================== 象限提示横幅（可关闭） ====================
+// 各象限卡顶部可能出现的标语类提示统一走这里渲染，右侧带一个 × 关闭按钮。
+// 关闭记录按「横幅 id」存在 localStorage，并记下关闭时的量级 level（如未完成任务数）：
+//   · 之后量级没有继续恶化（<= level）→ 保持关闭，不再反复打扰
+//   · 量级继续恶化（> level）→ 重新出现，提示升级
+//   · 量级回落到阈值内 → 由调用方 _clearQuadrantBannerDismissed 复位，下次触发重新提示
+const QUADRANT_BANNER_KEY = 'quadrantBannerDismissed';
+
+const QUADRANT_BANNER_TONES = {
+    red: 'bg-red-200/60 dark:bg-red-800/40 text-red-700 dark:text-red-300',
+    yellow: 'bg-yellow-200/60 dark:bg-yellow-800/40 text-yellow-700 dark:text-yellow-300',
+    blue: 'bg-blue-200/60 dark:bg-blue-800/40 text-blue-700 dark:text-blue-300',
+    gray: 'bg-gray-200/60 dark:bg-gray-700/40 text-gray-700 dark:text-gray-300'
+};
+
+function _readQuadrantBannerMap() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(QUADRANT_BANNER_KEY) || '{}');
+        return (raw && typeof raw === 'object') ? raw : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function _writeQuadrantBannerMap(map) {
+    try { localStorage.setItem(QUADRANT_BANNER_KEY, JSON.stringify(map)); } catch (_) {}
+}
+
+// level 传 null = 与量级无关的纯提示，关掉后不再出现
+function isQuadrantBannerDismissed(id, level) {
+    const map = _readQuadrantBannerMap();
+    if (!Object.prototype.hasOwnProperty.call(map, id)) return false;
+    const at = map[id];
+    if (level == null) return true;
+    return !(at == null || level > at);
+}
+
+function _clearQuadrantBannerDismissed(id) {
+    const map = _readQuadrantBannerMap();
+    if (!Object.prototype.hasOwnProperty.call(map, id)) return;
+    delete map[id];
+    _writeQuadrantBannerMap(map);
+}
+
+// 渲染一条带关闭按钮的横幅；已关闭时返回空串
+function quadrantBannerHtml(opts) {
+    const id = opts.id;
+    const level = (opts.level == null ? null : opts.level);
+    if (isQuadrantBannerDismissed(id, level)) return '';
+    const tone = QUADRANT_BANNER_TONES[opts.tone] || QUADRANT_BANNER_TONES.gray;
+    const lvArg = (level == null ? 'null' : String(level));
+    return `
+        <div class="quadrant-banner mb-2 px-3 py-2 ${tone} rounded-lg text-xs flex items-center gap-2">
+            <i class="fas ${opts.icon || 'fa-info-circle'} flex-shrink-0"></i>
+            <span class="flex-1 min-w-0">${opts.text}</span>
+            <button type="button" onclick="event.stopPropagation(); dismissQuadrantBanner('${id}', ${lvArg});"
+                    class="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center opacity-60 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 transition"
+                    title="关闭提示" aria-label="关闭提示">
+                <i class="fas fa-times text-[10px]"></i>
+            </button>
+        </div>
+    `;
+}
+
+function dismissQuadrantBanner(id, level) {
+    const map = _readQuadrantBannerMap();
+    map[id] = (level == null ? null : level);
+    _writeQuadrantBannerMap(map);
+    if (typeof renderView === 'function') renderView();
+}
+
 // ==================== 动效编排（FR7 v4：View Transitions API） ====================
 // 展开/收起/切换 与 展开态详情呼出/收回，统一用 View Transitions API 驱动：
 // 给 4 张象限卡分配稳定 view-transition-name（按 data-quadrant），浏览器对同名元素自动做
@@ -411,6 +482,8 @@ function renderQuadrantView(container) {
     // WIP Limit: 重要且紧急象限未完成任务数
     const urgentImportantIncomplete = quadrants['urgent-important'].tasks.filter(t => !t.completed).length;
     const isOverloaded = urgentImportantIncomplete > 5;
+    // 回落到健康区间后自动复位关闭记录：下次再过载要重新提醒，而不是沿用很久以前的一次「忽略」
+    if (!isOverloaded) _clearQuadrantBannerDismissed('overload-urgent-important');
 
     const colorClasses = {
         red: isOverloaded
@@ -502,12 +575,13 @@ function renderQuadrantView(container) {
                         ` : ''}
                     </div>
                 </div>
-                ${key === 'urgent-important' && isOverloaded && !isThumb ? `
-                    <div class="mb-2 px-3 py-2 bg-red-200/60 dark:bg-red-800/40 rounded-lg text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <span>当前核心焦虑源过多（${urgentImportantIncomplete}个），建议拆解或降级部分任务。</span>
-                    </div>
-                ` : ''}
+                ${key === 'urgent-important' && isOverloaded && !isThumb ? quadrantBannerHtml({
+                    id: 'overload-urgent-important',
+                    tone: 'red',
+                    icon: 'fa-exclamation-circle',
+                    text: `当前核心焦虑源过多（${urgentImportantIncomplete}个），建议拆解或降级部分任务。`,
+                    level: urgentImportantIncomplete
+                }) : ''}
                 <div class="flex-1 min-h-0 overflow-y-auto${isThumb ? ' q-thumb-list space-y-1' : (quadrantCfg.compact ? '' : ' space-y-2')} quadrant-drop-zone"
                      ondragover="handleTaskDragOver(event)"
                      ondrop="handleTaskDrop(event, null, '${key}')">

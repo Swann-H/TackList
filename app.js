@@ -337,12 +337,9 @@ function openSettingsModal() {
     document.getElementById('settings-default-urgent').checked = settings.defaultUrgent || false;
     document.getElementById('settings-default-duration').value = settings.defaultDuration !== undefined ? settings.defaultDuration : 30;
     document.getElementById('settings-week-start').value = settings.weekStart || 'monday';
-    // 书写态正文宽度（standard 720 / wide 900 / full 拉满）
+    // 书写态正文宽度（standard 720 / wide 以右下停靠区左边界为限 / full 拉满），默认 wide
     const _wWidth = document.getElementById('settings-write-mode-width');
-    if (_wWidth) _wWidth.value = settings.writeModeWidth || 'standard';
-    // 自动保存间隔（毫秒）。书写态没有保存按钮，输入停止后按此间隔落盘。
-    const _asDelay = document.getElementById('settings-auto-save-delay');
-    if (_asDelay) _asDelay.value = String(settings.autoSaveDelay !== undefined && settings.autoSaveDelay !== null ? settings.autoSaveDelay : 500);
+    if (_wWidth) _wWidth.value = settings.writeModeWidth || 'wide';
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
@@ -1078,12 +1075,7 @@ function saveSettings(silent) {
     settings.defaultDuration = parseInt(document.getElementById('settings-default-duration').value) || 30;
     settings.weekStart = document.getElementById('settings-week-start').value;
     const _wWidthEl = document.getElementById('settings-write-mode-width');
-    if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'standard';
-    const _asDelayEl = document.getElementById('settings-auto-save-delay');
-    if (_asDelayEl) {
-        const _d = parseInt(_asDelayEl.value, 10);
-        settings.autoSaveDelay = Number.isFinite(_d) && _d >= 0 ? _d : 500;
-    }
+    if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'wide';
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;

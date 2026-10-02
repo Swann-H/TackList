@@ -291,6 +291,320 @@ function _fxCloseModal(modalId, onDone) {
     }, FX_FEATURE.modalOut);
 }
 
+/* ==================== 特性二：番茄右栏「任务详情」模式 ====================
+ * 右栏可在「专注概况 / 历史记录」与「当前专注关联任务详情（可编辑）」之间切换，
+ * 任意时刻只显示一种（信息互斥）。切换控件是左栏底部按钮簇的「切换圆钮」。
+ *
+ * 复用方式：不另造一份 pt- 前缀字段 DOM，而是把主视图真实的 #task-detail-panel
+ * 整体搬入 #pomodoro-detail-slot，切回概况时搬回 #app-container。
+ * 单一 DOM = 单一事实来源 —— 字段渲染 / 收集 / 保存口径（防抖自动保存、空任务丢弃、
+ * 只读态）全部沿用 tasks.js，两处永不漂移，也不需要改动任何 detail-* 的 id 引用。
+ * 本节只负责：搬移、尺寸与底色的作用域覆盖（CSS 侧）、按钮语义与顶栏文案。
+ */
+
+// 会话内记忆：不跨会话持久化（打开番茄页默认概况，切到详情是显式动作）
+let _pomodoroRightMode = 'overview';   // 'overview' | 'detail'
+// #task-detail-panel 此刻是否托管在右栏槽位（tasks.js 据此改写「关闭」语义）
+let _pomodoroDetailHosted = false;
+// 详情模式当前展示的任务 id（用于离开番茄页时按「恢复为展开该任务」处理）
+let _pomodoroDetailTaskId = null;
+// 重入保护：openTaskDetailPanel → 保存 → 渲染 链路上可能回踩同步函数
+let _pomodoroRightSyncing = false;
+
+/** 当前右栏内容模式。 */
+function pomodoroRightMode() { return _pomodoroRightMode; }
+
+/** 供 tasks.js 判定：详情面板此刻是否被番茄右栏托管。 */
+function isDetailPanelHostedInPomodoro() { return !!_pomodoroDetailHosted; }
+
+/** 供 tasks.js 判定：当前托管展示的任务 id。 */
+function pomodoroDetailHostedTaskId() { return _pomodoroDetailHosted ? _pomodoroDetailTaskId : null; }
+
+/** 一次性入场动效类（仅在 body.fx-smooth 下由 CSS 真正播放）。
+ * 必须清掉上一次的清理 timer —— 同一元素在 400ms 内被多次触发时，
+ * 先排队的 setTimeout 会把还在播的动画类提前摘掉，导致动画看起来「掉」。 */
+function _pomoEnterFx(el, cls) {
+    if (!el) return;
+    if (el._pomoFxTimer) { clearTimeout(el._pomoFxTimer); el._pomoFxTimer = null; }
+    el.classList.remove('fx-enter-from-left', 'fx-enter-from-right', 'fade-in');
+    void el.offsetWidth; // 强制重排，保证同类再次挂载时从头播放
+    el.classList.add(cls);
+    el._pomoFxTimer = setTimeout(() => {
+        el.classList.remove(cls);
+        el._pomoFxTimer = null;
+    }, 400);
+}
+
+/* ---------- 番茄页期间的「主视图渲染抑制」 ----------
+ * tasks.js 的 saveTaskDetail / saveTaskDetailWithoutClose / closeTaskDetailPanel 都会走
+ * `saveData(); renderView(); renderLists();`。在番茄右栏编辑任务时，主视图与侧栏被番茄页
+ * 完全覆盖、用户根本看不见，但这次全量重渲染在主视图有 5000+ 任务时是 200ms+ 的同步长任务 ——
+ * 正好压在右栏 0.22s 入场动画上把它整个冻住，表现就是「切换时动画有时会掉」。
+ * 处理：托管保存期间把这两个渲染函数临时降级为「记脏」（saveData 照常同步跑，数据安全不变），
+ * 离开番茄页时统一补一次渲染。作用域仅限被包住的这一次调用，不做全局改写。 */
+let _pomodoroViewRenderDirty = false;
+
+function _withPomodoroRenderSuppressed(fn) {
+    const origRenderView = window.renderView;
+    const origRenderLists = window.renderLists;
+    if (typeof origRenderView === 'function') {
+        window.renderView = function () { _pomodoroViewRenderDirty = true; };
+    }
+    if (typeof origRenderLists === 'function') {
+        window.renderLists = function () { _pomodoroViewRenderDirty = true; };
+    }
+    try {
+        return fn();
+    } finally {
+        if (typeof origRenderView === 'function') window.renderView = origRenderView;
+        if (typeof origRenderLists === 'function') window.renderLists = origRenderLists;
+    }
+}
+
+/* ---------- 「切回概况」的收尾延后 ----------
+ * 即便抑制了 renderView，closeTaskDetailPanel() 里仍有一次 saveDataImmediate()（line 3030），
+ * 主视图 5000+ 任务时 JSON.stringify 4.4MB 约 36ms —— 加上状态清理共约 45ms 同步长任务。
+ * 这是数据安全的必要开销，省不掉，所以改为：面板先立刻搬回并 hidden（视觉上已切走），
+ * 整个 close 推到 0.22s 入场动画跑完之后再执行，动画期间主线程不再有长任务。 */
+const POMO_DETAIL_CLOSE_DEFER_MS = 240;
+let _pomodoroDeferredCloseTimer = null;
+
+function _cancelDeferredDetailClose() {
+    if (_pomodoroDeferredCloseTimer) {
+        clearTimeout(_pomodoroDeferredCloseTimer);
+        _pomodoroDeferredCloseTimer = null;
+    }
+}
+
+function _runDeferredDetailClose() {
+    _cancelDeferredDetailClose();
+    if (typeof closeTaskDetailPanel === 'function') {
+        _withPomodoroRenderSuppressed(() => closeTaskDetailPanel());
+    }
+}
+
+/** 补跑被抑制的主视图 / 侧栏渲染（离开番茄页时调用一次）。 */
+function _flushPomodoroSuppressedRender() {
+    if (!_pomodoroViewRenderDirty) return;
+    _pomodoroViewRenderDirty = false;
+    if (typeof window.renderLists === 'function') window.renderLists();
+    if (typeof window.renderView === 'function') window.renderView();
+}
+
+// 「右栏内容真的变了」才需要重新触发入场动画。
+// _syncPomodoroRightPane() 在切换任务 / 进度回调 / renderPomodoroPage 等多个地方会被同一 tick 调多次，
+// 没有这层去重时，每次都会再挂一次 fx-enter-from-*，上一次的清理 timer 又会把新动画截断。
+let _pomodoroRightRenderKey = null;
+function _pomodoroComputeRightKey() {
+    const taskId = (typeof pomodoroState !== 'undefined' && pomodoroState) ? (pomodoroState.currentTaskId || '') : '';
+    const rightPanel = document.getElementById('pomodoro-right-panel');
+    const empty = !!(rightPanel && rightPanel.classList.contains('pt-detail-empty'));
+    return _pomodoroRightMode + '|' + taskId + '|' + (empty ? 'e' : 'd');
+}
+
+/** 圆钮：单钮表达目标态 —— 图标与 title 指向「点它会去哪个模式」。
+ * 当前模式不再用颜色/描边高亮（与同级四个裸图标按钮保持同一视觉体系，
+ * 品牌色 #0a59da 在右栏深蓝渐变底上对比度过低反而更弱）；
+ * `pt-mode-on` 仅作为状态标记保留（无样式，供断言与后续扩展用）。 */
+function _syncPomodoroModeToggleBtn() {
+    const btn = document.getElementById('pomodoro-mode-toggle-btn');
+    const icon = document.getElementById('pomodoro-mode-toggle-icon');
+    if (!btn) return;
+    const detail = _pomodoroRightMode === 'detail';
+    btn.title = detail ? '专注概况' : '任务详情';
+    btn.classList.toggle('pt-mode-on', detail);
+    if (icon) icon.className = detail ? 'fas fa-chart-simple text-xl' : 'fas fa-list-check text-xl';
+}
+
+/** 顶栏「关闭」按钮在番茄语境下语义改为「返回专注概况」（图标与 title 就地改造，退出时还原）。 */
+function _patchDetailDismissForPomodoro(on) {
+    const btn = document.getElementById('detail-dismiss-btn');
+    if (!btn) return;
+    const icon = btn.querySelector('i.wm-hide');
+    if (on) {
+        if (btn.dataset.pomoTitle === undefined) btn.dataset.pomoTitle = btn.title || '';
+        btn.title = '返回专注概况';
+        if (icon && icon.dataset.pomoClass === undefined) {
+            icon.dataset.pomoClass = icon.className;
+            icon.className = 'fas fa-chart-simple text-theme-muted wm-hide';
+        }
+    } else {
+        if (btn.dataset.pomoTitle !== undefined) {
+            btn.title = btn.dataset.pomoTitle;
+            delete btn.dataset.pomoTitle;
+        }
+        if (icon && icon.dataset.pomoClass !== undefined) {
+            icon.className = icon.dataset.pomoClass;
+            delete icon.dataset.pomoClass;
+        }
+    }
+}
+
+/** 把主视图详情面板搬入右栏槽位并渲染指定任务。 */
+function _mountDetailIntoRight(taskId) {
+    const slot = document.getElementById('pomodoro-detail-slot');
+    const panel = document.getElementById('task-detail-panel');
+    if (!slot || !panel || !taskId) return;
+    // 上一次「切回概况」的收尾还排在队里就取消掉：面板马上要重新启用，
+    // 让延迟的 closeTaskDetailPanel 跑下去会把刚回填好的 DOM 当成待保存内容再存一遍
+    _cancelDeferredDetailClose();
+    if (panel.parentNode !== slot) slot.appendChild(panel);
+    // 已在同一任务上且面板可见时不必重开：openTaskDetailPanel 会再跑一遍全量回填与保存，
+    // 而 _syncPomodoroRightPane 会被 updatePomodoroTaskButton / renderPomodoroPage 反复触发
+    const already = _pomodoroDetailHosted && _pomodoroDetailTaskId === taskId
+        && !panel.classList.contains('hidden');
+    _pomodoroDetailHosted = true;
+    _pomodoroDetailTaskId = taskId;
+    _patchDetailDismissForPomodoro(true);
+    // readOnly=false：专注中需要可编辑。fromClick=false 保证不会因「再点同一任务」被当成收起。
+    // 切任务时 openTaskDetailPanel 内部会 saveTaskDetailWithoutClose()（含 renderView/renderLists），
+    // 主视图不可见 → 抑制掉这次全量重渲染，否则会阻塞紧随其后的入场动画。
+    if (!already && typeof openTaskDetailPanel === 'function') {
+        _withPomodoroRenderSuppressed(() => openTaskDetailPanel(taskId, false, false));
+    }
+    panel.classList.remove('hidden');
+    // 描述框高度依赖容器宽度，搬入后需按新宽度重新挂一次自适应监听
+    if (typeof _initDescAutoResize === 'function') _initDescAutoResize();
+}
+
+/**
+ * 把详情面板搬回主容器。
+ * @param {boolean} keepOpen true=保持展开（返回主视图后编辑成果直接可见）；false=顺带关闭面板
+ */
+function _unmountDetailFromRight(keepOpen) {
+    if (!_pomodoroDetailHosted) return;
+    const panel = document.getElementById('task-detail-panel');
+    // 先摘标记：后续 closeTaskDetailPanel() 不应再被「托管」语义拦截
+    _pomodoroDetailHosted = false;
+    _pomodoroDetailTaskId = null;
+    _patchDetailDismissForPomodoro(false);
+    if (panel) {
+        // 切走前把待落盘的编辑立即写回（标题/备注走防抖，不走这里会丢最后一次输入）。
+        // ⚠️ 这句必须在抑制范围内：实测有 pending 编辑时它内部走 saveTaskDetailWithoutClose()
+        // → renderView()，主视图 5000+ 任务时是 157ms 的同步长任务（「动画有时会掉」的主因）。
+        if (typeof flushWriteModeAutoSave === 'function') {
+            _withPomodoroRenderSuppressed(() => flushWriteModeAutoSave());
+        }
+        const host = document.getElementById('app-container');
+        if (host && panel.parentNode !== host) host.appendChild(panel);
+    }
+    if (keepOpen) {
+        _cancelDeferredDetailClose();
+        return;
+    }
+    // 切回概况：面板立刻隐掉（视觉上已经切走），把 closeTaskDetailPanel() 整段
+    //（saveTaskDetail 的 renderView 已抑制，但 saveDataImmediate 的 36ms JSON 序列化省不掉）
+    // 推到入场动画结束之后再跑，动画期间主线程保持空闲。
+    if (panel) panel.classList.add('hidden');
+    _cancelDeferredDetailClose();
+    _pomodoroDeferredCloseTimer = setTimeout(() => {
+        _pomodoroDeferredCloseTimer = null;
+        _runDeferredDetailClose();
+    }, POMO_DETAIL_CLOSE_DEFER_MS);
+}
+
+/** 按当前模式渲染右栏三块内容（概况 / 详情 / 空态）的互斥显隐。
+ * 入场动画只在「(mode, taskId, empty) 真变化」时播放 —— 同一 key 的重复同步
+ * （selectPomodoroTask、updatePomodoroTaskButton、renderPomodoroPage 都会踩进来）
+ * 一律走 no-op，避免动画反复挂类又被旧 timer 截断。 */
+function _syncPomodoroRightPane() {
+    if (_pomodoroRightSyncing) return;
+    const newKey = _pomodoroComputeRightKey();
+    const changed = (newKey !== _pomodoroRightRenderKey);
+    if (!changed) return; // 关键修复：同一渲染快照不重复触发入场动效
+    _pomodoroRightRenderKey = newKey;
+    _pomodoroRightSyncing = true;
+    try {
+        const rightPanel = document.getElementById('pomodoro-right-panel');
+        const slot = document.getElementById('pomodoro-detail-slot');
+        const emptyEl = document.getElementById('pomodoro-detail-empty');
+        const titleEl = document.getElementById('pomodoro-right-title');
+        if (!rightPanel || !slot) return;
+
+        if (_pomodoroRightMode !== 'detail') {
+            _unmountDetailFromRight(false);
+            rightPanel.classList.remove('pt-detail', 'pt-detail-empty');
+            if (titleEl) titleEl.textContent = '专注概况';
+            _pomoEnterFx(document.getElementById('pomodoro-overview-content'), 'fx-enter-from-left');
+            _syncPomodoroModeToggleBtn();
+            return;
+        }
+
+        rightPanel.classList.add('pt-detail');
+        // 移动端右栏是顶部浮层，折叠态只有 46px；切到详情时若仍处于折叠态，
+        // 详情内容会被压成一条 —— 先展开（把手图标同步为「可收起」）
+        if (rightPanel.classList.contains('mobile-overview-collapsed')) {
+            rightPanel.classList.remove('mobile-overview-collapsed');
+            const handleIcon = document.getElementById('pomodoro-overview-toggle-icon');
+            if (handleIcon) handleIcon.className = 'fas fa-chevron-up text-sm';
+        }
+        if (titleEl) titleEl.textContent = '任务详情';
+
+        const taskId = pomodoroState.currentTaskId;
+        const task = taskId ? tasks.find(t => t.id === taskId) : null;
+        if (!task) {
+            // 未关联任务（一般专注）或关联任务已被删除 → 空态页
+            _unmountDetailFromRight(false);
+            rightPanel.classList.add('pt-detail-empty');
+            _pomoEnterFx(emptyEl, 'fade-in');
+        } else {
+            rightPanel.classList.remove('pt-detail-empty');
+            _mountDetailIntoRight(task.id);
+            _pomoEnterFx(slot, 'fx-enter-from-right');
+        }
+        _syncPomodoroModeToggleBtn();
+    } finally {
+        _pomodoroRightSyncing = false;
+    }
+}
+
+/**
+ * 切换右栏内容模式。
+ * @param {'overview'|'detail'} mode
+ * @param {{mount?: boolean}} [opts] mount=false 时只记录模式、不同步 DOM（页面尚未显示时用）
+ */
+function setPomodoroRightMode(mode, opts) {
+    const next = mode === 'detail' ? 'detail' : 'overview';
+    const force = opts && opts.force;
+    if (next === _pomodoroRightMode && !force) {
+        if (!(opts && opts.mount === false)) _syncPomodoroRightPane();
+        return;
+    }
+    _pomodoroRightMode = next;
+    if (opts && opts.mount === false) {
+        _syncPomodoroModeToggleBtn();
+        return;
+    }
+    // 右栏收起态下点圆钮 → 自动展开右栏再显示目标内容
+    if (next === 'detail') {
+        const rightPanel = document.getElementById('pomodoro-right-panel');
+        if (rightPanel && rightPanel.classList.contains('hidden')
+            && typeof togglePomodoroRightPanel === 'function') {
+            togglePomodoroRightPanel();
+        }
+    }
+    _syncPomodoroRightPane();
+}
+
+/** 左栏底部「切换圆钮」点击入口。 */
+function togglePomodoroRightMode() {
+    setPomodoroRightMode(_pomodoroRightMode === 'detail' ? 'overview' : 'detail');
+}
+
+/**
+ * 关联任务**被动消失**时的统一收口（任务被标记完成 / 被删除 / 专注结束 / 开始专注时发现已完成）。
+ * 右栏若停在「任务详情」模式，自动切回「专注概况」。
+ *
+ * 为什么需要：用户没做任何操作，却看到右栏从任务详情变成一个「当前未关联专注任务」的空页，
+ * 会以为状态丢了；而此时概况（统计 + 历史）才是他真正想看的。
+ *
+ * ⚠️ 用户**主动**选择「一般专注」（selectPomodoroTask(null)）不走这里 ——
+ * 那是显式取消关联，保留空态页作为重新关联的入口。
+ */
+function _fallbackRightPaneOnTaskLost() {
+    if (_pomodoroRightMode === 'detail') setPomodoroRightMode('overview');
+}
+
 function switchToPomodoroPage() {
     // 关闭任务详情栏（避免在番茄页面上显示）。
     // 若此前面板处于展开状态，先记录其任务 id 与只读标志，
@@ -314,6 +628,9 @@ function switchToPomodoroPage() {
         updatePomodoroBackground();
         // 确保进度环和按钮状态正确更新（修复从侧边栏进入时圆环显示不正确的问题）
         updatePomodoroDisplay();
+        // 右栏按「会话内记忆」的模式渲染：概况 / 任务详情（未关联任务时为空态）
+        _syncPomodoroRightPane();
+        _syncPomodoroModeToggleBtn();
     };
     // 从服务器同步最新状态，确保resting等状态的timeLeft准确
     // 注意：同步回调内部会调用 startFlowAnimation()，过渡期间调用会打破暂停导致粒子提前播放，
@@ -362,6 +679,12 @@ function _hidePomodoroPage() {
     // 返回主页时必须重新同步，确保当前视图高亮底色正常呈现
     if (typeof _updateViewTabIndicator === 'function') _updateViewTabIndicator();
     clearMainViewBackground();
+    // 离开番茄页前先把排队的「切回概况」收尾跑掉：面板此刻是 hidden 但
+    // body.detail-panel-open / fx-detail-open 还没摘，不补跑会让主视图右侧留一条空白
+    if (_pomodoroDeferredCloseTimer) _runDeferredDetailClose();
+    // 番茄页期间被抑制的主视图 / 侧栏渲染，回到主视图后补跑一次
+    // （右栏编辑任务时 saveTaskDetail 触发的 renderView 被降级为「记脏」）
+    _flushPomodoroSuppressedRender();
     // 从番茄专注页面返回主视图时，刷新待显示的彩蛋效果
     if (typeof ee_flushPendingEffects === 'function') {
         ee_flushPendingEffects();
@@ -373,13 +696,30 @@ function closePomodoroPage() {
     // startPomodoroForTask 内部的预防性 close 调用发生在页面隐藏时，不触发恢复
     const pageEl = document.getElementById('pomodoro-page');
     const wasVisible = pageEl && !pageEl.classList.contains('hidden') && !_pomodoroInternalSwitch;
-    const restoreDetailId = wasVisible ? _pomodoroReturnDetailTaskId : null;
-    const restoreDetailReadOnly = wasVisible ? _pomodoroReturnDetailReadOnly : false;
+    let restoreDetailId = wasVisible ? _pomodoroReturnDetailTaskId : null;
+    let restoreDetailReadOnly = wasVisible ? _pomodoroReturnDetailReadOnly : false;
     if (wasVisible) {
         _pomodoroReturnDetailTaskId = null;
         _pomodoroReturnDetailReadOnly = false;
     }
     const restoreDetailPanel = () => {
+        // 右栏处于「任务详情」模式：把面板搬回主容器并保持展开，
+        // 返回主视图后直接看到刚编辑的任务（沿用下方原有恢复口径）。
+        // 放在这里而不是函数开头 —— 必须等番茄页真正隐藏后再搬，
+        // 否则面板会在收拢动画期间以 fixed 浮层形态出现在番茄页之上。
+        if (_pomodoroDetailHosted) {
+            const hostedTaskId = (typeof currentDetailTaskId !== 'undefined' ? currentDetailTaskId : null)
+                || _pomodoroDetailTaskId;
+            _unmountDetailFromRight(true);
+            const rightPanel = document.getElementById('pomodoro-right-panel');
+            if (rightPanel) rightPanel.classList.remove('pt-detail', 'pt-detail-empty');
+            const titleEl = document.getElementById('pomodoro-right-title');
+            if (titleEl) titleEl.textContent = '专注概况';
+            if (wasVisible && hostedTaskId) restoreDetailId = hostedTaskId;
+            restoreDetailReadOnly = false;
+        }
+        // 下次再进入番茄页时入场动画要重新播 —— 重置渲染 key
+        _pomodoroRightRenderKey = null;
         if (!restoreDetailId) return;
         if (typeof tasks !== 'undefined' && Array.isArray(tasks) && !tasks.some(t => t.id === restoreDetailId)) return;
         if (typeof openTaskDetailPanel === 'function') openTaskDetailPanel(restoreDetailId, restoreDetailReadOnly);
@@ -1194,6 +1534,8 @@ function selectPomodoroTask(taskId) {
     pomodoroState.currentTaskId = taskId || null;
     updatePomodoroTaskButton();
     closePomodoroTaskPanel();
+    // 右栏处于「任务详情」模式：跟随新关联的任务刷新（选择「一般专注」时落到空态）
+    if (_pomodoroRightMode === 'detail') _syncPomodoroRightPane();
 
     // 运行中、暂停中或结算中切换任务时，同步到服务器
     if (pomodoroState.state === 'focusing' || pomodoroState.state === 'resting' || pomodoroState.state === 'pause' || pomodoroState.state === 'end_settlement') {
@@ -1258,12 +1600,17 @@ function updatePomodoroTaskButton() {
             selectText.classList.remove('hidden');
             currentDisplay.classList.add('hidden');
             hideListBadge();
+            // 关联被动消失 → 右栏若在任务详情模式则切回专注概况（不留空态）
+            _fallbackRightPaneOnTaskLost();
         }
     } else {
         selectText.classList.remove('hidden');
         currentDisplay.classList.add('hidden');
         hideListBadge();
     }
+    // 关联任务变化后刷新右栏（渲染 key 去重，key 不变时是 no-op）；
+    // 「任务被删除」这类被动失去关联已在上方 _fallbackRightPaneOnTaskLost() 切回概况
+    if (_pomodoroRightMode === 'detail') _syncPomodoroRightPane();
 }
 
 function setPomodoroPhase(phase) {
@@ -1335,6 +1682,9 @@ function startPomodoroForTaskFromDetail() {
         if (typeof flushWriteModeAutoSave === 'function') flushWriteModeAutoSave();
         // 不在此处提前关闭详情面板：switchToPomodoroPage 会先记录面板展开状态
         // （任务 id + 只读标志）再统一关闭，返回主视图时按记录恢复展开
+        // 从详情面板 / 书写态发起专注 → 右栏自动切到「任务详情」模式（mount:false：
+        // 此刻番茄页尚未显示，先只记录模式，等 showPage 再真正挂载，避免无谓的 DOM 搬移）
+        setPomodoroRightMode('detail', { mount: false });
         startPomodoroForTask(currentDetailTaskId);
     }
 }
@@ -1356,6 +1706,8 @@ function onFocusTaskCompleted(taskId) {
             body: JSON.stringify({ currentTaskId: null, taskName: '' })
         }).catch(err => console.error('Update pomodoro task error:', err));
         updatePomodoroTaskButton();
+        // 任务被标记完成 → 关联被动消失，右栏切回专注概况
+        _fallbackRightPaneOnTaskLost();
         return;
     }
 
@@ -1401,6 +1753,8 @@ function onFocusTaskCompleted(taskId) {
         })
     }).catch(err => console.error('Update pomodoro task error:', err));
     updatePomodoroTaskButton();
+    // 任务被标记完成 → 关联被动消失，右栏切回专注概况
+    _fallbackRightPaneOnTaskLost();
 }
 
 function _recordTaskSwitch(taskId) {
@@ -1491,8 +1845,29 @@ function clearCompletedTaskBinding() {
         const task = tasks.find(t => t.id === pomodoroState.currentTaskId);
         if (!task || task.completed) {
             pomodoroState.currentTaskId = null;
+            // 关联被动消失（任务已完成/被删除）→ 右栏切回专注概况
+            _fallbackRightPaneOnTaskLost();
         }
     }
+}
+
+/**
+ * 真正取消任务关联（本地 + 服务端一起清）。
+ * ⚠️ 必须同步服务端：/api/pomodoro/abandon 只重置 state/phase/startedAt 等状态机字段，
+ * **不会清空 currentTaskId**。若只清本地，下一次 syncPomodoroFromServer() 会拿服务器旧值
+ * 把关联"复活"回来（表现为「结算后任务又自己关联上了」）。
+ * /api/pomodoro/update 是白名单接口（仅 currentTaskId / taskName），不会干扰状态机。
+ */
+function clearPomodoroTaskBinding() {
+    pomodoroState.currentTaskId = null;
+    pomodoroState.taskName = '';
+    fetch('/api/pomodoro/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentTaskId: null, taskName: '' })
+    }).catch(err => console.error('Clear pomodoro task error:', err));
+    // 专注已结束、关联随之清空 → 右栏切回专注概况（而非停在空的详情页）
+    _fallbackRightPaneOnTaskLost();
 }
 
 // 【事件】START_FOCUS - Idle → Focusing
@@ -1552,6 +1927,8 @@ function handleClickEnd() {
         updatePomodoroDisplay();
         updatePomodoroBackground();
         updatePomodoroTaskButton();
+        // 休息结束→idle 时关联一并清空 → 右栏切回专注概况
+        _fallbackRightPaneOnTaskLost();
         notifyOtherTabs();
         return;
     }
@@ -1560,9 +1937,15 @@ function handleClickEnd() {
     if (pomodoroState.state === 'resting') {
         stopPomodoro();
     }
-    // 暂存原任务ID，显示退回"一般专注"
+    // 进入结算：**保留**任务关联。
+    // 原实现此处把 currentTaskId 置空（"退回一般专注"），但服务端并没有同步清空
+    // （/api/pomodoro/abandon 不碰 currentTaskId），于是客户端显示"一般专注"、
+    // 服务器仍是原任务，下一次 syncPomodoroFromServer() 又把关联恢复回来 —— 前后不一致，
+    // 且结算确认阶段右侧任务详情栏会变成空态。
+    // 现在改为：结算期间一直保持关联，真正的取消推迟到用户确认结束
+    // （handleSaveTime / handleDropAll 里调 clearPomodoroTaskBinding()）。
+    // _endedTaskId 仍记录一份，供 handleSaveTime 在极端情况下兜底。
     _endedTaskId = pomodoroState.currentTaskId;
-    pomodoroState.currentTaskId = null;
     _previousState = pomodoroState.state;
     pomodoroState.state = 'end_settlement';
     updatePomodoroDisplay();
@@ -1594,6 +1977,8 @@ function handleSaveTime() {
 
     _endedTaskId = null;
     _completedTaskInfo = [];
+    // 用户已确认「计入任务并结束」→ 此时才真正取消关联（右栏随之回到概况/空态）
+    clearPomodoroTaskBinding();
     doAutoForward();
     loadData().then(() => { renderView(); renderPomodoroPage(); });
     notifyOtherTabs();
@@ -1604,6 +1989,8 @@ function handleDropAll() {
     pomodoroState.continuousTomatoCount = 0;
     _endedTaskId = null;
     _completedTaskInfo = [];
+    // 用户已确认「直接作废」→ 此时才真正取消关联
+    clearPomodoroTaskBinding();
 
     fetch('/api/pomodoro/abandon', {
         method: 'POST',
@@ -1619,11 +2006,9 @@ function handleDropAll() {
 function handleCancelSettlement() {
     const prevState = _previousState || 'pause';
     pomodoroState.state = prevState;
-    // 恢复原任务ID
-    if (_endedTaskId) {
-        pomodoroState.currentTaskId = _endedTaskId;
-        _endedTaskId = null;
-    }
+    // 结算阶段关联一直是保持的（见 handleClickEnd），故此处**不再**从 _endedTaskId 恢复 ——
+    // 否则用户在结算期间手动切换了任务（含切到"一般专注"），点「继续专注」会被旧任务覆盖回去。
+    _endedTaskId = null;
     if (prevState === 'resting') {
         startPomodoro();
         updatePomodoroBackground();
@@ -1713,7 +2098,12 @@ function syncPomodoroFromServer() {
         pomodoroState.phase = state.phase || 'focus';
         pomodoroState.continuousTomatoCount = state.continuousTomatoCount || 0;
         pomodoroState.completedPomodoros = state.completedPomodoros || 0;
+        // 记录关联任务是否被服务端改动（另一 tab / 另一设备可能取消或切换关联）。
+        // 函数末尾据此刷新左栏任务名与右栏 —— 本函数内不调用 updatePomodoroTaskButton()，
+        // 不补这一步会停留在已过期任务的详情上。
+        const _prevTaskId = pomodoroState.currentTaskId;
         pomodoroState.currentTaskId = state.currentTaskId || null;
+        const _taskBindingChanged = (_prevTaskId !== pomodoroState.currentTaskId);
         pomodoroState.autoBreak = state.autoBreak || false;
         pomodoroState.autoFocus = state.autoFocus || false;
         pomodoroState.taskName = state.taskName || '';
@@ -1829,6 +2219,16 @@ function syncPomodoroFromServer() {
         updateSidebarPomodoroTimer();
         updatePomodoroBackground();
         updateMainViewBackground();
+
+        // 关联任务被服务端改动（清空 / 切换到别的任务）时刷新 UI。
+        // 本函数此前只刷新计时与背景，不碰任务按钮 —— 于是「另一 tab / 另一设备取消关联」后，
+        // 左栏任务名和右栏都停在旧状态（实测右栏会继续显示那个已不再关联任务的详情）。
+        // ⚠️ 顺序：先做「被动失去关联」的收口（切回专注概况）再刷新 —— 反过来的话
+        // updatePomodoroTaskButton() 末尾的 _syncPomodoroRightPane() 会先渲染出一帧空态详情页。
+        if (_taskBindingChanged) {
+            if (!pomodoroState.currentTaskId) _fallbackRightPaneOnTaskLost();
+            updatePomodoroTaskButton();
+        }
     }).catch(err => {
         console.error('Sync pomodoro error:', err);
     });

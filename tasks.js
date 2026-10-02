@@ -1273,7 +1273,11 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     
     // 显示面板（必须在renderSubtasks之前，否则scrollHeight为0导致文本不显示）
     showDetailPanel(taskId);
-    
+
+    // 启动描述框「宽度 → 高度」自适应监听（仅一次）：覆盖书写态入场 morph / 宽度档切换 / 窗口缩放
+    // 等导致的宽度变化，避免用瞬态窄宽量出偏大高度残留成空白。
+    _initDescAutoResize();
+
     // 渲染子任务（在面板可见后，确保autoResizeTextarea能正确计算高度）
     if (currentTaskMode === 'subtasks') {
         renderSubtasks();
@@ -1531,8 +1535,11 @@ function toggleTaskMode(event) {
         // 先切换显示，再渲染子任务（确保scrollHeight正确计算）
         document.getElementById('detail-task-notes').classList.add('hidden');
         document.getElementById('detail-task-description').classList.remove('hidden');
-        autoResizeDetailDescription(document.getElementById('detail-task-description'));
+        // 关键：先把描述行 + 子任务列表显示出来，再调用 autoResizeDetailDescription。
+        // 否则在父链 display:none 时 textarea 的 scrollHeight 永远是 0，
+        // 写出的 height=0px 被 min-height:36px 兜底，造成「切回子任务模式后描述框被压成 36px」。
         _setSubtasksAreaVisible(true);
+        autoResizeDetailDescription(document.getElementById('detail-task-description'));
         renderSubtasks();
         document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
         document.getElementById('toggle-mode-btn').title = '文本模式';
@@ -1654,7 +1661,18 @@ function requestSubtaskDelete(subtaskId, btn) {
 // —— 长按判定 ——
 const SUBTASK_HOLD_MS = 300;        // 长按激活阈值
 const SUBTASK_HOLD_TOLERANCE = 6;   // 判定期位移容差：超过视为普通点击/划选文本，立即取消
+// 底部拖拽引导条（.subtask-holding::after 的蓝色进度线）延迟出现：
+// 普通单击的按压时长通常 < 150ms，若按下即显示，每次点选子任务都会闪一下引导条；
+// 延迟到阈值一半才出现，单击全程看不到它，真正想拖拽的人仍能在剩余时间里获得引导。
+const SUBTASK_HOLD_HINT_DELAY_MS = 150;
+// 引导条填充动画时长 = 长按阈值 − 延迟，保证「线走满」与「拖拽激活」同时发生。
+// 写入 CSS 变量，避免 index.html / index_offline.html 里再各写死一份数字。
+const SUBTASK_HOLD_FILL_MS = SUBTASK_HOLD_MS - SUBTASK_HOLD_HINT_DELAY_MS;
+if (typeof document !== 'undefined') {
+    document.documentElement.style.setProperty('--subtask-hold-anim-ms', SUBTASK_HOLD_FILL_MS + 'ms');
+}
 let subtaskHoldTimer = null;
+let subtaskHoldHintTimer = null;    // 引导条延迟计时器（单击未达阈值时会被清掉）
 let subtaskHoldRow = null;
 let subtaskHoldPointerId = null;
 let subtaskHoldStartX = 0;
@@ -1668,6 +1686,7 @@ let subtaskDragTarget = null; // { id, insertAfter }
 
 function cancelSubtaskHold() {
     if (subtaskHoldTimer) { clearTimeout(subtaskHoldTimer); subtaskHoldTimer = null; }
+    if (subtaskHoldHintTimer) { clearTimeout(subtaskHoldHintTimer); subtaskHoldHintTimer = null; }
     if (subtaskHoldRow) {
         subtaskHoldRow.classList.remove('subtask-holding');
         subtaskHoldRow = null;
@@ -1707,6 +1726,8 @@ function startSubtaskDrag(row, subtaskId, container) {
     subtaskDraggedEl = row;
     subtaskDragPointerId = subtaskHoldPointerId;
     subtaskDragTarget = null;
+    // 防御：若引导条延迟计时器还没触发（阈值被调小的情况），先清掉，避免它在拖拽中把类加回来
+    if (subtaskHoldHintTimer) { clearTimeout(subtaskHoldHintTimer); subtaskHoldHintTimer = null; }
     row.classList.remove('subtask-holding');
     row.classList.add('subtask-drag-ready');
     try { if (subtaskDragPointerId !== null) row.setPointerCapture(subtaskDragPointerId); } catch (_) {}
@@ -1885,7 +1906,12 @@ function renderSubtasks() {
             subtaskHoldPointerId = e.pointerId;
             subtaskHoldStartX = e.clientX;
             subtaskHoldStartY = e.clientY;
-            wrapper.classList.add('subtask-holding');
+            // 引导条延后出现：普通单击（按住 < HINT_DELAY）全程看不到它，避免每次点选都闪一下；
+            // 行元素已记在 subtaskHoldRow，取消时由 cancelSubtaskHold 统一移除类，不会残留。
+            subtaskHoldHintTimer = setTimeout(() => {
+                subtaskHoldHintTimer = null;
+                if (subtaskHoldRow === wrapper) wrapper.classList.add('subtask-holding');
+            }, SUBTASK_HOLD_HINT_DELAY_MS);
             subtaskHoldTimer = setTimeout(() => {
                 subtaskHoldTimer = null;
                 startSubtaskDrag(wrapper, subtask.id, container);
@@ -2282,6 +2308,9 @@ function _setSubtasksAreaVisible(visible) {
     const descRow = document.getElementById('subtask-desc-row');
     if (area) area.classList.toggle('hidden', !visible);
     if (descRow) descRow.classList.toggle('hidden', !visible);
+    // body.subtasks-mode：让书写态 CSS 只在子任务模式追加 #detail-body 底部 padding，
+    // 把子任务列表滚到 #detail-dock 之上不被浮层遮住（文本模式 notes 自带 padding-bottom:46vh 无需介入）。
+    if (document.body) document.body.classList.toggle('subtasks-mode', visible);
     if (!visible) exitSubtaskManageMode(); // 离开子任务模式即退出管理态
 }
 
@@ -2784,10 +2813,13 @@ function autoResizeTextarea(textarea) {
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
 }
 
-// 子任务模式下"任务详情描述"输入框的高度自适应（上限高于标题）
+// 子任务模式下"任务详情描述"输入框的高度自适应
+// 子任务模式下描述文本框不再限制高度（CSS 也已去掉 max-height:200px）：
+// 文本有多长就让框长多高，超出可视区后由 #detail-body 整体滚动，
+// 让详情文本和子任务列表在同一个滚动容器里一起移动，避免描述框内部出现独立滚动条。
 function autoResizeDetailDescription(textarea) {
     textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+    textarea.style.height = textarea.scrollHeight + 'px';
 }
 
 // 将文本按第一个空行拆分：空行前为任务详情描述，空行后为子任务文本
@@ -2935,6 +2967,15 @@ function setupDateTimeInteractions() {
 }
 
 function closeTaskDetailPanel() {
+    // 番茄右栏「任务详情」模式（特性二）：面板此刻托管在番茄页右栏，主视图不可见。
+    // 此时「关闭」的语义是切回右栏的专注概况，而不是把主视图的详情栏关掉
+    // （关掉只会让右栏留下一块空白）。_unmountDetailFromRight 会先摘托管标记再走这里，故不重入。
+    if (typeof isDetailPanelHostedInPomodoro === 'function' && isDetailPanelHostedInPomodoro()) {
+        if (typeof setPomodoroRightMode === 'function') {
+            setPomodoroRightMode('overview');
+            return;
+        }
+    }
     // 书写态下关闭面板：先撤掉展开态（内部会 flush 自动保存），避免 body 上的 detail-write-mode 残留
     if (typeof exitDetailWriteMode === 'function') exitDetailWriteMode();
     // 面板马上要 display:none，还在排队的场景对切动画已无意义；
@@ -3653,23 +3694,21 @@ function toggleDetailUrgent() {
     updateDetailPriorityButtons();
 }
 
+// 重要 / 紧急 激活态：改由 CSS 类 .is-on 表达（实心圆 + 白图标 + 同色外环），不再写内联样式。
+// 原因：border-color / color 在样式表里带 !important，内联根本压不住；而 background 若写在内联，
+// 又会被 .wm-circle 的 background:transparent 与 :hover 规则夹击 —— 统一走类切换最稳。
+// 未激活态由样式表统一给成中性灰描边，「有色 = 已标记」这条规则才立得住。
+function _setDetailPriorityBtnState(btn, on, label) {
+    if (!btn) return;
+    btn.style.cssText = ''; // 清掉历史内联样式（旧版写在 style 上的 15% 淡底）
+    btn.classList.toggle('is-on', !!on);
+    btn.title = on ? (label + '（已标记）') : label;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
 function updateDetailPriorityButtons() {
-    const importantBtn = document.getElementById('detail-task-important');
-    const urgentBtn = document.getElementById('detail-task-urgent');
-    if (importantBtn) {
-        if (detailImportantState) {
-            importantBtn.style.cssText = 'background-color: rgba(234, 179, 8, 0.15); border-color: #eab308; color: #eab308;';
-        } else {
-            importantBtn.style.cssText = '';
-        }
-    }
-    if (urgentBtn) {
-        if (detailUrgentState) {
-            urgentBtn.style.cssText = 'background-color: rgba(239, 68, 68, 0.15); border-color: #ef4444; color: #ef4444;';
-        } else {
-            urgentBtn.style.cssText = '';
-        }
-    }
+    _setDetailPriorityBtnState(document.getElementById('detail-task-important'), detailImportantState, '重要');
+    _setDetailPriorityBtnState(document.getElementById('detail-task-urgent'), detailUrgentState, '紧急');
 }
 
 function toggleDetailReminderPicker() {
@@ -5912,9 +5951,9 @@ function isDetailAutoSaveActive() {
 }
 
 // 自动保存间隔（毫秒）。两态都没有「保存」按钮，输入后按此间隔防抖落盘。
+// 间隔不再开放设置，统一取 data.js 的推荐值（AUTO_SAVE_DELAY_MS = 500）。
 function writeModeAutoSaveDelay() {
-    const v = (typeof settings !== 'undefined') ? Number(settings.autoSaveDelay) : NaN;
-    return (Number.isFinite(v) && v >= 0) ? v : 500;
+    return (typeof getAutoSaveDelay === 'function') ? getAutoSaveDelay() : 500;
 }
 
 function scheduleWriteModeAutoSave() {
@@ -5982,11 +6021,11 @@ function applyWriteModeWidth(width) {
     if (width === 'wide') b.classList.add('wm-w-900');
     else if (width === 'full') b.classList.add('wm-w-full');
     const btn = document.getElementById('detail-width-btn');
-    if (btn) btn.title = '正文宽度：' + (WRITE_MODE_WIDTH_LABEL[width] || '标准') + '（点击切换）';
+    if (btn) btn.title = '正文宽度：' + (WRITE_MODE_WIDTH_LABEL[width] || '标准');
 }
 
 function cycleWriteModeWidth() {
-    const cur = (typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard';
+    const cur = (typeof settings !== 'undefined' && settings.writeModeWidth) || 'wide';
     const idx = WRITE_MODE_WIDTHS.indexOf(cur);
     const next = WRITE_MODE_WIDTHS[(idx + 1) % WRITE_MODE_WIDTHS.length];
     if (typeof settings !== 'undefined') settings.writeModeWidth = next;
@@ -6073,6 +6112,34 @@ function updateWriteModeGlassBounds() {
     const bottom = Math.max(0, Math.round(panelRect.bottom - textBottom - borderBottom));
     panel.style.setProperty('--wm-glass-top', top + 'px');
     panel.style.setProperty('--wm-glass-bottom', bottom + 'px');
+}
+
+// ==================== 子任务模式「描述框」宽度自适应高度 ====================
+// 描述文本高度取决于可用宽度（换行行数）。宽度会在多种时机改变：
+//   · 进入书写态：#detail-body 从窄侧栏宽 morph 到 wm-width（宽度渐变）
+//   · 书写态宽度档切换（standard/wide/full）
+//   · 窗口缩放
+// 若在这些时机用「瞬态窄宽」测量 scrollHeight，会量出一个偏大的高度残留成大片空白
+// （见第十五轮：展开态下描述框下方出现大片留白）。
+// 因此用 ResizeObserver 监听「父行 #subtask-desc-row」的宽度：宽度真正变化才重算高度，
+// 高度变化不会引起宽度变化，所以不会死循环；测量均在最终宽度上完成。
+let _descAutoResizeInited = false;
+let _descLastWidth = -1;
+function _initDescAutoResize() {
+    if (_descAutoResizeInited) return;
+    const ta = document.getElementById('detail-task-description');
+    const host = document.getElementById('subtask-desc-row');
+    if (!ta || !host || typeof ResizeObserver === 'undefined') return;
+    _descAutoResizeInited = true;
+    const ro = new ResizeObserver(() => {
+        const w = Math.round(host.getBoundingClientRect().width);
+        // 仅在宽度真正变化（且元素可见、宽度非 0）时重算，避免死循环与隐藏态误测
+        if (w > 0 && w !== _descLastWidth) {
+            _descLastWidth = w;
+            if (!ta.classList.contains('hidden')) autoResizeDetailDescription(ta);
+        }
+    });
+    ro.observe(host);
 }
 
 function _initWmGlass() {
@@ -6261,7 +6328,7 @@ function enterDetailWriteMode() {
     // 「原地退场」的 fade-out 就无处可播了。返回值用于落帧后精算毛玻璃带。
     const morphSec = _wmMorphBegin('in');
     document.body.classList.add('detail-write-mode');
-    applyWriteModeWidth((typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard');
+    applyWriteModeWidth((typeof settings !== 'undefined' && settings.writeModeWidth) || 'wide');
     updateWriteModeCrumb();
     syncWriteModeTimeMenu();
     const dismiss = document.getElementById('detail-dismiss-btn');
@@ -6297,6 +6364,10 @@ function toggleDetailWriteMode() {
 // 顶栏统一的退出按钮：收起态 = 关闭面板，书写态 = 返回三栏布局
 function onDetailDismiss() {
     if (isDetailWriteMode()) exitDetailWriteMode();
+    // 托管在番茄右栏时，顶栏这个按钮的语义是「返回专注概况」而非关闭主视图面板
+    else if (typeof isDetailPanelHostedInPomodoro === 'function' && isDetailPanelHostedInPomodoro()) {
+        if (typeof setPomodoroRightMode === 'function') setPomodoroRightMode('overview');
+    }
     else closeTaskDetailPanel();
 }
 

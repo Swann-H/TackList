@@ -421,11 +421,13 @@ function updateHolidayCountdown() {
     }
 }
 
-// 自动保存间隔（毫秒）：默认 500，可在「设置 → 视图与外观 → 自动保存间隔」调整。
-// 书写态没有保存按钮，输入停止后按此间隔落盘，故做成全局可配而非写死常量。
+// 自动保存间隔（毫秒）：停止输入后按此间隔防抖落盘。
+// 书写态与收起态都没有「保存」按钮，落盘完全依赖它；该值不再开放设置，
+// 统一采用推荐值 500ms（即时落盘会造成高频写盘冲突，过长则丢内容风险上升）。
+var AUTO_SAVE_DELAY_MS = 500;
+
 function getAutoSaveDelay() {
-    const v = (typeof settings !== 'undefined') ? Number(settings.autoSaveDelay) : NaN;
-    return (Number.isFinite(v) && v >= 0) ? v : 500;
+    return AUTO_SAVE_DELAY_MS;
 }
 
 function saveData() {

@@ -45,15 +45,6 @@
             font-weight: 700;
             src: url('/offline_assets/fonts/BarlowCondensed-700-latin.woff2') format('woff2');
         }
-        /* 倒计时「放大名称」专用衬线：Noto Serif SC 子集（GB2312 汉字 6763 字 + 拉丁/数字）
-           —— 离线本地资产，不依赖外网；许可见 offline_assets/fonts/LICENSE-CountdownSerif.txt */
-        @font-face {
-            font-family: 'Countdown Serif';
-            font-style: normal;
-            font-weight: 700;
-            font-display: swap;
-            src: url('/offline_assets/fonts/CountdownSerif-700.woff2') format('woff2');
-        }
 
         .pomodoro-timer-font {
             font-family: 'DIN Alternate', 'Barlow Condensed', 'Oswald', sans-serif;
@@ -660,8 +651,9 @@
            ⚠️ 用纯 CSS transition，不要换成 Tailwind 工具类（离线 JIT 会静默失效）。 */
         .cd-name-cycle-text {
             display: inline-block;
-            /* ⚠️ 必须显式继承字体：全局 `* { font-family: var(--app-font-family, …) }` 会直接命中
-               本 span（直接匹配压过从父级继承），不加这行「放大名称」就会掉回 Noto Sans SC 黑体 */
+            /* 显式继承字体：与父级（.holiday-countdown-name-today / .holiday-countdown-label）
+               保持同族。2026-10-03 名称改用系统字体后，本行与全局 `* { font-family: … }`
+               结果等价（均 = var(--app-font-family)），属冗余但无害，保留以防父级字体被单独覆盖。 */
             font-family: inherit;
             transition: opacity 0.4s ease, transform 0.4s ease;
         }
@@ -670,12 +662,12 @@
             transform: translateY(-0.3em);
         }
 
-        /* 今天：放大名称（与数字相同的衬线字体），占据原名称+数字两行 */
+        /* 今天：放大名称（跟随系统/全局字体），占据原名称+数字两行。
+           2026-10-03 起：名称不再使用专用衬线字体（原 'Countdown Serif' Noto Serif SC 子集），
+           改为继承全局 var(--app-font-family) —— 与侧边栏其它文字一致；
+           数字行 .holiday-countdown-number 仍保持 Georgia 衬线，两者不再同族。 */
         .holiday-countdown-name-today {
-            /* 汉字衬线：优先本地子集字体（离线必可用），末端保留 serif —— 不可写成 sans-serif，
-               否则汉字会掉到黑体，与数字行的 Georgia 衬线明显割裂 */
-            font-family: 'Countdown Serif', 'Georgia', 'Times New Roman',
-                         'Songti SC', 'STSong', 'SimSun', 'Noto Serif CJK SC', serif;
+            font-family: inherit;
             font-size: 1.75rem;
             font-weight: 700;
             line-height: 1.2;
@@ -726,8 +718,8 @@
            text-overflow 对 flex 容器不生效，实测两头各切一半（显示成「庆节·中秋」）且无省略号。
            故此处改为允许换行并限 2 行；须用 -webkit-box 才能启用 line-clamp
            （居中改由 .holiday-countdown-box 的 text-align:center 承担，flex 的 justify-content 失效）。
-           ⚠️ line-height 不能小于 1.35：Noto Serif SC 的字形内容框约 1.43em，
-               line-height 1.15 时每行上下各被切约 4px（实测 1.3 仍切 1px，1.35 起为 0）。 */
+           ⚠️ line-height 保留 1.35：该值原为 Noto Serif SC 字形内容框（约 1.43em）而设，
+               2026-10-03 名称改用系统字体后已非必需，但保留无害，且能兼容外部抓取的长名。 */
         .cd-dual .holiday-countdown-name-today {
             display: -webkit-box;
             -webkit-box-orient: vertical;
@@ -1547,6 +1539,89 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
             transition: background 0.2s ease, border-color 0.2s ease;
         }
+
+        /* ==================== 特性二：番茄右栏「任务详情」模式 ====================
+         * 右栏可在「专注概况 / 历史记录」与「当前专注关联任务详情（可编辑）」之间切换，
+         * 任意时刻只显示一种（信息互斥）。
+         * 任务详情复用主视图真实面板 #task-detail-panel —— 切到详情模式时把该节点整体搬入
+         * #pomodoro-detail-slot，切回时搬回 #app-container。单一 DOM = 单一事实来源：
+         * 字段渲染 / 收集 / 保存口径仍完全由 tasks.js 负责，无需第二份 pt- 前缀字段 DOM。
+         * 本节只做「作用域覆盖」：尺寸与定位、底色融进右栏渐变、按钮可见性、控件玻璃化。
+         */
+        /* 三块内容互斥：默认只显示概况；pt-detail 时只显示详情槽位；
+           pt-detail-empty 表示「详情模式但未关联任务」→ 显示空态页 */
+        #pomodoro-detail-slot,
+        #pomodoro-detail-empty {
+            flex: 1 1 0%;
+            min-height: 0;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #pomodoro-right-panel.pt-detail #pomodoro-overview-content { display: none !important; }
+        #pomodoro-right-panel.pt-detail #pomodoro-detail-slot { display: flex; }
+        #pomodoro-right-panel.pt-detail.pt-detail-empty #pomodoro-detail-slot { display: none; }
+        #pomodoro-right-panel.pt-detail.pt-detail-empty #pomodoro-detail-empty { display: flex; }
+
+        /* 面板搬入后：退出 fixed 浮层与入场动画，铺满槽位，融进右栏深色渐变 */
+        #pomodoro-detail-slot #task-detail-panel {
+            position: static !important;
+            width: 100% !important;
+            height: 100% !important;
+            max-height: none !important;
+            min-height: 0 !important;
+            border-left: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            animation: none !important;
+            view-transition-name: none !important;
+            backdrop-filter: none !important;
+        }
+        /* 右栏无三栏可挤压：隐藏「展开书写」入口与书写态专属的宽度档按钮；
+           底部「开始专注 / 删除任务」一行在专注页内无意义，一并隐藏（保留上方 4 个属性按钮） */
+        #pomodoro-detail-slot #detail-expand-btn,
+        #pomodoro-detail-slot #detail-width-btn,
+        #pomodoro-detail-slot #detail-action-row-main { display: none !important; }
+
+        /* 控件玻璃化：右栏是深色渐变底，面板内带边框 / 带底色的控件统一改为半透明白，
+           与右栏既有的 .pomodoro-glass-card 观感对齐 */
+        /* :not(.is-on) —— 重要 / 紧急的激活态是实心品牌色（#detail-task-important.is-on 等），
+           特指度低于本条，若不排除会被这里的半透明白底抹掉 */
+        #pomodoro-detail-slot #task-detail-panel .border-theme:not(.is-on) {
+            border-color: rgba(255, 255, 255, 0.22) !important;
+            background-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        #pomodoro-detail-slot #task-detail-panel .border-theme:not(.is-on):hover {
+            background-color: rgba(255, 255, 255, 0.14) !important;
+        }
+        #pomodoro-detail-slot #task-detail-panel .bg-theme-tertiary { background-color: rgba(255, 255, 255, 0.08) !important; }
+        #pomodoro-detail-slot #task-detail-panel .bg-theme-secondary { background-color: rgba(255, 255, 255, 0.06) !important; }
+        /* 下拉浮层（时间 / 提醒 / 重复 / 清单 / 标签）压在内容之上，需不透明底保证可读 */
+        #pomodoro-detail-slot #task-detail-panel [id$="-picker"],
+        #pomodoro-detail-slot #task-detail-panel #detail-list-picker,
+        #pomodoro-detail-slot #task-detail-panel #detail-tag-picker {
+            background-color: rgba(20, 20, 32, 0.88) !important;
+        }
+        /* 无边框输入框 / 文本域保持透明（只继承右栏的白色文字规则），但原生控件需适配深色 */
+        #pomodoro-detail-slot #task-detail-panel ::placeholder { color: rgba(255, 255, 255, 0.45) !important; }
+        #pomodoro-detail-slot #task-detail-panel input[type="date"],
+        #pomodoro-detail-slot #task-detail-panel input[type="time"] { color-scheme: dark; }
+
+        /* 切换圆钮（特性二）：与同级裸图标按钮（统计/设置/收起/全屏）完全同体系
+           —— 无圆框 / 无描边 / 无底色 / 图标恒为白色，hover 变 #d1d5db。
+           当前处于哪种模式由「图标形状 + title」表达（fa-list-check = 去任务详情，
+           fa-chart-simple = 回专注概况），不再用颜色高亮：
+           ① 品牌色 #0a59da 在右栏深蓝渐变底上对比度过低，视觉上反而更弱；
+           ② 同级四个按钮都是纯白图标，加彩色会破坏一致性。
+           ⚠️ 固定 width 而非由内容撑开：fa-list-check 字形宽 20px、fa-chart-simple 只有 17.5px，
+           不固定的话每次切模式按钮宽度会在 36px ⇄ 34px 之间跳，比同级 settings(36px) 时大时小。 */
+        #pomodoro-mode-toggle-btn {
+            width: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.12s ease;
+        }
+        #pomodoro-mode-toggle-btn:hover { color: #d1d5db; }
         /* 历史记录卡片右侧与专注概况最右块（今日时长）对齐：
            滚动条占用滚动容器 6px 内容宽度（子元素负 margin 会被滚动视口裁剪，无效），
            改为让滚动容器自身右扩 6px（借入右栏 p-8 padding，不被裁剪），滚动条压在借来的
@@ -1686,9 +1761,17 @@
             transform: translateZ(0);
         }
 
-        /* 暂停番茄页面所有动画（含 ::before 背景伪元素，CSS 选择器 * 不匹配伪元素，需显式列出） */
+        /* 暂停番茄「左栏」的动画（含 ::before 背景伪元素，CSS 选择器 * 不匹配伪元素，需显式列出）
+           ⚠️ 作用域必须收窄到左栏，不能用 `.pomodoro-animations-paused *` 通配：
+           该类的挂载点是 #pomodoro-bg-container（updatePomodoroBackground() 在
+           非 focusing/resting 状态给它加类，即 idle 时暂停背景流动），而
+           #pomodoro-right-panel 是它的**兄弟**节点 —— 通配会把右栏一起冻结，
+           导致右栏「任务详情」模式的内容切换动画（fx-enter-from-left/right）永不播放，
+           表现为「点圆钮切换没有动画」。右栏自身没有需要随专注状态暂停的 CSS 动画
+           （其 ::before 已 animation:none）。 */
         .pomodoro-animations-paused,
-        .pomodoro-animations-paused *,
+        .pomodoro-animations-paused #pomodoro-left-panel,
+        .pomodoro-animations-paused #pomodoro-left-panel *,
         .pomodoro-animations-paused .pomodoro-focus-bg::before,
         .pomodoro-animations-paused .pomodoro-break-bg::before,
         .pomodoro-animations-paused .pomodoro-longbreak-bg::before {
@@ -1937,7 +2020,10 @@
             -webkit-appearance: none;
             appearance: none;
         }
-        /* 子任务长按拖拽：按住 300ms 的进度线（scaleX 动画走合成层，不触发重排） */
+        /* 子任务长按拖拽：按住 300ms 的进度线（scaleX 动画走合成层，不触发重排）。
+           引导线本身由 tasks.js 延迟 SUBTASK_HOLD_HINT_DELAY_MS(150ms) 才挂类，
+           故填充时长 = 长按阈值 − 延迟（由 tasks.js 写入 --subtask-hold-anim-ms，默认值同值兜底），
+           保证「线走满」与「拖拽激活」同时到点。 */
         .subtask-item.subtask-holding::after {
             content: '';
             position: absolute;
@@ -1950,7 +2036,7 @@
             transform-origin: left center;
             transform: scaleX(0);
             pointer-events: none;
-            animation: subtask-hold-fill 300ms linear forwards;
+            animation: subtask-hold-fill var(--subtask-hold-anim-ms, 150ms) linear forwards;
         }
         @keyframes subtask-hold-fill {
             to { transform: scaleX(1); }
@@ -2091,9 +2177,10 @@
            两态只差几何：
              · 收起态：铺满面板内容宽度（面板 384px − 左右各 16px = 352px），圆钮间距自动均分
              · 书写态：280px 右对齐（= 6×40 + 5×8），由下方 body.detail-write-mode 块覆盖
-           ⚠️ 重要 / 紧急的激活态是 updateDetailPriorityButtons() 写的**内联**
-           background-color: rgba(...,0.15)，所以描边色 / 文字色必须 !important 才压得住，
-           而 .wm-circle 的 background **不能**加 !important —— 否则激活淡底会被抹掉。 */
+           ⚠️ 重要 / 紧急的激活态改由 .is-on 类表达（实心圆 + 白图标 + 同色外环，规则见下），
+           不再写内联样式：内联 border/color 压不住本块里的 !important，内联 background 又会被
+           .wm-circle 的 background:transparent 与 :hover 规则夹击。.wm-circle 的 background
+           仍旧不加 !important —— 否则其它按钮的激活淡底会被抹掉。 */
         #detail-tags-display {
             max-width: 384px;
             margin-left: auto;
@@ -2171,10 +2258,22 @@
         /* 所属清单：主题强调色（不按清单自身颜色着色，否则「描边色 = 图标色」这条范式失效） */
         #detail-list-btn { border-color: var(--accent-color, #3b82f6) !important; color: var(--accent-color, #3b82f6) !important; }
         #detail-list-btn:hover { background: var(--accent-color, #3b82f6) !important; border-color: var(--accent-color, #3b82f6) !important; color: #fff !important; }
+        /* 重要 / 紧急：未激活沿用原配色（黄 #eab308 / 橙 #f97316 描边 + 同色图标）；
+           只有激活态改成 .is-on 实心圆 + 白图标 + 一圈同色外环（见 updateDetailPriorityButtons()）。
+           ⚠️ 源码顺序即优先级：#id:hover 与 #id.is-on 特指度相同，谁在后面谁生效 ——
+           所以 .is-on 必须写在未激活 :hover 之后，且 .is-on:hover 必须把 color 也重写一遍
+           （否则未激活 :hover 的同色字会盖住激活态的白图标）。 */
         #detail-task-important { border-color: #eab308 !important; color: #eab308 !important; }
-        #detail-task-important:hover { background: #eab308 !important; border-color: #eab308 !important; color: #fff !important; }
         #detail-task-urgent { border-color: #f97316 !important; color: #f97316 !important; }
-        #detail-task-urgent:hover { background: #f97316 !important; border-color: #f97316 !important; color: #fff !important; }
+        /* 未激活 hover：淡底预览。原本这里是「实心 + 白图标」，但激活态改成实心后就撞脸了，
+           故降为 15% 淡底 —— 观感正好是原来激活态的样子，当作点击前的预览。 */
+        #detail-task-important:hover { background: rgba(234, 179, 8, 0.15) !important; border-color: #eab308 !important; color: #eab308 !important; }
+        #detail-task-urgent:hover { background: rgba(249, 115, 22, 0.15) !important; border-color: #f97316 !important; color: #f97316 !important; }
+        /* 激活：实心圆 + 白图标；外环用来和「未激活 hover 的淡底」区分开 */
+        #detail-task-important.is-on { background: #eab308 !important; border-color: #eab308 !important; color: #fff !important; box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.20); }
+        #detail-task-important.is-on:hover { background: #ca9a06 !important; border-color: #ca9a06 !important; color: #fff !important; }
+        #detail-task-urgent.is-on { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.20); }
+        #detail-task-urgent.is-on:hover { background: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
         #detail-focus-btn { border-color: #22c55e !important; color: #22c55e !important; }
         #detail-focus-btn:hover { background: #22c55e !important; border-color: #22c55e !important; color: #fff !important; }
         #detail-delete-btn { border-color: #ef4444 !important; color: #ef4444 !important; }
@@ -2222,9 +2321,13 @@
             /* 收起态靠 margin-right 让位；书写态主视图已消失，让位值必须清零 */
             body.detail-write-mode.fx-detail-open #main-content { margin-right: 0; }
 
-            /* 正文容器宽度三档：标准 720 / 宽 900 / 全屏（拉满可用宽度） */
+            /* 正文容器宽度三档：标准 720 / 宽（以右下停靠区左边界为限） / 全屏（拉满可用宽度） */
             body.detail-write-mode { --wm-width: 720px; --wm-pad: 24px; }
-            body.detail-write-mode.wm-w-900 { --wm-width: 900px; }
+            /* wide 档以右下角停靠区的左边界为限：
+               停靠区内容 280px 宽 + 24px 右外边距 = 占面板右侧 304px；正文居中，两侧各需让出 304px
+               → --wm-width ≤ 面板宽(100vw - 260px 侧栏) - 608px = 100vw - 868px。
+               下限 720px（不低于标准档），上限 1280px（长单行可读性封顶）。 */
+            body.detail-write-mode.wm-w-900 { --wm-width: clamp(720px, calc(100vw - 868px), 1280px); }
             body.detail-write-mode.wm-w-full { --wm-width: 100%; --wm-pad: 40px; }
             body.detail-write-mode #detail-topbar > :first-child,
             body.detail-write-mode #detail-title-row,
@@ -2403,6 +2506,12 @@
 
             /* 正文：加大字号与行高，像一张可延展的纸 */
             body.detail-write-mode #detail-body { order: 4; padding-top: 4px; padding-bottom: 16px; }
+            /* 子任务模式补丁（第十五轮）：书写态 #detail-dock 绝对定位于 bottom:0，浮在 body 之上
+               盖住底部约 130px。子任务模式下描述完全展开（无 200px 上限）+ 4 条子任务 = 1088px，
+               远超 #detail-body 视口（837px），需要让 body 底部留出 dock 高度的空白，
+               用户滚动到底时所有子任务才能滚到 dock 顶边之上而不是被 dock 遮住。
+               文本模式 notes 已自带 padding-bottom:46vh（约 437px），足以越过 dock，本补丁不需介入。 */
+            body.detail-write-mode.subtasks-mode #detail-body { padding-bottom: 132px; }
             /* 书写视觉中部（第十一轮）：底部留约半屏空白，使文本到达底部、最后一行时仍可继续
                下滚，让光标所在行落到屏幕中部。 */
             body.detail-write-mode #detail-task-notes {
@@ -3101,19 +3210,36 @@
             body:has(#view-nav-bar:not(:empty)) #mobile-fab { bottom: calc(84px + env(safe-area-inset-bottom)); }
 
             /* ---- 5.3 任务列表：卡片式 + 大触控区 ---- */
-            .task-list-item { padding: 12px 12px 12px 14px !important; min-height: 56px; row-gap: 2px; flex-wrap: wrap; }
-            .task-list-item > button:first-of-type { position: relative; flex-shrink: 0; }
+            .task-list-item { padding: 12px 12px 12px 14px !important; min-height: 56px; row-gap: 4px; flex-wrap: wrap; align-items: center; position: relative; }
+            /* 复选框：脱离 flex 流，绝对定位左上，给标题让出整行 */
+            .task-list-item > button:first-of-type {
+                position: absolute;
+                top: 14px;
+                left: 14px;
+                z-index: 2;
+            }
             .task-list-item > button:first-of-type::after { content: ''; position: absolute; inset: -12px; }
-            .task-list-item > span.flex-1 { min-width: calc(100% - 88px); }
+            /* 标题优先：让标题（div.flex-1）独占第一行，复选框 absolute 浮左上。
+               focus 按钮 absolute 浮右上，标签组（div.text-xs）/时间（span.text-xs）换到第二行。
+               原 span.flex-1 选择器对当前 DOM（div.flex-1）不命中，无实际作用，保留仅作兼容占位。 */
+            .task-list-item > div.flex-1 { flex: 1 1 100%; min-width: 0; order: 1; padding-left: 36px; padding-right: 36px; }
+            .task-list-item > .pomodoro-focus-btn {
+                position: absolute;
+                top: 10px;
+                right: 12px;
+                order: 2;
+                z-index: 2;
+            }
             .task-list-item > div.text-xs {
-                flex: 1 1 auto;
-                min-width: 0;
-                padding-left: 32px;
+                flex: 1 1 0;
+                padding-left: 36px;
+                order: 3;
                 color: var(--text-muted) !important;
                 font-size: 11px !important;
                 overflow: hidden;
             }
-            .task-list-item > span.text-xs { font-size: 11px !important; }
+            .task-list-item > span.text-xs { flex-shrink: 0; order: 4; font-size: 11px !important; align-self: center; }
+            .task-list-item > span.flex-1 { min-width: calc(100% - 88px); }
             .task-list-item .mobile-priority-icon { margin-left: 6px; }
             /* 任务项侧滑：背景操作层（右滑完成 / 左滑删除，§5.3） */
             .task-list-item { position: relative; z-index: 1; }
@@ -3146,6 +3272,9 @@
                 margin-right: -16px;
                 padding: 4px 16px;
             }
+
+            /* 移动端不支持书写态：隐藏详情面板右上角「展开书写」按钮（该模式下无法继续展开） */
+            #detail-expand-btn { display: none !important; }
 
             /* ---- 5.9/5.10 任务详情 & 计划面板：全屏页 ---- */
             #task-detail-panel, #plan-panel {
@@ -3350,10 +3479,12 @@
             #pomodoro-phase { font-size: 18px !important; }
             #pomodoro-main-btns { gap: 12px !important; flex-wrap: wrap; justify-content: center; }
             #pomodoro-main-btns > button { min-height: 52px; padding-left: 22px !important; padding-right: 22px !important; }
+            /* 簇内顺序（自右向左）：统计 → 设置 → 切换 → 收起 → 全屏；间距 40px */
             #pomodoro-stats-btn { top: 16px !important; right: 16px !important; bottom: auto !important; }
             #pomodoro-settings-btn { top: 16px !important; right: 56px !important; bottom: auto !important; }
-            #pomodoro-toggle-panel-btn { top: 16px !important; right: 96px !important; bottom: auto !important; }
-            #pomodoro-fullscreen-btn { top: 16px !important; right: 136px !important; bottom: auto !important; }
+            #pomodoro-mode-toggle-btn { top: 16px !important; right: 96px !important; bottom: auto !important; }
+            #pomodoro-toggle-panel-btn { top: 16px !important; right: 136px !important; bottom: auto !important; }
+            #pomodoro-fullscreen-btn { top: 16px !important; right: 176px !important; bottom: auto !important; }
             #pomodoro-back-btn { padding: 8px; }
             #pomodoro-task-panel { width: 100% !important; }
             /* 番茄右栏 hover-only 操作按钮在触屏常驻显示（§6.5） */
@@ -3721,7 +3852,7 @@
                     </button>
                     <!-- 进入书写态的入口（仅收起态）。展开态由同位置的返回按钮退出，两者不并存 -->
                     <button type="button" onclick="toggleDetailWriteMode()" class="wm-hide p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" id="detail-expand-btn" title="展开书写">
-                        <i class="fas fa-expand"></i>
+                        <i class="fas fa-expand-alt"></i>
                     </button>
                     <!-- 统一的退出按钮：收起态 = 关闭面板，书写态 = 返回三栏布局（图标随态切换，位置与风格不变） -->
                     <button type="button" id="detail-dismiss-btn" onclick="onDetailDismiss()" class="p-2 hover:bg-theme-tertiary rounded-lg transition" title="关闭">
@@ -3921,11 +4052,15 @@
             <!-- 任务详情编辑 -->
             <div id="detail-body" class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col" data-page-node-id="XGDPqpDyhB6LHOMSSKsbVh">
                 <textarea id="detail-task-notes" placeholder="任务详情描述" class="w-full flex-1 bg-transparent border-none outline-none resize-none text-theme-primary min-h-[120px]"></textarea>
-                <!-- 子任务模式下的任务详情描述（置于子任务列表上方） -->
-                <!-- 子任务内容块：说明行 + 列表。hover 整块任一处都显示「编辑」入口 -->
-                <div id="subtask-content">
+                <!-- 子任务内容块：说明行 + 列表。hover 整块任一处都显示「编辑」入口。
+                     块根加 flex-shrink-0：flex-col 的 #detail-body 滚动时整块保持自然高度，
+                     子任务模式描述文本「超长时让 #detail-body 整体滚动、而非描述框内部滚动」的合约要求。 -->
+                <div id="subtask-content" class="flex-shrink-0">
                 <div id="subtask-desc-row" class="hidden flex items-start gap-2">
-                    <textarea id="detail-task-description" placeholder="任务详情描述" rows="1" class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-theme-primary overflow-y-auto" style="min-height: 36px; max-height: 200px;"></textarea>
+                    <!-- 描述文本域：去掉 max-height=200px 与 overflow-y:auto，
+                         改成 overflow:hidden，让高度自适应时由 #detail-body 统一滚动。
+                         高度由 tasks.js#autoResizeDetailDescription 设为 scrollHeight。 -->
+                    <textarea id="detail-task-description" placeholder="任务详情描述" rows="1" class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-theme-primary overflow-hidden" style="min-height: 36px;"></textarea>
                     <!-- 「编辑/管理」入口：居右、hover 说明行或子任务区才淡入。
                          用 opacity 占位而非 display —— 避免悬浮时描述框宽度变化导致文本重排 -->
                     <button type="button" id="subtask-manage-btn" class="subtask-manage-btn" onclick="toggleSubtaskManageMode()" title="批量管理子任务" aria-label="批量管理子任务">
@@ -3953,16 +4088,19 @@
             <!-- 任务进度设置 -->
             <div class="relative p-2 cursor-pointer flex-shrink-0 select-none" id="progress-container" onmousedown="startProgressDrag(event)" data-page-node-id="VnIRPhe8dGIzJ5haorzTXq">
                 <div class="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-accent to-purple-500" id="progress-bar" style="width: 0%;" data-page-node-id="HaOotuuSP9Q6VCKojICzaF"></div>
-                <div class="flex items-center justify-between text-xs gap-2" data-page-node-id="XgRmKQnHXzkiPErggOdHJA">
-                    <span id="detail-list-display" title="所属清单" class="flex items-center gap-1 min-w-0 flex-1 max-w-[48%] text-theme-secondary">
+                <!-- 三段等分（各 flex-1，分别左/中/右对齐）：中间段「专注时长」的中心正好落在
+                     容器中心。原先用 justify-between + 清单段 flex-1 max-w-[48%]，
+                     清单段被 flex-grow 撑到 48% 宽，把时长段推到 48% 处（中部偏右）。 -->
+                <div class="flex items-center text-xs gap-2" data-page-node-id="XgRmKQnHXzkiPErggOdHJA">
+                    <span id="detail-list-display" title="所属清单" class="flex items-center gap-1 min-w-0 flex-1 text-theme-secondary">
                         <span id="detail-list-dot" class="w-2 h-2 rounded-full flex-shrink-0"></span>
                         <span id="detail-list-name-wm" class="truncate"></span>
                     </span>
-                    <div id="detail-focus-duration" class="flex items-center gap-1 text-theme-secondary flex-shrink-0" data-page-node-id="ItUUaiH7Tpc3cnXQp9God9">
+                    <div id="detail-focus-duration" class="flex items-center justify-center gap-1 flex-1 text-theme-secondary" data-page-node-id="ItUUaiH7Tpc3cnXQp9God9">
                         <i class="fas fa-stopwatch text-red-500" data-page-node-id="4yiv9ExA7Zha1NNlsTPUzh"></i>
                         <span id="focus-duration-text" data-page-node-id="XqovkcS2fCPhOsDLDtUqiT">0m</span>
                     </div>
-                    <div class="flex items-center gap-1 text-theme-secondary flex-shrink-0" data-page-node-id="oFHiGZLjUmErj4WzJs71Sa">
+                    <div class="flex items-center justify-end gap-1 flex-1 text-theme-secondary" data-page-node-id="oFHiGZLjUmErj4WzJs71Sa">
                         <i class="fas fa-flag mr-1" data-page-node-id="lKjyz2LIbMUEMvCGhnDMLy"></i>
                         <span id="progress-text" data-page-node-id="sGgpmUPonBonzRdPcCIy3y">0%</span>
                     </div>
@@ -4195,11 +4333,16 @@
                 <button onclick="closePomodoroPage()" id="pomodoro-back-btn" class="absolute top-4 left-4 text-white hover:text-gray-200" title="返回 (Esc)" data-page-node-id="D9bgCKXqu24MnYsAFQXMFy">
                     <i class="fas fa-arrow-left mr-2" data-page-node-id="ZKMYxH0BX0cTKA05Tfayq0"></i>返回
                 </button>
-                <button onclick="openPomodoroStats()" id="pomodoro-stats-btn" class="absolute bottom-4 right-40 text-white hover:text-gray-200 p-2" title="番茄统计" data-page-node-id="YXlySr6mHtvd4v0X84KIYF">
+                <button onclick="openPomodoroStats()" id="pomodoro-stats-btn" class="absolute bottom-4 right-52 text-white hover:text-gray-200 p-2" title="番茄统计" data-page-node-id="YXlySr6mHtvd4v0X84KIYF">
                     <i class="fas fa-chart-pie text-xl" data-page-node-id="FnPQpttaB8FQaqtYWzA5CA"></i>
                 </button>
-                <button onclick="openPomodoroSettings()" id="pomodoro-settings-btn" class="absolute bottom-4 right-28 text-white hover:text-gray-200 p-2" title="番茄专注设置" data-page-node-id="apsEHDuIqAuTz83aeHSPPH">
+                <button onclick="openPomodoroSettings()" id="pomodoro-settings-btn" class="absolute bottom-4 right-40 text-white hover:text-gray-200 p-2" title="番茄专注设置" data-page-node-id="apsEHDuIqAuTz83aeHSPPH">
                     <i class="fas fa-cog text-xl" data-page-node-id="rhNWXXaStNdexKUZf4crN9"></i>
+                </button>
+                <!-- 右栏内容切换圆钮（特性二）：单钮表达目标态，位于「设置」与「收起概况」之间。
+                     当前=概况 → 图标 fa-list-check / title 任务详情；当前=任务详情 → fa-chart-simple / title 专注概况。 -->
+                <button onclick="togglePomodoroRightMode()" id="pomodoro-mode-toggle-btn" class="absolute bottom-4 right-28 text-white hover:text-gray-200 p-2" title="任务详情">
+                    <i id="pomodoro-mode-toggle-icon" class="fas fa-list-check text-xl"></i>
                 </button>
                 <button onclick="togglePomodoroRightPanel()" id="pomodoro-toggle-panel-btn" class="absolute bottom-4 right-16 text-white hover:text-gray-200 p-2" title="收起概况" data-page-node-id="KbRDJFp0OaCFjLrStwIA7T">
                     <i id="pomodoro-toggle-panel-icon" class="fas fa-angles-right text-xl" data-page-node-id="B7tXpyGSCg2XqdGCCB3690"></i>
@@ -4295,11 +4438,14 @@
             <div id="pomodoro-right-panel" class="flex-[3] p-8 overflow-hidden flex flex-col pomodoro-focus-bg" data-page-node-id="KLEUCrRepdW7AXuBP0I4DR">
                 <div class="w-full mx-auto flex flex-col flex-1 min-h-0" data-page-node-id="1dAhHGAyxC149LG8egZ2k2">
                     <div class="flex items-center justify-between mobile-overview-header mb-3" id="mobile-overview-header" data-page-node-id="AYfJGRnuopwsQEHX6zrL1Z">
-                        <h2 class="text-lg font-semibold text-theme-primary" data-page-node-id="g5WKzNJgIIku3dioPe47PA">专注概况</h2>
+                        <h2 id="pomodoro-right-title" class="text-lg font-semibold text-theme-primary" data-page-node-id="g5WKzNJgIIku3dioPe47PA">专注概况</h2>
                         <button onclick="togglePomodoroOverviewMobile()" id="pomodoro-overview-toggle" class="text-theme-muted hover:text-white transition p-1 -mr-1" title="收起 / 展开" data-page-node-id="0dS2Tf1CoQCybwfqmVNtYA">
                             <i id="pomodoro-overview-toggle-icon" class="fas fa-chevron-up text-sm" data-page-node-id="r5A3Fow3SP3iVkDeG80DH4"></i>
                         </button>
                     </div>
+
+                    <!-- 概况 + 历史记录：与「任务详情」互斥，任意时刻只显示一种 -->
+                    <div id="pomodoro-overview-content" class="flex flex-col flex-1 min-h-0">
 
                     <div class="grid grid-cols-2 gap-3 mb-6" data-page-node-id="2C5nrxDydWdFsx9vz7hVFw">
                         <div class="pomodoro-glass-card rounded-lg p-3 text-center" data-page-node-id="9MYNilz2vXZDUnHBMCFbVp">
@@ -4334,6 +4480,22 @@
                         </div>
                         <div id="pomodoro-history" class="space-y-2 overflow-y-auto flex-1 min-h-0" data-page-node-id="OSCzpYyPKveA5HD2BIryus">
                         </div>
+                    </div>
+                    </div><!-- /#pomodoro-overview-content -->
+
+                    <!-- 任务详情槽位（特性二）：主视图的真实 #task-detail-panel 会被整体搬入此处，
+                         切回概况模式时搬回 #app-container。单一 DOM = 单一事实来源，字段渲染与保存
+                         逻辑仍由 tasks.js 负责，此处只做尺寸/底色/按钮可见性的作用域覆盖。
+                         刻意不带 data-page-node-id：离线版镜像脚本按 node id 顺序映射，
+                         新增节点不参与映射才不会打乱对齐。 -->
+                    <div id="pomodoro-detail-slot" class="hidden flex-1 min-h-0 flex-col"></div>
+
+                    <!-- 未关联专注任务时的空态 -->
+                    <div id="pomodoro-detail-empty" class="hidden flex-1 min-h-0 flex-col items-center justify-center text-center px-4 gap-4">
+                        <i class="fas fa-list-check text-4xl text-white/30"></i>
+                        <p class="text-sm text-theme-secondary">当前未关联专注任务</p>
+                        <button type="button" onclick="openPomodoroTaskPanel()" class="px-5 py-2.5 rounded-full text-sm font-medium transition hover:opacity-90" style="background-color: var(--accent-color); color: #fff;">关联专注任务</button>
+                        <p class="text-xs text-theme-muted">关联任务后，可在专注中直接编辑任务信息</p>
                     </div>
                 </div>
             </div>
@@ -4882,20 +5044,6 @@
                                     <option value="full">全屏</option>
                                 </select>
                             </div>
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <label class="text-sm font-medium text-theme-primary">自动保存间隔</label>
-                                    <p class="text-xs text-theme-secondary">停止输入后多久自动保存；书写态没有保存按钮，依赖此项</p>
-                                </div>
-                                <select id="settings-auto-save-delay" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                    <option value="0">即时</option>
-                                    <option value="300">0.3 秒</option>
-                                    <option value="500">0.5 秒</option>
-                                    <option value="1000">1 秒</option>
-                                    <option value="2000">2 秒</option>
-                                    <option value="5000">5 秒</option>
-                                </select>
-                            </div>
                             <div class="flex items-center justify-between" data-page-node-id="3yCkNuvfMFyTlnYBLTncnP">
                                 <div data-page-node-id="d9flfaFQHQfCsAtNNK4flT">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="D20NaykkWX0Y2BEZ8QGBBF">侧边栏节假日倒计时</label>
@@ -5406,7 +5554,7 @@
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.2</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.3</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>
@@ -5486,6 +5634,8 @@
                 if (settingsBtn) settingsBtn.classList.add('hidden');
                 const statsBtn = document.getElementById('pomodoro-stats-btn');
                 if (statsBtn) statsBtn.classList.add('hidden');
+                const modeToggleBtn = document.getElementById('pomodoro-mode-toggle-btn');
+                if (modeToggleBtn) modeToggleBtn.classList.add('hidden');
                 const togglePanelBtn = document.getElementById('pomodoro-toggle-panel-btn');
                 if (togglePanelBtn) togglePanelBtn.classList.add('hidden');
                 // 更新按钮图标
@@ -5539,6 +5689,8 @@
             if (settingsBtn) settingsBtn.classList.remove('hidden');
             const statsBtn = document.getElementById('pomodoro-stats-btn');
             if (statsBtn) statsBtn.classList.remove('hidden');
+            const modeToggleBtnExit = document.getElementById('pomodoro-mode-toggle-btn');
+            if (modeToggleBtnExit) modeToggleBtnExit.classList.remove('hidden');
             // 更新按钮图标
             const btn = pomodoroPage.querySelector('[title="全屏"] i');
             if (btn) btn.className = 'fas fa-expand text-xl';
