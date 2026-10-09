@@ -60,6 +60,14 @@ function closeMobileSidebar() {
     mobilePopLayer('sidebar');
 }
 
+// Esc 关闭侧边栏抽屉：移动端系统返回键由 popstate 层栈（mobilePushLayer）负责，
+// 物理键盘 / 缩窄的桌面窗口没有返回键，补一条 Esc 关闭，与点遮罩、点关闭按钮等价。
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!document.body.classList.contains('sidebar-open')) return;
+    closeMobileSidebar();
+});
+
 function toggleMobileSidebar() {
     if (document.body.classList.contains('sidebar-open')) closeMobileSidebar();
     else openMobileSidebar();

@@ -356,6 +356,30 @@
         body.has-bg-image .week-weekend-bg {
             background-color: rgba(156, 163, 175, 0.08) !important;
         }
+        /* 周视图配置面板：「显示天数」分段控件（选中态走 .is-on，不写内联样式） */
+        .wc-days-btn {
+            padding: 4px 2px;
+            font-size: 12px;
+            line-height: 1.2;
+            border-radius: 6px;
+            color: var(--text-secondary);
+            background-color: transparent;
+            white-space: nowrap;
+            transition: background-color .15s ease, color .15s ease;
+        }
+        .wc-days-btn:hover {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        .wc-days-btn.is-on,
+        .wc-days-btn.is-on:hover {
+            background-color: var(--accent-color);
+            color: #fff;
+        }
+        /* 显示天数只作用于桌面端：移动端固定 7 天（单日模式依赖 7 列结构），隐藏该行避免误解 */
+        @media (max-width: 768px) {
+            .wc-displaydays-row { display: none !important; }
+        }
         /* 周视图时刻区域任务：方案B 已移除嵌套 backdrop-filter，复用父容器模糊 */
         /* 月视图任务项：同上，已移除嵌套 backdrop-filter */
         /* 日程视图任务卡片悬停效果 */
@@ -463,10 +487,26 @@
         #quick-time-panel .qtp-cell:hover,
         #quick-time-panel .qtp-nav:hover { background: var(--bg-tertiary); }
 
-        /* 侧边栏底部按钮样式 */
+        /* ---- 侧边栏「融合式分区」：去硬分割线 ---- */
+        /* ① 顶部标题区：原 border-b 直接去掉，不留色带（最极简，仅靠留白分区）。 */
+
+        /* ② 内容区底部向倒计时区柔和淡出，取代原 #sidebar-bottom-buttons 的 border-top。
+           淡出带固定在滚动视口底部（mask 不随内容滚动），滚动时条目接近底缘自然淡出，
+           视觉上「融进」下方的假期倒计时虚线框。
+           ⚠️ 淡出带 --sidebar-fade 必须【小于】滚动容器 padding-bottom(3rem=48px)：
+              否则滚到底时最后一项会落在淡出带内被永久淡化、看不清。
+              48px > 40px → 滚到底时末项已高于淡出带，保持全清晰；仅滚动过程中才淡出。
+           ⚠️ mask 只影响绘制、不剥夺命中测试 → 淡出区条目仍可正常点击。
+           ⚠️ 背景图(has-bg-image)模式下淡出透出的是毛玻璃背景，与玻璃美学一致，无需额外分支。 */
+        #sidebar-scroll {
+            padding-bottom: 3rem;
+            -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--sidebar-fade, 40px)), transparent 100%);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - var(--sidebar-fade, 40px)), transparent 100%);
+        }
+
+        /* 侧边栏底部按钮样式（已去掉 border-top，改由上方内容淡出做分界） */
         .sidebar-bottom-buttons {
-            padding: 1rem;
-            border-top: 1px solid var(--border-color);
+            padding: 0.5rem 1rem 1rem;
             display: flex;
             flex-direction: column;
             gap: 0.5rem;
@@ -506,6 +546,118 @@
 
         .sidebar-action-btn:hover {
             color: white;
+        }
+
+        /* 侧边栏顶部「日程管理」= 设置入口：悬浮时日历图标旋转淡出、齿轮旋转淡入（文字不变） */
+        #sidebar-brand-btn {
+            cursor: pointer;
+            border-radius: 0.5rem;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #sidebar-brand-btn:focus-visible { outline: 2px solid var(--accent-color, #3b82f6); outline-offset: 2px; }
+        .brand-icon-wrap {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.25rem;
+            height: 1.25rem;
+            flex: none;
+        }
+        .brand-icon {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+        .brand-icon-calendar { opacity: 1; transform: rotate(0deg) scale(1); }
+        .brand-icon-gear { opacity: 0; transform: rotate(-90deg) scale(0.7); }
+        /* 仅在真正支持悬浮的设备上切换图标；触屏点击照样进设置，但图标保持日历（避免误以为处于设置态） */
+        @media (hover: hover) and (pointer: fine) {
+            #sidebar-brand-btn:hover .brand-icon-calendar { opacity: 0; transform: rotate(90deg) scale(0.7); }
+            #sidebar-brand-btn:hover .brand-icon-gear { opacity: 1; transform: rotate(0deg) scale(1); }
+        }
+        /* 键盘聚焦时同样切成齿轮（与 hover 同一套视觉），避免 Tab 过去只看到描边、看不出是设置入口 */
+        #sidebar-brand-btn:focus-visible .brand-icon-calendar { opacity: 0; transform: rotate(90deg) scale(0.7); }
+        #sidebar-brand-btn:focus-visible .brand-icon-gear { opacity: 1; transform: rotate(0deg) scale(1); }
+        body.fx-low .brand-icon { transition: none; }
+        @media (prefers-reduced-motion: reduce) {
+            .brand-icon { transition: none; }
+            #sidebar-brand-btn:hover .brand-icon-calendar { transform: none; }
+            #sidebar-brand-btn:hover .brand-icon-gear { transform: none; }
+            #sidebar-brand-btn:focus-visible .brand-icon-calendar { transform: none; }
+            #sidebar-brand-btn:focus-visible .brand-icon-gear { transform: none; }
+        }
+
+        /* ---- 侧栏选中态统一（方案①：仅左缘竖条 + 主题强调色加粗字，去掉整行蓝底） ---- */
+        /* 替代原先两套并存的写法（清单 bg-accent-soft/text-accent-dark，其余 bg-theme-tertiary/font-semibold），
+           并收敛当前版本的「竖条+蓝底+蓝字」整行填充：统一为「左侧 3px 强调色竖条 + 文字主题强调色加粗」，
+           与「融合式分区」去分割线、靠留白分区的轻盈语境一致；hover 退回中性灰底，与常规条目一致。
+           ⚠️ 文字色用 --accent-color（主题强调色）而非 --accent-text-dark：跟随强调色调色板变化。
+           ⚠️ color 必须 !important：Tailwind 的 .hover\:bg-theme-tertiary:hover 等会压过 .sidebar-active。 */
+        .sidebar-active {
+            position: relative;
+            font-weight: 600;
+            color: var(--accent-color, #3b82f6) !important;
+        }
+        /* 竖条：绝对定位，不参与按钮的 flex 布局 */
+        .sidebar-active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 60%;
+            min-height: 14px;
+            border-radius: 0 2px 2px 0;
+            background: var(--accent-color, #3b82f6);
+            pointer-events: none;
+        }
+        /* 背景图模式：与纯色模式完全一致，激活项同样**无底**，仅「左缘竖条 + 主题强调色加粗字」。
+           （此处刻意不叠任何洗白/实色底 —— 两模式统一为无底，避免照片上多出一层色块。） */
+
+        /* ---- 侧栏分组标题吸顶（清单 / 外部日历 / 标签 / 过滤器） ---- */
+        /* ① padding-bottom 取代 mb-2：下方留白也在遮罩范围内，滚过的条目不会从缝隙里露出来。
+           ② top 用 -1rem 而不是 0：滚动容器有 p-4（padding-top 16px），sticky 的参考矩形是
+              内容盒，top:0 会让标题停在容器顶部下方 16px，那道缝里会露出该分组滚过的条目
+              （视觉割裂）。负偏移把标题顶到容器最上沿，缝隙被标题自身背景盖住。 */
+        #sidebar .sidebar-group-header {
+            position: sticky;
+            top: -1rem;
+            z-index: 2;
+            margin-bottom: 0 !important;
+            padding: 0.25rem 0 0.5rem;
+            background: var(--bg-secondary, #ffffff);
+        }
+        /* 背景图模式：与分组内条目一样全透明（不加任何底色，避免深色主题下压出黑块），
+           仅保留毛玻璃，强度跟随全局「毛玻璃强度」设置 --bg-blur */
+        body.has-bg-image #sidebar .sidebar-group-header {
+            background: transparent !important;
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+        }
+
+        /* ---- 侧栏计数徽标：三位数不再把标题文字挤爆 ---- */
+        .sidebar-count {
+            flex: none;
+            min-width: 1.25rem;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ---- 侧栏统一焦点描边：键盘 Tab 一圈下来焦点始终可见 ---- */
+        #sidebar button:focus-visible,
+        #sidebar [role="button"]:focus-visible,
+        #sidebar a:focus-visible,
+        #sidebar input:focus-visible {
+            outline: 2px solid var(--accent-color, #3b82f6);
+            outline-offset: 2px;
         }
 
         /* 任务详情栏标签芯片：删除按钮叠加在右上角，胶囊间预留空隙避免布局位移 */
@@ -1577,10 +1729,59 @@
             backdrop-filter: none !important;
         }
         /* 右栏无三栏可挤压：隐藏「展开书写」入口与书写态专属的宽度档按钮；
-           底部「开始专注 / 删除任务」一行在专注页内无意义，一并隐藏（保留上方 4 个属性按钮） */
+           底部「开始专注 / 删除任务」一行在专注页内无意义，一并隐藏（保留上方 4 个属性按钮）。
+           顶栏「关闭」按钮（番茄语境下曾被改写成「返回专注概况」）也一并隐藏：
+           右栏内回到概况改由「单击顶部标题」完成（与左栏「切换圆钮」等价），
+           避免它与紧邻的「切换任务模式」并排成两个冗余入口。
+           ⚠️ 必须写两条 id（而非 body.detail-write-mode #detail-dismiss-btn 那种一条 id + 一条类）：
+           书写态那条 `display:flex!important` 与它同为 !important，靠特指度决胜，
+           两条 id 才能压过它（虽然托管期间进入不了书写态，仍留作兜底）。 */
         #pomodoro-detail-slot #detail-expand-btn,
         #pomodoro-detail-slot #detail-width-btn,
+        #pomodoro-detail-slot #detail-dismiss-btn,
         #pomodoro-detail-slot #detail-action-row-main { display: none !important; }
+
+        /* 顶部标题：文本即当前模式，单击切换（等同左栏「切换圆钮」）。
+           加手型与 hover 反馈提示可点 —— 右栏恒深色底，用降透明度而非换色更稳。 */
+        #pomodoro-right-title { cursor: pointer; user-select: none; transition: opacity 0.15s ease; }
+        #pomodoro-right-title:hover { opacity: 0.72; }
+
+        /* ============ 右栏详情面板：下方内容统一贴「任务详情」参考线 ============
+           参考线 = #pomodoro-right-title 左边缘 = 槽位/面板内容区左边缘（相对 x = 0）。
+           只作用于番茄右栏槽位，主视图详情栏的内边距几何完全不变。
+           ① 顶栏 / 标题行 / 正文的左侧内边距归零 → 内容列左边缘落到参考线；
+           ② 时间显示按钮：自身左内边距归零 → 按钮文字贴线（按钮框随之落到线上，与下方
+              时间卡片左边缘同列）。⚠️ 不能用「负外边距光学对齐」那套 margin-left:-12px：
+              槽位 `#pomodoro-detail-slot` 是 `overflow:hidden`，向左伸出的 12px 会被裁掉；
+           ③ 时间菜单卡片：左边距归零（卡片边缘贴线）；卡片内文字仍保留 14px 内边距；
+           ④ 完成圆钮：左侧与参考线对齐，任务标题紧随其后（24px 圆钮 + 12px gap = 36px）。
+           底部停靠区（标签 / 进度 / 快捷按钮）刻意不动。
+           ⚠️ 主视图 `#detail-title-row` 的 `px-4 pt-2 pb-2` 是为「净空 20px」调过的，
+           绝不能被这里的 padding-left:0 污染 —— 故全部带 #pomodoro-detail-slot 前缀。 */
+        #pomodoro-detail-slot #detail-topbar,
+        #pomodoro-detail-slot #detail-title-row,
+        #pomodoro-detail-slot #detail-body { padding-left: 0 !important; }
+        #pomodoro-detail-slot #detail-topbar > div:first-child > button:first-child { padding-left: 0 !important; }
+        #pomodoro-detail-slot #task-detail-panel #detail-time-menu:not(.hidden) { margin-left: 0 !important; }
+
+        /* 时间菜单收起态：收紧「任务时间文本 ↔ 任务标题文本」的间距 —— 净空 20 → 12px
+           （顶栏下内边距 12 → 8px、标题行上内边距 8 → 4px），字形净距随之约 30 → 22px。
+           ⚠️ 仅番茄右栏：主视图详情栏保持 20px（该值是为与书写态口径一致而定的）。 */
+        #pomodoro-detail-slot #detail-topbar { padding-bottom: 8px !important; }
+        #pomodoro-detail-slot #detail-title-row { padding-top: 4px !important; }
+
+        /* ============ 详情态：下方信息区下移 32px，与主视图详情栏同位 ============
+           参考：主视图详情栏面板是 h-screen，下方信息区（创建时间 / 标签 / 清单+进度 / 操作按钮，
+           实测高 162px）底边正好落在屏幕底边；番茄右栏的面板被右栏 `p-8` 的 32px 底部内边距顶住，
+           信息区底边停在 868 → 比主视图高 32px。
+           去掉这层底部内边距后，信息区整体下移 32px 贴到屏幕底边，位置与主视图完全一致，
+           详情文本区（#detail-body）随之由 514px 涨到 546px。
+           ⚠️ 只作用于 .pt-detail：概况态（统计 + 历史记录）仍保留 p-8 的底部留白。
+           ⚠️ 限定桌面（≥769px）：移动端右栏是顶部圆角浮层（padding 12px 16px + 底部 18px 圆角），
+           去掉底部留白会让操作按钮贴住圆角。 */
+        @media (min-width: 769px) {
+            #pomodoro-right-panel.pt-detail { padding-bottom: 0 !important; }
+        }
 
         /* 控件玻璃化：右栏是深色渐变底，面板内带边框 / 带底色的控件统一改为半透明白，
            与右栏既有的 .pomodoro-glass-card 观感对齐 */
@@ -2300,6 +2501,71 @@
             border-radius: 8px;
         }
 
+        /* ============ 收起态：顶部时间设置区的留白与边界 ============
+           v11.7.2 把 #detail-topbar / #detail-time-menu / #detail-title-row 上的
+           `border-b border-theme` 全删了，方向是「去硬线、靠留白分组」，书写态同步重调了
+           内边距（顶栏 28/12 + 标题 8/4 → 净空 20px），但收起态仍沿用为「有分割线」设计的
+           p-4（上下各 16px）：同一个 32px 空白失去正中间那条线兜底，塌成一块没有理由的空白；
+           时间菜单展开时更变成「两个 32px 空白夹一块面板」，内部行距（12px）反而比外部留白
+           还紧，层级完全颠倒。这里补齐收起态，与书写态同口径：
+           ① 净空压到 20px —— 由 HTML 类完成（顶栏 pb-3 + 标题行 pt-2），见 #detail-topbar /
+              #detail-title-row；
+           ② 展开的时间菜单给一个浅底圆角容器，用容器边界替代被删掉的分割线。
+           ⚠️ 本节必须全部限定 body:not(.detail-write-mode)：书写态同一节点是 grid 卡片，
+           自带 padding / margin / border，不能被这里的几何污染。 */
+        /* ② 时间菜单 = 浅底圆角卡片。
+           外边距（2 / 6px）刻意小于内边距（10px），形成「近内远外」的格式塔分组：
+           字段之间靠得近、卡片与顶栏 / 标题离得远 —— 没有线也能读出边界在哪。
+           底色与描边同时给：实测深色主题下 --bg-secondary 与 --bg-tertiary 的亮度差只有
+           约 17 级，仅靠浅底偏弱；1px 描边与书写态那张卡片（border: 1px solid
+           var(--border-color)）同口径，两态视觉语言一致。 */
+        body:not(.detail-write-mode) #detail-time-menu:not(.hidden) {
+            background-color: var(--bg-tertiary, #f3f4f6);
+            border: 1px solid var(--border-color, #e5e7eb);
+            border-radius: 10px;
+            margin: 2px 16px 6px;
+            padding: 10px 14px;
+        }
+        /* 背景图模式：与 .bg-theme-tertiary 同口径（半透明 + 毛玻璃），避免一块死白 / 死黑 */
+        body.has-bg-image:not(.detail-write-mode) #detail-time-menu:not(.hidden) {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+        }
+        /* 关闭模糊时：提到 0.92 并撤掉毛玻璃（与 html[data-blur="off"] 的 .bg-theme-tertiary 一致） */
+        html[data-blur="off"] body.has-bg-image:not(.detail-write-mode) #detail-time-menu:not(.hidden) {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.92) !important;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        /* 番茄右栏（恒为深色渐变玻璃底）：换半透明白，与右栏其它玻璃卡片同观感。
+           3 个 id 的特指度高于上面两条，稳定胜出。 */
+        #pomodoro-detail-slot #task-detail-panel #detail-time-menu:not(.hidden) {
+            background-color: rgba(255, 255, 255, 0.08) !important;
+            border-color: rgba(255, 255, 255, 0.22) !important;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+
+        /* 时间菜单里的日期 / 时间输入框：与「提前提醒 / 重复」按钮统一为「透明底 + 1px 描边 + 次级文字色」。
+           这两态共用同一节点（收起态 + 书写态），故不限 body:not(.detail-write-mode)。
+           ⚠️ 必须显式写 transparent：原生 input[type=date|time] 的 UA 默认底色是 `field`
+           （本主题下解析为白色），HTML 上撤掉 .bg-theme-tertiary 后若不补这条会变成白底。
+           ⚠️ outline: none 是必需的：原生 date/time 输入框属于「支持键盘输入」的元素，
+           按规范**恒**匹配 :focus-visible —— 鼠标单击也会画出 UA 焦点环（实测
+           outline: 1px auto，深色底上呈白色描边）；而同级的 button 鼠标单击不匹配
+           :focus-visible，因此不画环。两条加起来才是「点按钮和点输入框观感一致」。
+           （代价：键盘 Tab 到该输入框时也不再画环，与其右侧按钮的键盘表现略有出入。）
+           ⚠️ 范围限定 #detail-time-menu：番茄「新增记录」弹窗的 add-record-* 输入框沿用同一套
+           class，不能一并改掉。
+           ⚠️ 番茄右栏不需要排除：右栏的 `#pomodoro-detail-slot … .border-theme:not(.is-on)`
+           带 !important，会给输入框与按钮同样补上 rgba(255,255,255,.08)，两侧天然一致。 */
+        #detail-time-menu input[type="date"],
+        #detail-time-menu input[type="time"] {
+            background-color: transparent;
+            outline: none;
+        }
+
         /* ============ 沉浸书写态（body.detail-write-mode） ============ */
         /* 显隐助手：wm-only 仅书写态显示，wm-hide 仅收起态显示。
            两者都不改动元素自身的 display 类型（收起态完全不干预），只在书写态切到 none / inline-flex。 */
@@ -2309,6 +2575,38 @@
         body.detail-write-mode .wm-hide { display: none !important; }
 
         @media (min-width: 769px) {
+            /* ---- 书写态侧边栏：完全摒弃，仅让番茄卡浮在左下角（2026-10-09 改造） ----
+               侧栏自身脱离文档流（position:fixed 贴视口左下角），因此面板恒等于 100vw，
+               书写区真正全屏；番茄卡 #sidebar-pomodoro 仍留在侧栏 DOM 内（不搬移节点），
+               宽 260px（= 侧栏原始宽度）、贴死视口左下角、保留顶部 1px 边框、无圆角无外边距
+               → 「位置与样式与主视图完全一致」，只是它现在以悬浮窗形式浮在正文之上。
+               ① 侧栏其余内容（标题/设置区、清单|标签|过滤器滚动区、假期倒计时+功能圆钮）全部隐藏；
+               ② ⚠️ 宽高写在 HTML 内联 style（width:260px; min-height:100vh）上，且 .sidebar 自带
+                     height/min-height/max-height:100vh → 必须用 !important 才压得住；
+               ③ 背景透明即可（去掉灰色底）；
+                  ⚠️ **必须保留 1px 右边框**：侧栏是 border-box，去掉 border-r 会让内容盒从 259px
+                     变成 260px，番茄卡比主视图宽 1px，破坏「与主视图完全一致」。
+               ④ ⚠️ z-index 取 45：需高于 #task-detail-panel（z-40）才会浮在正文之上，
+                     同时低于所有 modal（z-50）与 toast（z-60），免得盖住弹窗；
+               ⑤ 番茄未激活时卡片带 .hidden，侧栏无可见子元素 → 高度自然塌为 0，无需额外规则。
+                  ⚠️ 卡片显隐由 JS 的 classList.toggle('hidden') 控制（pomodoro.js /
+                     updateSidebarPomodoroTimer）。此处绝不可对 #sidebar-pomodoro 写
+                     display:block !important，否则番茄未激活时会冒出一张空的深色卡。 */
+            body.detail-write-mode #sidebar > *:not(#sidebar-pomodoro) { display: none !important; }
+            body.detail-write-mode #sidebar {
+                position: fixed !important;
+                left: 0;
+                bottom: 0;
+                top: auto;
+                width: 260px !important;
+                height: auto !important;
+                min-height: 0 !important;
+                max-height: none !important;
+                background: transparent !important;
+                z-index: 45;
+            }
+            /* 番茄卡片保持与主视图完全一致（方角，无圆角）；卡片节点本身零样式改动 */
+
             /* 主视图被挤占消失（非浮层覆盖）；面板恢复为 flex 兄弟占满侧栏右侧全部空间。
                用 relative 而非 static：既参与 flex 占位，又给右下角悬浮簇提供定位上下文。 */
             body.detail-write-mode #main-content { display: none; }
@@ -2325,9 +2623,12 @@
             body.detail-write-mode { --wm-width: 720px; --wm-pad: 24px; }
             /* wide 档以右下角停靠区的左边界为限：
                停靠区内容 280px 宽 + 24px 右外边距 = 占面板右侧 304px；正文居中，两侧各需让出 304px
-               → --wm-width ≤ 面板宽(100vw - 260px 侧栏) - 608px = 100vw - 868px。
+               → --wm-width ≤ 面板宽 - 608px。
+               ⚠️ 书写态侧栏已脱离文档流（position:fixed 贴左下角），面板恒等于 100vw，
+                  故基准只有一种：--wm-width ≤ 100vw - 608px。
+               （全屏档不受此限：正文延伸到最左侧，左下角会被番茄卡短暂遮住，属既定取舍。）
                下限 720px（不低于标准档），上限 1280px（长单行可读性封顶）。 */
-            body.detail-write-mode.wm-w-900 { --wm-width: clamp(720px, calc(100vw - 868px), 1280px); }
+            body.detail-write-mode.wm-w-900 { --wm-width: clamp(720px, calc(100vw - 608px), 1280px); }
             body.detail-write-mode.wm-w-full { --wm-width: 100%; --wm-pad: 40px; }
             body.detail-write-mode #detail-topbar > :first-child,
             body.detail-write-mode #detail-title-row,
@@ -2726,7 +3027,9 @@
             body.fx-smooth.wm-morph-in #task-detail-panel {
                 position: fixed !important;
                 top: 0; right: 0; bottom: 0;
-                left: var(--wm-morph-left, 260px);
+                /* 书写态侧栏已脱离文档流（fixed 贴左下角），面板左边界恒为 0。
+                   旧默认值 260px 是「侧栏仍占布局位」时期的口径，沿用会导致入场动画收尾横跳。 */
+                left: var(--wm-morph-left, 0px);
                 width: auto !important;
                 max-width: none !important;
                 height: auto !important;
@@ -3529,9 +3832,12 @@
         <!-- 侧边栏 -->
         <aside id="sidebar" class="sidebar bg-theme-secondary border-r border-theme flex flex-col" style="width: 260px; min-height: 100vh;" data-page-node-id="bnaqB4XcCSUJONyXepil62">
             <!-- 顶部Logo区域 -->
-            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0" data-page-node-id="KdDbdufVzchkn0tnGi9dFk">
-                <div class="flex items-center gap-2" data-page-node-id="WlPqs0NXFKocMM5mAmI4H3">
-                    <i class="fas fa-calendar-check text-accent" data-page-node-id="d9akYqvKzqdB3kdPkuzaFB"></i>
+            <div class="p-4 flex items-center justify-between flex-shrink-0" data-page-node-id="KdDbdufVzchkn0tnGi9dFk">
+                <div id="sidebar-brand-btn" class="flex items-center gap-2" role="button" tabindex="0" title="设置" aria-label="设置" onclick="openSettingsModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSettingsModal();}" data-page-node-id="WlPqs0NXFKocMM5mAmI4H3">
+                    <span class="brand-icon-wrap">
+                        <i class="fas fa-calendar-check text-accent brand-icon brand-icon-calendar" aria-hidden="true" data-page-node-id="d9akYqvKzqdB3kdPkuzaFB"></i>
+                        <i class="fas fa-cog text-accent brand-icon brand-icon-gear" aria-hidden="true"></i>
+                    </span>
                     <h1 class="text-xl font-bold text-theme-primary" data-page-node-id="0P915EhabDxBKmq98DP17E">日程管理</h1>
                 </div>
                 <button onclick="closeMobileSidebar()" id="sidebar-close-btn" class="p-2 hover:bg-theme-tertiary rounded-lg transition items-center justify-center" title="关闭" data-page-node-id="DjWcnXMZJwWsWkz4ZotTFi">
@@ -3540,41 +3846,41 @@
             </div>
             
             <!-- 清单列表区域 -->
-            <div class="flex-1 overflow-y-auto p-4" data-page-node-id="Ix0MXbswCc0pGrhBIkfnq7">
+            <div id="sidebar-scroll" class="flex-1 overflow-y-auto p-4" data-page-node-id="Ix0MXbswCc0pGrhBIkfnq7">
                 <div class="space-y-2" data-page-node-id="682vqtl3PJGkvVuVEY4EG6">
                     <!-- 所有任务 -->
                     <button onclick="filterAllTasks()" id="sidebar-all-tasks-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="nHVnc9RHOCjlY6UxubKocp">
                         <i class="fas fa-tasks w-5" data-page-node-id="TF9OQSr34iYxMlmUZ7MGSn"></i>
-                        <span class="sidebar-text flex-1" data-page-node-id="1LIGsm9PuEKrWG6Hv3Cwp4">所有任务</span>
-                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-all-tasks-count" data-page-node-id="kPrPmsHfWxZVCNcCPxOBbM"></span>
+                        <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="1LIGsm9PuEKrWG6Hv3Cwp4">所有任务</span>
+                        <span class="sidebar-count text-xs text-theme-muted" id="sidebar-all-tasks-count" data-page-node-id="kPrPmsHfWxZVCNcCPxOBbM"></span>
                     </button>
                     
                     <!-- 今天 -->
                     <button onclick="filterToday()" id="sidebar-today-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="VUBm8FBz6R4nrlRxHGabJl">
                         <i class="fas fa-sun w-5" data-page-node-id="RTGTjPsk9WK6Yf1uqzA88e"></i>
-                        <span class="sidebar-text flex-1" data-page-node-id="G8TuhXa9Njk08G7StxK9iS">今天</span>
-                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-today-count" data-page-node-id="Ydv4JjJxbo6rTb7Zpbv7E3"></span>
+                        <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="G8TuhXa9Njk08G7StxK9iS">今天</span>
+                        <span class="sidebar-count text-xs text-theme-muted" id="sidebar-today-count" data-page-node-id="Ydv4JjJxbo6rTb7Zpbv7E3"></span>
                     </button>
 
                     <!-- 明天 -->
                     <button onclick="filterTomorrow()" id="sidebar-tomorrow-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="tFnEDqapL0MQwNFZYxgjAV">
                         <i class="fas fa-calendar-day w-5" data-page-node-id="C4TSP2aaLKCXg169kxqTPe"></i>
-                        <span class="sidebar-text flex-1" data-page-node-id="r8QAfC8JAdVUveOjLm2a6k">明天</span>
-                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-tomorrow-count" data-page-node-id="ocIdIqB2YgFkdFG1lfgTNi"></span>
+                        <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="r8QAfC8JAdVUveOjLm2a6k">明天</span>
+                        <span class="sidebar-count text-xs text-theme-muted" id="sidebar-tomorrow-count" data-page-node-id="ocIdIqB2YgFkdFG1lfgTNi"></span>
                     </button>
 
                     <!-- 最近3天 -->
                     <button onclick="filterRecent3Days()" id="sidebar-recent3days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="jJT0e7h74II31MGwGTokY1">
                         <i class="fas fa-calendar-days w-5" data-page-node-id="eASQqalftIVZsysvi8Il1s"></i>
-                        <span class="sidebar-text flex-1" data-page-node-id="H6VpkqN7pErR7tJEw5lbGS">最近3天</span>
-                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-recent3days-count" data-page-node-id="AvphFpvVOksYky4eqEjXXj"></span>
+                        <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="H6VpkqN7pErR7tJEw5lbGS">最近3天</span>
+                        <span class="sidebar-count text-xs text-theme-muted" id="sidebar-recent3days-count" data-page-node-id="AvphFpvVOksYky4eqEjXXj"></span>
                     </button>
 
                     <!-- 最近7天 -->
                     <button onclick="filterNext7Days()" id="sidebar-next7days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="lWKPHVs9TbzQfCsi4hR64m">
                         <i class="fas fa-calendar-week w-5" data-page-node-id="4n5UklGvaNNOLcSXKPTRrj"></i>
-                        <span class="sidebar-text flex-1" data-page-node-id="DxLPS3WLXQkx253miywf0Z">最近7天</span>
-                        <span class="sidebar-count text-xs text-theme-muted w-5 text-right" id="sidebar-next7days-count" data-page-node-id="SVyFMgIqsEs27yPi4PnF1H"></span>
+                        <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="DxLPS3WLXQkx253miywf0Z">最近7天</span>
+                        <span class="sidebar-count text-xs text-theme-muted" id="sidebar-next7days-count" data-page-node-id="SVyFMgIqsEs27yPi4PnF1H"></span>
                     </button>
                     
                     <!-- 摘要 -->
@@ -3586,7 +3892,7 @@
                 
                 <!-- 清单分组 -->
                 <div class="mt-4" data-page-node-id="ulEGflnPiRw1RN3FDDH2xT">
-                    <div id="sidebar-lists-header" class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('lists')" data-page-node-id="DZxcde2QyV6o17rLaCGiE8">
+                    <div id="sidebar-lists-header" class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('lists')" data-page-node-id="DZxcde2QyV6o17rLaCGiE8">
                         <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text" data-page-node-id="EYXTzLozhcl9MwKGR1oXG8">
                             <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition" data-page-node-id="4q8FOlFKdKgQWkBA7KTtRm"></i>
                             <span data-page-node-id="dtTTfO6LNwlKOHvkwbbhtW">清单</span>
@@ -3604,7 +3910,7 @@
 
                 <!-- 外部日历订阅分组（与清单同级，有订阅时显示；支持折叠；标题右侧设置图标跳转订阅设置页） -->
                 <div id="sidebar-calsync-section" class="mt-4 hidden">
-                    <div id="sidebar-calsync-header" class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('calsync')">
+                    <div id="sidebar-calsync-header" class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('calsync')">
                         <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">
                             <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition"></i>
                             <span>外部日历</span>
@@ -3622,7 +3928,7 @@
 
                 <!-- 标签分组 -->
                 <div id="sidebar-tags-section" class="mt-4" data-page-node-id="OaNQQyMoQzrJVzHtjFse0I">
-                    <div class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('tags')" data-page-node-id="bXZ1BvCyzAtZA1IahyaTED">
+                    <div class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('tags')" data-page-node-id="bXZ1BvCyzAtZA1IahyaTED">
                         <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text" data-page-node-id="icZ5OlzadpLEAYXayKEN0s">
                             <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition" data-page-node-id="9ekn8GKAP4a7DEagQsEzkn"></i>
                             <span data-page-node-id="AMiGrfGSuMuvCsjADPJgwR">标签</span>
@@ -3638,7 +3944,7 @@
                 
                 <!-- 过滤器分组 -->
                 <div id="sidebar-filters-section" class="mt-4" data-page-node-id="8HRTTTxdEZzp79I3H9eTWD">
-                    <div class="group flex items-center justify-between mb-2 cursor-pointer" onclick="toggleSectionCollapse('filters')" data-page-node-id="aSaDPWQGUH8aJNXeGuXKAj">
+                    <div class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('filters')" data-page-node-id="aSaDPWQGUH8aJNXeGuXKAj">
                         <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text" data-page-node-id="8WUBvRr2WVjfBb3rWw4ONi">
                             <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition" data-page-node-id="GCWRGZkyR6kYZoDornMob3"></i>
                             <span data-page-node-id="hQxa6DgdiIznlALtJ6P1t6">过滤器</span>
@@ -3654,9 +3960,9 @@
             </div>
             
             <!-- 底部功能按钮区域 - 固定在底部 -->
-            <div id="sidebar-bottom-buttons" class="sidebar-bottom-buttons flex-shrink-0 border-t border-theme" data-page-node-id="p9mMRcGuYUx1CMqLL02hG0">
+            <div id="sidebar-bottom-buttons" class="sidebar-bottom-buttons flex-shrink-0" data-page-node-id="p9mMRcGuYUx1CMqLL02hG0">
                 <!-- 假期倒计时 -->
-                <div id="holiday-countdown" class="holiday-countdown-box" style="cursor:pointer" title="点击管理倒计时" onclick="switchView('countdown')" data-page-node-id="BXGEsjSZe5WzPdm4zNpdoR">
+                <div id="holiday-countdown" class="holiday-countdown-box" style="cursor:pointer" title="点击管理倒计时" onclick="switchToCountdownPage()" data-page-node-id="BXGEsjSZe5WzPdm4zNpdoR">
                     <div class="holiday-countdown-label" id="holiday-countdown-label" data-page-node-id="o4pzQCDqcwRVFnAe2y9Hde">距—还有</div>
                     <div data-page-node-id="FNaAB3B0IqXCC1JsYNh4Pq">
                         <span class="holiday-countdown-number" id="holiday-countdown-number" data-page-node-id="nvG38ZAlMPHgbh3iMXQ6ko">-</span>
@@ -3677,12 +3983,6 @@
                         <i class="fas fa-book-open" data-page-node-id="HHU6QOlctex8UE9hIpLFii"></i>
                     </button>
                 </div>
-                
-                <!-- 设置 -->
-                <button onclick="openSettingsModal()" class="w-full px-3 py-2 rounded-lg hover:bg-theme-tertiary text-theme-primary flex items-center justify-center gap-2 transition" data-page-node-id="jRMLKM7UgGjA9Hc4bR1PHj">
-                    <i class="fas fa-cog" data-page-node-id="rhZJ5ghYBznkcv7CcTENoT"></i>
-                    <span class="sidebar-text flex-1" data-page-node-id="zEewSpnt3x28oWmlCXg43b">设置</span>
-                </button>
             </div>
             
             <!-- 侧栏番茄计时详情（仅展开时显示） -->
@@ -3804,7 +4104,7 @@
                         <button onclick="closeMobileNavMore(); switchView('summary')" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3" data-page-node-id="vL0TpDerzYdygNJ3HHBuAQ">
                             <i class="fas fa-chart-pie w-5 text-center" data-page-node-id="YGxFFYw0jdMYhNOyS5esCL"></i>摘要
                         </button>
-                        <button onclick="closeMobileNavMore(); switchView('countdown')" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3" data-page-node-id="FOpl3jF0MoN2E6pW99f8B4">
+                        <button onclick="closeMobileNavMore(); switchToCountdownPage()" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3" data-page-node-id="FOpl3jF0MoN2E6pW99f8B4">
                             <i class="fas fa-hourglass-half w-5 text-center" data-page-node-id="A3OB9NYwHjghRA1xWh8glG"></i>倒计时
                         </button>
                         <button onclick="closeMobileNavMore(); openMobileSidebar()" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3" data-page-node-id="uwdfFwaPwBWi4laJDi8imj">
@@ -3831,7 +4131,7 @@
         <!-- 任务详情面板 -->
         <aside id="task-detail-panel" class="hidden w-96 bg-theme-secondary border-l border-theme flex flex-col h-screen relative z-40" data-page-node-id="1EOheI9RS7tthTk9BrRnRn">
             <!-- 顶部工具栏（书写态下 chrome 化：面包屑 + 正文宽度 + 统一退出按钮） -->
-            <div id="detail-topbar" class="p-4 flex items-center justify-between flex-shrink-0" data-page-node-id="kwc45skNYVo1tcy2bUlkyC">
+            <div id="detail-topbar" class="px-4 pt-4 pb-3 flex items-center justify-between flex-shrink-0" data-page-node-id="kwc45skNYVo1tcy2bUlkyC">
                 <div class="flex items-center gap-2 min-w-0">
                     <button type="button" onclick="toggleDetailTimeMenu()" class="wm-hide flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-theme-primary hover:bg-theme-tertiary transition" data-page-node-id="1sbo94pOBUxKCTUeFVLqZH">
                         <span id="detail-time-btn-text" data-page-node-id="XcOi3fCP9RXcLFQQg9H2Vk">设置时间</span>
@@ -3905,21 +4205,21 @@
                 </div>
                 <div class="grid grid-cols-2 gap-2" data-page-node-id="S6bFVeHuw3bHe0k68CyDlz">
                     <div class="relative" data-page-node-id="waKYfGVZkSFf2bMkVtvI54">
-                        <input type="date" id="detail-task-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openDatePicker(this, 'detail-task-date-picker')" data-page-node-id="MwjTyTCZjYFA2VdLiVnUBF">
+                        <input type="date" id="detail-task-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg text-theme-secondary cursor-pointer" onclick="openDatePicker(this, 'detail-task-date-picker')" data-page-node-id="MwjTyTCZjYFA2VdLiVnUBF">
                         <div id="detail-task-date-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto" data-page-node-id="6OTM3XGElYYz7AdnAVNjjA"></div>
                     </div>
                     <div class="relative" data-page-node-id="VIj0OLyH4JsFuZWvmdelPi">
-                        <input type="time" id="detail-task-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openTimePicker(this, 'detail-task-time-picker')" data-page-node-id="8E4D960tI6rBFrQGLW1Fq2">
+                        <input type="time" id="detail-task-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg text-theme-secondary cursor-pointer" onclick="openTimePicker(this, 'detail-task-time-picker')" data-page-node-id="8E4D960tI6rBFrQGLW1Fq2">
                         <div id="detail-task-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto" data-page-node-id="DKfpS40IPTEoqWpRvl7saZ"></div>
                     </div>
                 </div>
                 <div id="detail-end-time-container" class="hidden grid grid-cols-2 gap-2" data-page-node-id="D1Lhqm13kPxBMw3QQBz9GE">
                     <div class="relative" data-page-node-id="KGEDl2i7x2O0xNLrdzBobv">
-                        <input type="date" id="detail-task-end-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openDatePicker(this, 'detail-task-end-date-picker')" data-page-node-id="l26mcSYiSPSdufRFV53dzx">
+                        <input type="date" id="detail-task-end-date" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg text-theme-secondary cursor-pointer" onclick="openDatePicker(this, 'detail-task-end-date-picker')" data-page-node-id="l26mcSYiSPSdufRFV53dzx">
                         <div id="detail-task-end-date-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto" data-page-node-id="9fInFAfrXPqkCZO7OJ021G"></div>
                     </div>
                     <div class="relative" data-page-node-id="Q8nJv0aNRVsFJLW34ike2R">
-                        <input type="time" id="detail-task-end-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer" onclick="openTimePicker(this, 'detail-task-end-time-picker')" data-page-node-id="wnWvEC2cGtsMK0dClv53bi">
+                        <input type="time" id="detail-task-end-time" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg text-theme-secondary cursor-pointer" onclick="openTimePicker(this, 'detail-task-end-time-picker')" data-page-node-id="wnWvEC2cGtsMK0dClv53bi">
                         <div id="detail-task-end-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto" data-page-node-id="20YHTu1kYg6r6p08CwbQhe"></div>
                     </div>
                 </div>
@@ -4042,7 +4342,7 @@
             </div>
 
             <!-- 任务标题编辑（书写态下放大为一级标题，与正文同一容器宽度） -->
-            <div id="detail-title-row" class="p-4 pb-2 flex items-start gap-3 flex-shrink-0" data-page-node-id="M8uGC3aGDYyOv8lc0y9muO">
+            <div id="detail-title-row" class="px-4 pt-2 pb-2 flex items-start gap-3 flex-shrink-0" data-page-node-id="M8uGC3aGDYyOv8lc0y9muO">
                 <button onclick="toggleTaskDetailComplete()" class="w-6 h-6 rounded-full border-2 border-accent flex items-center justify-center transition flex-shrink-0 mt-1" id="detail-task-complete-btn" data-page-node-id="gZL0aFa95YVyCkThWHuxOm">
                     <i class="fas fa-check text-xs hidden" data-page-node-id="HGqBAK0rQI5fLEm0HUPyOq"></i>
                 </button>
@@ -4158,7 +4458,7 @@
     </div>
     
     <!-- 移动端侧边栏遮罩 -->
-    <div id="sidebar-overlay" class="modal-overlay" onclick="closeMobileSidebar()" data-page-node-id="jspjpyG0ZUTDgHK3jXrwEn"></div>
+    <div id="sidebar-overlay" class="modal-overlay" aria-hidden="true" onclick="closeMobileSidebar()" data-page-node-id="jspjpyG0ZUTDgHK3jXrwEn"></div>
     <!-- 移动端悬浮添加按钮（FAB） -->
     <button id="mobile-fab" onclick="openAddTaskModal()" aria-label="添加任务" title="添加任务" data-page-node-id="p5pKGJxPPc8EGYBzyBYNuk">
         <i class="fas fa-plus" data-page-node-id="gzW1uKAUbj98EwwIBXtI0z"></i>
@@ -4438,7 +4738,7 @@
             <div id="pomodoro-right-panel" class="flex-[3] p-8 overflow-hidden flex flex-col pomodoro-focus-bg" data-page-node-id="KLEUCrRepdW7AXuBP0I4DR">
                 <div class="w-full mx-auto flex flex-col flex-1 min-h-0" data-page-node-id="1dAhHGAyxC149LG8egZ2k2">
                     <div class="flex items-center justify-between mobile-overview-header mb-3" id="mobile-overview-header" data-page-node-id="AYfJGRnuopwsQEHX6zrL1Z">
-                        <h2 id="pomodoro-right-title" class="text-lg font-semibold text-theme-primary" data-page-node-id="g5WKzNJgIIku3dioPe47PA">专注概况</h2>
+                        <h2 id="pomodoro-right-title" class="text-lg font-semibold text-theme-primary" onclick="togglePomodoroRightMode()" title="点击查看任务详情" data-page-node-id="g5WKzNJgIIku3dioPe47PA">专注概况</h2>
                         <button onclick="togglePomodoroOverviewMobile()" id="pomodoro-overview-toggle" class="text-theme-muted hover:text-white transition p-1 -mr-1" title="收起 / 展开" data-page-node-id="0dS2Tf1CoQCybwfqmVNtYA">
                             <i id="pomodoro-overview-toggle-icon" class="fas fa-chevron-up text-sm" data-page-node-id="r5A3Fow3SP3iVkDeG80DH4"></i>
                         </button>
@@ -5554,7 +5854,7 @@
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.3</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.4</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>
@@ -5709,7 +6009,7 @@
     <script src="utils.js"></script>
     <script src="data.js"></script>
     <script src="sidebarViews.js"></script>
-    <script src="calendarViews.js?v=20260919-6"></script>
+    <script src="calendarViews.js?v=20261009-1"></script>
     <script src="quadrantView.js"></script>
     <script src="taskListView.js"></script>
     <script src="summaryView.js"></script>
@@ -6008,6 +6308,16 @@
             <button onclick="closeWeekConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition" data-page-node-id="HX1y4QHUHvuyy6JiQDuDnL"><i class="fas fa-times text-theme-muted" data-page-node-id="Ikp89V8i1TdMWhtd08Zzdb"></i></button>
         </div>
         <div class="flex-1 overflow-y-auto p-4 space-y-5" data-page-node-id="u5kUBkVGcZKuHu5ojSdRJv">
+            <div class="wc-displaydays-row pt-1" data-page-node-id="wcDaysRow">
+                <div class="text-sm text-theme-primary mb-2" id="wc-displaydays-label" data-page-node-id="wcDaysLabel">显示天数</div>
+                <div id="wc-displaydays" role="radiogroup" aria-labelledby="wc-displaydays-label" class="grid grid-cols-5 gap-1 p-1 rounded-lg bg-theme-tertiary" data-page-node-id="wcDaysGroup">
+                    <button type="button" role="radio" aria-checked="false" data-days="1" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDays1">1 天</button>
+                    <button type="button" role="radio" aria-checked="false" data-days="3" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDays3">3 天</button>
+                    <button type="button" role="radio" aria-checked="false" data-days="5" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDays5">5 天</button>
+                    <button type="button" role="radio" aria-checked="false" data-days="workweek" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDaysWorkweek">工作周</button>
+                    <button type="button" role="radio" aria-checked="false" data-days="7" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDays7">7 天</button>
+                </div>
+            </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="YUACl1zRyldpxUbH2gGYFv">
                 <span id="wc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="sacPl1YdKYTDvcEq8UVAQA">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="Uz3HkTDiGfF0EyINvoZvEH">

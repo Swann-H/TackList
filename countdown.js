@@ -7,6 +7,11 @@ let countdownEditing = null;            // { isAdd:true, id:null } | { isAdd:fal
 let countdownDeleteConfirming = null;   // 正在二次确认的自定义倒计时 id
 let countdownDeleteTimer = null;
 
+// 倒计时视图的「进入前视图」，供右上角返回按钮回到正确入口
+// （与 holiday.js 的 holidayPrevView 同机制；只在经由 switchToCountdownPage 进入时更新，
+//   从 holiday 视图返回 countdown 走的是 switchView，不会覆盖此值）
+let countdownPrevView = 'task';
+
 // 系统默认项的固定 key
 const COUNTDOWN_AUTO_KEY = '__auto_holiday__';
 const COUNTDOWN_MAX_PIN = 2;
@@ -375,20 +380,39 @@ function toggleCountdownPin(key) {
     renderSidebarCountdown();
 }
 
+// ---------------------------------------------------------------- 管理页入口 / 返回
+
+// 切换到倒计时管理视图（记录进入前的视图，供右上角返回按钮使用）
+// 已在倒计时视图时直接忽略，避免把 countdownPrevView 记成 'countdown' 导致返回失效
+function switchToCountdownPage() {
+    if (typeof currentView !== 'undefined' && currentView === 'countdown') return;
+    countdownPrevView = (typeof currentView !== 'undefined') ? currentView : 'task';
+    if (typeof switchView === 'function') switchView('countdown');
+}
+
+// 返回上一个页面
+function closeCountdownView() {
+    if (typeof switchView === 'function') switchView(countdownPrevView || 'task');
+}
+
 // ---------------------------------------------------------------- 管理页渲染
 
 function renderCountdownView(container) {
     if (!container) return;
+
+    // 右上角返回按钮（样式与「设置节假日与调休」右上角返回一致）
+    const backBtn = '<button onclick="closeCountdownView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>';
 
     container.innerHTML =
         '<div class="countdown-container">' +
             (typeof isMobileView === 'function' && isMobileView()
                 ? '<div class="flex items-center justify-between px-4 py-3 border-b border-theme/30 flex-shrink-0">' +
                       '<h1 class="text-lg font-bold text-theme-primary">倒计时</h1>' +
-                      '<button onclick="switchView(\'task\')" class="w-9 h-9 rounded-full border-2 border-theme text-theme-secondary flex items-center justify-center hover:bg-theme-tertiary transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
+                      backBtn +
                   '</div>'
-                : '<div class="flex items-center p-4 pb-2 flex-shrink-0">' +
+                : '<div class="flex items-center justify-between p-4 pb-2 flex-shrink-0">' +
                       '<h1 class="text-2xl font-bold text-theme-primary">倒计时</h1>' +
+                      backBtn +
                   '</div>'
             ) +
             '<div class="px-4 pb-6 space-y-6">' +

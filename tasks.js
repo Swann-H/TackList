@@ -1277,6 +1277,8 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     // 启动描述框「宽度 → 高度」自适应监听（仅一次）：覆盖书写态入场 morph / 宽度档切换 / 窗口缩放
     // 等导致的宽度变化，避免用瞬态窄宽量出偏大高度残留成空白。
     _initDescAutoResize();
+    // 子任务行同理：宽度变化时逐行重算高度，避免「收起态窄宽下量出的多行高度」在书写态残留。
+    _initSubtaskAutoResize();
 
     // 渲染子任务（在面板可见后，确保autoResizeTextarea能正确计算高度）
     if (currentTaskMode === 'subtasks') {
@@ -1892,7 +1894,7 @@ function renderSubtasks() {
         }
         input.placeholder = '输入子任务...';
         input.onkeydown = (e) => handleSubtaskKeydown(e, subtask.id);
-        input.oninput = () => { autoResizeTextarea(input); saveSubtasksToTask(); updateDetailDescriptionPlaceholder(); };
+        input.oninput = () => { autoResizeSubtaskInput(input); saveSubtasksToTask(); updateDetailDescriptionPlaceholder(); };
         
         // 长按行任意位置 300ms 激活拖拽（Pointer Events 驱动，见上方模块说明）；
         // 判定期内移动超过容差或提前松开则静默取消，不影响点击聚焦、双击选词、拖选文本
@@ -1962,8 +1964,8 @@ function renderSubtasks() {
 
         container.appendChild(wrapper);
 
-        // 初始化textarea高度
-        autoResizeTextarea(input);
+        // 初始化子任务文本域高度（不设上限，完整显示）
+        autoResizeSubtaskInput(input);
     });
 }
 
@@ -2808,6 +2810,8 @@ function updateProgressDisplay() {
     }
 }
 
+// 任务标题专用：有 120px 上限（标题太长会挤占正文，且书写态另有 320px 上限覆盖）
+// ⚠️ 别把子任务也接到这里 —— 子任务需要「多长显示多高」，用 autoResizeSubtaskInput。
 function autoResizeTextarea(textarea) {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
@@ -2818,6 +2822,15 @@ function autoResizeTextarea(textarea) {
 // 文本有多长就让框长多高，超出可视区后由 #detail-body 整体滚动，
 // 让详情文本和子任务列表在同一个滚动容器里一起移动，避免描述框内部出现独立滚动条。
 function autoResizeDetailDescription(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = textarea.scrollHeight + 'px';
+}
+
+// 子任务文本域的高度自适应（**不设上限**）
+// 与描述框同一合约：文本有多长就让框长多高，超出可视区由 #detail-body 整体滚动，
+// 既不在子任务框内部出现独立滚动条，也不裁掉任何文字（收起态 / 书写态一致）。
+// 高度同时由 _initSubtaskAutoResize 在「可用宽度变化」时逐行重算（宽度决定换行行数）。
+function autoResizeSubtaskInput(textarea) {
     textarea.style.height = 'auto';
     textarea.style.height = textarea.scrollHeight + 'px';
 }
@@ -6025,7 +6038,7 @@ function applyWriteModeWidth(width) {
 }
 
 function cycleWriteModeWidth() {
-    const cur = (typeof settings !== 'undefined' && settings.writeModeWidth) || 'wide';
+    const cur = (typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard';
     const idx = WRITE_MODE_WIDTHS.indexOf(cur);
     const next = WRITE_MODE_WIDTHS[(idx + 1) % WRITE_MODE_WIDTHS.length];
     if (typeof settings !== 'undefined') settings.writeModeWidth = next;
@@ -6140,6 +6153,39 @@ function _initDescAutoResize() {
         }
     });
     ro.observe(host);
+}
+
+// ==================== 子任务行「宽度 → 高度」自适应 ====================
+// 与上面的描述框同理：子任务文本域的高度由「当前可用宽度下文本换行的行数」决定。
+// 但子任务行的高度此前只在 renderSubtasks() 里量一次，而 renderSubtasks() 通常发生在
+// 收起态（面板 384px 宽 → 文本域可用宽约 289px），长文本在窄宽下换行成 2~3 行被写死；
+// 随后进入书写态 / 切换宽度档 / 缩放窗口把可用宽放大到 770~1200px，文本其实只占 1 行，
+// 文本域却仍是 2~3 行高 → 表现为「只占一行的子任务却有 2~3 行显示高度、勾选框与文字错位」。
+// 这里用 ResizeObserver 监听 #subtasks-container 的宽度：宽度真正变化才逐行重算；
+// 高度变化不会引起宽度变化，故不会死循环（与描述框同一套思路）。
+let _subtaskAutoResizeInited = false;
+let _subtaskLastWidth = -1;
+function _initSubtaskAutoResize() {
+    if (_subtaskAutoResizeInited) return;
+    const host = document.getElementById('subtasks-container');
+    if (!host || typeof ResizeObserver === 'undefined') return;
+    _subtaskAutoResizeInited = true;
+    const ro = new ResizeObserver(() => {
+        const w = Math.round(host.getBoundingClientRect().width);
+        // 隐藏态（文本模式 / 面板未打开）容器宽为 0，直接跳过，避免把高度误算成 0
+        if (w > 0 && w !== _subtaskLastWidth) {
+            _subtaskLastWidth = w;
+            resizeAllSubtaskInputs();
+        }
+    });
+    ro.observe(host);
+}
+
+// 逐行重算子任务文本域高度（宽度变化时调用）
+function resizeAllSubtaskInputs() {
+    const container = document.getElementById('subtasks-container');
+    if (!container) return;
+    container.querySelectorAll('textarea[data-subtask-id]').forEach((ta) => autoResizeSubtaskInput(ta));
 }
 
 function _initWmGlass() {
@@ -6283,11 +6329,11 @@ function _wmMorphBegin(dir) {
     // 叠加，观感就是「滑进来又滑回去」）。入场/出场早已播完，这里直接清干净。
     if (panel) panel.classList.remove('panel-fade-in', 'panel-fade-out');
     b.classList.remove(other);
-    // 进入要让 fixed 面板先等于「书写态最终几何」，左边界取侧边栏真实宽度（不硬编码 260px）
-    if (dir === 'in') {
-        const sb = document.getElementById('sidebar');
-        if (sb) b.style.setProperty('--wm-morph-left', Math.round(sb.getBoundingClientRect().width) + 'px');
-    }
+    // 进入要让 fixed 面板先等于「书写态最终几何」。
+    // ⚠️ 书写态侧栏已完全脱离文档流（CSS 里 position:fixed 贴视口左下角），面板左边界恒为 0
+    //    → 这里**不再**注入 --wm-morph-left，交给 CSS 的 var(--wm-morph-left, 0px) 兜底。
+    //    旧实现取的是「进入书写态之前」的侧栏实测宽（恒 260px），侧栏改为悬浮后必然错位、
+    //    会让面板在动画收尾时横向跳变。若日后把侧栏改回占布局位，必须恢复这里的取值。
     b.classList.remove(cls);
     void b.offsetWidth;  // 连点时强制重播
     b.classList.add(cls);
@@ -6328,7 +6374,7 @@ function enterDetailWriteMode() {
     // 「原地退场」的 fade-out 就无处可播了。返回值用于落帧后精算毛玻璃带。
     const morphSec = _wmMorphBegin('in');
     document.body.classList.add('detail-write-mode');
-    applyWriteModeWidth((typeof settings !== 'undefined' && settings.writeModeWidth) || 'wide');
+    applyWriteModeWidth((typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard');
     updateWriteModeCrumb();
     syncWriteModeTimeMenu();
     const dismiss = document.getElementById('detail-dismiss-btn');

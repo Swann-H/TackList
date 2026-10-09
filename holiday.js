@@ -2,6 +2,82 @@
 
 const STANDARD_FESTIVALS = ['元旦', '春节', '清明节', '劳动节', '端午节', '中秋节', '国庆节'];
 
+// ===== 节日当天预置（兜底）=====
+// 背景：holiday_data.json 只覆盖到已知年份。一旦当前年份假期全部结束、且下一年数据为空，
+//       getNextHoliday() 会返回 null，侧边栏显示「暂无假期信息」。
+// 方案：启动时预置「今年 / 明年 / 后年」7 个标准节日的「当天」记录作为兜底
+//       （不预置调休——调休无法推算，官方安排出来后再导入/手动补全即可）。
+// 原则：只补空缺，绝不覆盖已有数据（官方抓取 / 手动编辑 / 导入）。
+// 触发：应用启动、loadHolidayData 之后调用一次（见 app.js init）。
+
+// 计算某年 7 个标准节日的「当天」公历日期，返回 { 'MM-DD': '节日名' }
+//   - 公历固定：元旦 01-01、劳动节 05-01、国庆节 10-01
+//   - 节气：清明节 = 当年「清明」节气当天（LunarCalendar.getSolarTerms）
+//   - 农历：春节 = 正月初一、端午节 = 五月初五、中秋节 = 八月十五（逐日反查）
+function computeFestivalActualDates(year) {
+    const result = {};
+    result['01-01'] = '元旦';
+    result['05-01'] = '劳动节';
+    result['10-01'] = '国庆节';
+
+    if (typeof LunarCalendar === 'undefined') return result;
+
+    // 清明节：当年「清明」节气所在公历日
+    const terms = LunarCalendar.getSolarTerms(year);
+    for (const md in terms) {
+        if (terms[md] === '清明') { result[md] = '清明节'; break; }
+    }
+
+    // 农历节日：遍历全年逐日反查（春节可能落在 1/2 月，中秋可能落在 9/10 月）
+    const lunarTargets = { '1-1': '春节', '5-5': '端午节', '8-15': '中秋节' };
+    const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const daysInYear = isLeapYear ? 366 : 365;
+    const cursor = new Date(year, 0, 1);
+    for (let i = 0; i < daysInYear; i++) {
+        const m = cursor.getMonth() + 1;
+        const d = cursor.getDate();
+        const lunar = LunarCalendar.solarToLunar(year, m, d);
+        if (lunar && !lunar.isLeap) {
+            const festival = lunarTargets[lunar.lMonth + '-' + lunar.lDay];
+            const md = String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+            // 中秋与国庆同为 10-01 时保留国庆（公历固定优先，且 result 先写入）
+            if (festival && !result[md]) result[md] = festival;
+        }
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return result;
+}
+
+// 为单年补全节日当天（仅补空缺）；有改动返回 true
+function ensureFestivalSeedsForYear(year) {
+    const yearStr = String(year);
+    if (!holidayData[yearStr]) holidayData[yearStr] = { holidays: {}, workdays: {} };
+    const yd = holidayData[yearStr];
+    if (!yd.holidays) yd.holidays = {};
+    if (!yd.workdays) yd.workdays = {};
+
+    const actual = computeFestivalActualDates(year);
+    let changed = false;
+    for (const md in actual) {
+        // 该日已有假期或调休记录 → 保留原值，不覆盖
+        if (yd.holidays[md] || yd.workdays[md]) continue;
+        yd.holidays[md] = actual[md];
+        changed = true;
+    }
+    return changed;
+}
+
+// 检查点：确保「今年 / 明年 / 后年」的节日当天都已预置；有改动则落盘
+function ensureFestivalSeeds() {
+    const baseYear = new Date().getFullYear();
+    let changed = false;
+    for (let y = baseYear; y <= baseYear + 2; y++) {
+        if (ensureFestivalSeedsForYear(y)) changed = true;
+    }
+    if (changed) saveHolidayData(holidayData);
+    return changed;
+}
+
 let holidayCurrentYear = new Date().getFullYear();
 // 编辑状态: { groupKey, type, festival, isAdd } 或 null
 let holidayEditing = null;

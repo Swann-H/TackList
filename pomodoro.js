@@ -416,28 +416,15 @@ function _syncPomodoroModeToggleBtn() {
     if (icon) icon.className = detail ? 'fas fa-chart-simple text-xl' : 'fas fa-list-check text-xl';
 }
 
-/** 顶栏「关闭」按钮在番茄语境下语义改为「返回专注概况」（图标与 title 就地改造，退出时还原）。 */
-function _patchDetailDismissForPomodoro(on) {
-    const btn = document.getElementById('detail-dismiss-btn');
-    if (!btn) return;
-    const icon = btn.querySelector('i.wm-hide');
-    if (on) {
-        if (btn.dataset.pomoTitle === undefined) btn.dataset.pomoTitle = btn.title || '';
-        btn.title = '返回专注概况';
-        if (icon && icon.dataset.pomoClass === undefined) {
-            icon.dataset.pomoClass = icon.className;
-            icon.className = 'fas fa-chart-simple text-theme-muted wm-hide';
-        }
-    } else {
-        if (btn.dataset.pomoTitle !== undefined) {
-            btn.title = btn.dataset.pomoTitle;
-            delete btn.dataset.pomoTitle;
-        }
-        if (icon && icon.dataset.pomoClass !== undefined) {
-            icon.className = icon.dataset.pomoClass;
-            delete icon.dataset.pomoClass;
-        }
-    }
+/** 顶部标题：文本即当前模式，单击即切换（等同左栏「切换圆钮」，见 HTML 的 onclick）。
+ * 右栏详情态的顶栏「返回专注概况」按钮已隐藏（CSS 作用域覆盖），标题单击成为右栏内
+ * 回到概况的主入口，故 title 提示随模式更新，给用户「这里可点」的线索。 */
+function _syncPomodoroRightTitle() {
+    const el = document.getElementById('pomodoro-right-title');
+    if (!el) return;
+    const detail = _pomodoroRightMode === 'detail';
+    el.textContent = detail ? '任务详情' : '专注概况';
+    el.title = detail ? '点击返回专注概况' : '点击查看任务详情';
 }
 
 /** 把主视图详情面板搬入右栏槽位并渲染指定任务。 */
@@ -455,7 +442,6 @@ function _mountDetailIntoRight(taskId) {
         && !panel.classList.contains('hidden');
     _pomodoroDetailHosted = true;
     _pomodoroDetailTaskId = taskId;
-    _patchDetailDismissForPomodoro(true);
     // readOnly=false：专注中需要可编辑。fromClick=false 保证不会因「再点同一任务」被当成收起。
     // 切任务时 openTaskDetailPanel 内部会 saveTaskDetailWithoutClose()（含 renderView/renderLists），
     // 主视图不可见 → 抑制掉这次全量重渲染，否则会阻塞紧随其后的入场动画。
@@ -477,7 +463,6 @@ function _unmountDetailFromRight(keepOpen) {
     // 先摘标记：后续 closeTaskDetailPanel() 不应再被「托管」语义拦截
     _pomodoroDetailHosted = false;
     _pomodoroDetailTaskId = null;
-    _patchDetailDismissForPomodoro(false);
     if (panel) {
         // 切走前把待落盘的编辑立即写回（标题/备注走防抖，不走这里会丢最后一次输入）。
         // ⚠️ 这句必须在抑制范围内：实测有 pending 编辑时它内部走 saveTaskDetailWithoutClose()
@@ -518,13 +503,12 @@ function _syncPomodoroRightPane() {
         const rightPanel = document.getElementById('pomodoro-right-panel');
         const slot = document.getElementById('pomodoro-detail-slot');
         const emptyEl = document.getElementById('pomodoro-detail-empty');
-        const titleEl = document.getElementById('pomodoro-right-title');
         if (!rightPanel || !slot) return;
 
         if (_pomodoroRightMode !== 'detail') {
             _unmountDetailFromRight(false);
             rightPanel.classList.remove('pt-detail', 'pt-detail-empty');
-            if (titleEl) titleEl.textContent = '专注概况';
+            _syncPomodoroRightTitle();
             _pomoEnterFx(document.getElementById('pomodoro-overview-content'), 'fx-enter-from-left');
             _syncPomodoroModeToggleBtn();
             return;
@@ -538,7 +522,7 @@ function _syncPomodoroRightPane() {
             const handleIcon = document.getElementById('pomodoro-overview-toggle-icon');
             if (handleIcon) handleIcon.className = 'fas fa-chevron-up text-sm';
         }
-        if (titleEl) titleEl.textContent = '任务详情';
+        _syncPomodoroRightTitle();
 
         const taskId = pomodoroState.currentTaskId;
         const task = taskId ? tasks.find(t => t.id === taskId) : null;
@@ -713,8 +697,8 @@ function closePomodoroPage() {
             _unmountDetailFromRight(true);
             const rightPanel = document.getElementById('pomodoro-right-panel');
             if (rightPanel) rightPanel.classList.remove('pt-detail', 'pt-detail-empty');
-            const titleEl = document.getElementById('pomodoro-right-title');
-            if (titleEl) titleEl.textContent = '专注概况';
+            // 标题同步回当前模式（_pomodoroRightMode 是会话记忆，重进番茄页会再同步一次）
+            _syncPomodoroRightTitle();
             if (wasVisible && hostedTaskId) restoreDetailId = hostedTaskId;
             restoreDetailReadOnly = false;
         }
@@ -2803,7 +2787,7 @@ function updateSidebarPomodoroTimer() {
                        pomodoroState.state === 'pause' ||
                        pomodoroState.state === 'completed' ||
                        pomodoroState.state === 'rest_ended';
-    
+
     if (shouldShow) {
         sidebarTimer.classList.remove('hidden');
         

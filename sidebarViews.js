@@ -138,7 +138,7 @@ function renderLists(force) {
                 const extKey = '__extsrc__:' + sub.id;
                 const active = currentListId === extKey;
                 btn.className = 'w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition flex items-center gap-2 ' +
-                    (active ? 'bg-accent-soft text-accent-dark' : 'text-theme-primary') +
+                    (active ? 'sidebar-active' : 'text-theme-primary') +
                     (sub.enabled ? '' : ' opacity-50');
                 const hex = (typeof getCalendarSubscriptionColorHex === 'function') ? getCalendarSubscriptionColorHex(sub.id) : '#9ca3af';
                 btn.innerHTML = '<i class="fas fa-calendar-day w-3 text-center text-xs" style="color:' + hex + '"></i>' +
@@ -157,7 +157,7 @@ function renderLists(force) {
     if (archivedLists.length > 0) {
         const archivedBtn = document.createElement('button');
         archivedBtn.id = 'sidebar-archived-btn';
-        archivedBtn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-muted flex items-center justify-center gap-2 ${currentListId === '__archived__' ? 'bg-theme-tertiary font-semibold' : ''}`;
+        archivedBtn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-muted flex items-center justify-center gap-2 ${currentListId === '__archived__' ? 'sidebar-active' : ''}`;
         archivedBtn.innerHTML = `
             <i class="fas fa-archive w-3 text-center text-xs"></i>
             <span class="sidebar-text flex-1">已归档</span>
@@ -202,7 +202,7 @@ function renderListNode(node, depth, container, uncompletedMap) {
     const isFolder = !!node.isFolder;
     const row = document.createElement('button');
     row.dataset.listId = node.id;
-    row.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 group ${currentListId === node.id ? 'bg-accent-soft text-accent-dark' : ''}`;
+    row.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 group ${currentListId === node.id ? 'sidebar-active' : ''}`;
     row.style.cursor = 'pointer';
 
     // 默认清单不可拖拽、不可作为合并目标
@@ -220,13 +220,13 @@ function renderListNode(node, depth, container, uncompletedMap) {
         // 名称与普通清单/标签同竖线对齐（文件夹图标占 w-3，与普通清单圆点 w-3 同宽）
         const nameHtml = editingListId === node.id && node.id !== 'default'
             ? inlineNameInput('new-list-name', node.name || '', 'saveListInput()', 'editingListId=null; renderLists();')
-            : `<span class="sidebar-text flex-1 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑清单集">${node.name || '未命名清单集'}</span>`;
+            : `<span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑清单集">${node.name || '未命名清单集'}</span>`;
         const folderCount = folderUncompleted(uncompletedMap, node.id);
         // 行尾：默认展示任务计数，悬停时替换为编辑图标（w-5 等宽，避免悬停引起布局抖动）
         row.innerHTML = `
             <i class="fas ${expanded ? 'fa-folder-open' : 'fa-folder'} w-3 text-center text-sm flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="color:${node.color || '#f59e0b'}" onclick="event.stopPropagation(); toggleFolder('${node.id}')" ondblclick="event.stopPropagation(); editList('${node.id}')" title="${expanded ? '收起' : '展开'}清单集（双击编辑）"></i>
             ${nameHtml}
-            ${folderCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right flex-shrink-0 group-hover:hidden">${folderCount}</span>` : '<span class="sidebar-count w-5 flex-shrink-0 group-hover:hidden"></span>'}
+            ${folderCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted flex-shrink-0 group-hover:hidden">${folderCount}</span>` : '<span class="sidebar-count flex-shrink-0 group-hover:hidden"></span>'}
             <i class="fas fa-pen text-xs text-theme-muted hidden group-hover:flex items-center justify-center w-5 h-5 rounded cursor-pointer hover:bg-theme-tertiary hover:text-accent transition flex-shrink-0" onclick="event.stopPropagation(); editList('${node.id}')" title="编辑清单集"></i>
         `;
         // 单击清单集整行 = 筛选其内部所有清单的任务（复用 selectList，与普通清单行为一致）；
@@ -236,11 +236,11 @@ function renderListNode(node, depth, container, uncompletedMap) {
         const uncompletedCount = uncompletedMap[node.id] || 0;
         const nameHtml = editingListId === node.id && node.id !== 'default'
             ? inlineNameInput('new-list-name', node.name || '', 'saveListInput()', 'editingListId=null; renderLists();')
-            : `<span class="sidebar-text flex-1 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑名称">${node.name}</span>`;
+            : `<span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer" ondblclick="event.stopPropagation(); editList('${node.id}')" title="双击编辑名称">${node.name}</span>`;
         row.innerHTML = `
             <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${node.color}" onclick="event.stopPropagation(); editList('${node.id}')"></span>
             ${nameHtml}
-            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
+            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted">${uncompletedCount}</span>` : '<span class="sidebar-count"></span>'}
         `;
         row.onclick = () => selectList(node.id);
     }
@@ -896,6 +896,13 @@ function selectList(listId) {
     }
     currentListId = listId;
     currentFilter = null;
+    // 侧边栏分组单选语义：清单 / 标签 / 自定义过滤器 互斥。
+    // 之前这里漏清 currentTagIds（与 toggleTagFilter 不对称），导致「选标签 → 再选清单」时
+    // currentListId 与 currentTagIds 同时非空，而 filterTasks 中二者是 AND 交集
+    // → 结果为空集（右侧无任务），且 updateSidebarHighlight 中标签分支优先于清单分支
+    // → 高亮仍停在标签上。选清单必须一并清空标签与自定义过滤器。
+    currentTagIds = [];
+    currentFilterId = null;
     // per-list 视图偏好：清单有偏好视图时切换到该视图
     const prefView = _getCurrentListViewPrefView();
     if (prefView && currentView !== prefView) {
@@ -1087,23 +1094,23 @@ function updateSidebarHighlight() {
     sidebarBtns.forEach(id => {
         const btn = document.getElementById(id);
         if (btn) {
-            btn.classList.remove('bg-theme-tertiary', 'font-semibold');
+            btn.classList.remove('sidebar-active');
         }
     });
 
     // 清除标签按钮高亮
     document.querySelectorAll('.sidebar-tag-btn').forEach(btn => {
-        btn.classList.remove('bg-theme-tertiary', 'font-semibold');
+        btn.classList.remove('sidebar-active');
     });
 
     // 清除过滤器按钮高亮
     document.querySelectorAll('.sidebar-filter-btn').forEach(btn => {
-        btn.classList.remove('bg-theme-tertiary', 'font-semibold');
+        btn.classList.remove('sidebar-active');
     });
 
     // 清除清单按钮高亮
     document.querySelectorAll('#lists-container button').forEach(btn => {
-        btn.classList.remove('bg-accent-soft', 'text-accent-dark', 'bg-theme-tertiary', 'font-semibold');
+        btn.classList.remove('sidebar-active');
     });
 
     // 清除侧边栏倒计时框高亮
@@ -1114,20 +1121,20 @@ function updateSidebarHighlight() {
     if (currentFilterId) {
         // 自定义过滤器激活时
         const btn = document.getElementById(`sidebar-filter-${currentFilterId}`);
-        if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+        if (btn) btn.classList.add('sidebar-active');
     } else if (currentTagIds && currentTagIds.length > 0) {
         // 标签筛选激活时，高亮对应的标签按钮
         currentTagIds.forEach(tagId => {
             const btn = document.getElementById(`sidebar-tag-${tagId}`);
-            if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+            if (btn) btn.classList.add('sidebar-active');
         });
     } else if (isSpecialTimeFilter()) {
         const btnId = SIDEBAR_ITEM_BTN_IDS[currentFilter];
         const btn = btnId ? document.getElementById(btnId) : null;
-        if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+        if (btn) btn.classList.add('sidebar-active');
     } else if (currentView === 'summary') {
         const btn = document.getElementById('sidebar-summary-btn');
-        if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+        if (btn) btn.classList.add('sidebar-active');
     } else if (currentView === 'countdown') {
         if (cdBox) cdBox.classList.add('cd-active');
     } else if (currentView === 'holiday') {
@@ -1136,16 +1143,16 @@ function updateSidebarHighlight() {
         // 六个任务筛选视图（任务/日程/周/月/四象限/看板）中选中清单时，跨视图保持清单高亮
         if (currentListId === '__archived__') {
             const btn = document.getElementById('sidebar-archived-btn');
-            if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+            if (btn) btn.classList.add('sidebar-active');
         } else {
             // 清单选中时，高亮对应的清单按钮
             const listBtn = document.querySelector(`#lists-container button[data-list-id="${currentListId}"]`);
-            if (listBtn) listBtn.classList.add('bg-accent-soft', 'text-accent-dark');
+            if (listBtn) listBtn.classList.add('sidebar-active');
         }
     } else if (!currentListId) {
         // "所有任务"：不依赖 currentView，跨视图保持高亮（与"最近7天"逻辑一致）
         const btn = document.getElementById('sidebar-all-tasks-btn');
-        if (btn) btn.classList.add('bg-theme-tertiary', 'font-semibold');
+        if (btn) btn.classList.add('sidebar-active');
     }
 }
 
@@ -1177,9 +1184,18 @@ function _computeSidebarSpecialCounts() {
 
 function updateSidebarCounts() {
     const counts = _computeSidebarSpecialCounts();
+    // 超过 99 显示「99+」：配合 .sidebar-count 的 min-width，三位数不再把标题文字挤爆；
+    // 被截断时把准确值挂到 title，鼠标悬浮即可看到真实数字
     const setCount = function (id, n) {
         const el = document.getElementById(id);
-        if (el) el.textContent = n > 0 ? n : '';
+        if (!el) return;
+        if (n > 99) {
+            el.textContent = '99+';
+            el.title = String(n);
+        } else {
+            el.textContent = n > 0 ? String(n) : '';
+            el.removeAttribute('title');
+        }
     };
     setCount('sidebar-all-tasks-count', counts.allTasks);
     setCount('sidebar-today-count', counts.today);
@@ -1258,14 +1274,14 @@ function renderTags() {
         const isActive = currentTagIds && currentTagIds.includes(tag.id);
         const btn = document.createElement('button');
         btn.id = `sidebar-tag-${tag.id}`;
-        btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-tag-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
+        btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-tag-btn ${isActive ? 'sidebar-active' : ''}`;
         const tagNameHtml = editingTagId === tag.id
             ? inlineNameInput('new-tag-name', tag.name || '', 'saveTagInput()', 'editingTagId=null; renderTags();')
-            : `<span class="sidebar-text flex-1 cursor-pointer" ondblclick="event.stopPropagation(); showAddTagInput('${tag.id}')" title="双击编辑名称">${tag.name}</span>`;
+            : `<span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer" ondblclick="event.stopPropagation(); showAddTagInput('${tag.id}')" title="双击编辑名称">${tag.name}</span>`;
         btn.innerHTML = `
             <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-green-400 transition" style="background-color: ${tag.color}" onclick="event.stopPropagation(); showAddTagInput('${tag.id}')"></span>
             ${tagNameHtml}
-            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
+            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted">${uncompletedCount}</span>` : '<span class="sidebar-count"></span>'}
         `;
         btn.onclick = () => toggleTagFilter(tag.id);
         // 拖拽排序（仅重排顺序，不使用清单集概念）
@@ -1402,14 +1418,14 @@ function renderFilters() {
 
         const btn = document.createElement('button');
         btn.id = `sidebar-filter-${filter.id}`;
-        btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'bg-theme-tertiary font-semibold' : ''}`;
+        btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'sidebar-active' : ''}`;
         const filterNameHtml = editingFilterId === filter.id
             ? inlineNameInput('new-filter-name', filter.name || '', 'saveFilterInput()', 'editingFilterId=null; renderFilters();')
-            : `<span class="sidebar-text flex-1 cursor-pointer" ondblclick="event.stopPropagation(); editFilter('${filter.id}')" title="双击编辑名称">${filter.name}</span>`;
+            : `<span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer" ondblclick="event.stopPropagation(); editFilter('${filter.id}')" title="双击编辑名称">${filter.name}</span>`;
         btn.innerHTML = `
             <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')"></span>
             ${filterNameHtml}
-            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted w-5 text-right">${uncompletedCount}</span>` : '<span class="sidebar-count w-5"></span>'}
+            ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted">${uncompletedCount}</span>` : '<span class="sidebar-count"></span>'}
         `;
         btn.onclick = () => applyFilter(filter.id);
         // 拖拽排序（仅重排顺序，不使用清单集概念）

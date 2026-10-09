@@ -39,6 +39,37 @@ function getMonthConfig() {
     return c;
 }
 
+// ==================== 显示天数（周视图「显示天数」配置） ====================
+// 取值：'1' | '3' | '5' | 'workweek' | '7'（默认）
+// 任何非法/缺省值一律回落 '7'，保证旧数据无感升级（等价于原 7 天行为）。
+function getWeekDisplayDays() {
+    const v = getWeekConfig().displayDays;
+    return (v === '1' || v === '3' || v === '5' || v === 'workweek') ? v : '7';
+}
+
+// 计算周视图窗口：{ start, days, step }
+//   start —— 窗口首日 00:00（渲染 N 列即以此为第一天）
+//   days  —— 窗口天数
+//   step  —— 翻页步长（navigateWeek 每次移动的天数）
+//
+// start 与 step 刻意分离，因为两类模式的锚点语义不同：
+//   · '7' / 'workweek'：currentDate 只是「落在本周的任意一天」，窗口起点由周起始日推导，
+//     翻页按整周走（step=7）。
+//   · '1' / '3' / '5'：滚动窗口，currentDate 本身就是窗口起点，翻页走 N 天（step=N）。
+//     故 5 天模式 =「今天起未来 5 天」。
+// 工作周恒为周一~周五：第二个参数强制 true，不受「周起始日」设置影响。
+function getWeekViewRange(anchorDate, mode, weekStartsOnMonday) {
+    const d0 = new Date(anchorDate);
+    d0.setHours(0, 0, 0, 0);
+    switch (mode) {
+        case '1': return { start: d0, days: 1, step: 1 };
+        case '3': return { start: d0, days: 3, step: 3 };
+        case '5': return { start: d0, days: 5, step: 5 };
+        case 'workweek': return { start: getWeekStartDate(d0, true), days: 5, step: 7 };
+        default: return { start: getWeekStartDate(d0, weekStartsOnMonday), days: 7, step: 7 };
+    }
+}
+
 // 周视图配置面板（右侧滑出）
 _registerViewConfig('week', 'weekConfigPanel', 'week-config-btn');
 function toggleWeekConfig() {
@@ -51,18 +82,43 @@ function openWeekConfig() {
     const slEl = document.getElementById('wc-showlunar');
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (slEl) slEl.checked = cfg.showLunar !== false;
+    // 显示天数：回填分段控件选中态（归一化后的值，非法值显示为「7 天」）
+    const daysWrap = document.getElementById('wc-displaydays');
+    if (daysWrap) {
+        const cur = getWeekDisplayDays();
+        daysWrap.querySelectorAll('.wc-days-btn').forEach(b => {
+            b.classList.toggle('is-on', b.dataset.days === cur);
+            b.setAttribute('aria-checked', b.dataset.days === cur ? 'true' : 'false');
+        });
+    }
     openViewConfigPanel('week', (forSwitch) => {
         saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
         if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
     });
 }
 function closeWeekConfig() { closeViewConfigPanel('week'); }
+// 分段控件点击：先切换选中态，再走统一变更流程。
+// 选中态一律用类切换（不写内联样式），与项目「激活态走 .is-on」的约定一致。
+function wcSelectDays(btn) {
+    if (!btn || !btn.parentElement) return;
+    btn.parentElement.querySelectorAll('.wc-days-btn').forEach(b => {
+        const on = (b === btn);
+        b.classList.toggle('is-on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    onWeekConfigChange();
+}
 function onWeekConfigChange() {
     const target = _ensureListViewPrefs('week') || settings.weekConfig;
     const scEl = document.getElementById('wc-showcompleted');
     const slEl = document.getElementById('wc-showlunar');
     if (scEl) target.showCompleted = scEl.checked;
     if (slEl) target.showLunar = slEl.checked;
+    const daysWrap = document.getElementById('wc-displaydays');
+    if (daysWrap) {
+        const on = daysWrap.querySelector('.wc-days-btn.is-on');
+        if (on && on.dataset.days) target.displayDays = on.dataset.days;
+    }
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
@@ -175,22 +231,26 @@ function buildWeekAllDayTaskItemHtml(task) {
              </div>`;
 }
 
-// ==================== 周视图数据层缓存（懒加载 + 相邻周预热） ====================
+// ==================== 周视图数据层缓存（懒加载 + 相邻窗口预热） ====================
 // 设计要点：
-// 1. 以「周起始日」为 key，缓存该周 7 天的任务分组（全天/定时）与时间块布局结果。
-//    空周（0 任务）同样落缓存并带 hasAnyTasks=false —— 「无日程」是一等状态，
+// 1. 以「窗口起点 + 天数」为 key，缓存该窗口 N 天的任务分组（全天/定时）与时间块布局结果。
+//    ⚠️ 天数必须入键：默认「周起始日=周一」时，7 天模式与工作周的起点同为本周周一，
+//    若只用起点作键，5 列与 7 列结果会互相覆盖，切模式后渲染出错列数。
+//    空窗口（0 任务）同样落缓存并带 hasAnyTasks=false —— 「无日程」是一等状态，
 //    而不是「取不到数据」。这正是旧实现出问题的根源：把空周当成「无需渲染」，
 //    直接丢弃整周网格，导致周视图一片空白。
 // 2. 缓存签名覆盖所有影响 getTasksForDate 结果的筛选/设置状态（清单、标签、
 //    过滤器、周起始日、显示已完成、隐藏外部日历、当天日期）；签名变化即整体丢弃。
+//    显示天数（displayDays）**不**进签名：它已体现在缓存键里，不同模式各自独立缓存，
+//    切换模式反而能命中旧缓存，无需清空。
 // 3. 任务数据的结构性变更（增删/改期/导入/多标签页同步/服务端刷新/版本冲突合并）
 //    由 invalidateWeekViewCache() 主动失效，与 invalidateScheduleFilterCache、
 //    invalidateTaskListGroupsCache 同一约定（见 data.js 各写入漏斗）。
-// 4. 渲染完成后延迟预热 ±1 周：只填充缓存、不触碰 DOM，用户翻页时直接命中；
-//    若用户在预热前就翻页，目标周按需计算，行为与预热前一致（无功能回退）。
+// 4. 渲染完成后延迟预热 ±1 个「窗口步长」：只填充缓存、不触碰 DOM，用户翻页时直接命中；
+//    若用户在预热前就翻页，目标窗口按需计算，行为与预热前一致（无功能回退）。
 // 5. 缓存值只持有任务对象引用（不复制），单条开销极小；仍设上限并按插入顺序淘汰，
-//    避免长会话下跨周浏览导致 Map 无限增长。
-let _weekAggCache = new Map();   // weekStartStr -> 周聚合结果
+//    避免长会话下跨窗口浏览导致 Map 无限增长。
+let _weekAggCache = new Map();   // "rangeStartStr#days" -> 窗口聚合结果
 let _weekAggSig = null;          // 当前缓存对应的筛选签名
 let _weekPrewarmTimer = null;    // 相邻周预热定时器（重渲染前清除，避免定时器堆积）
 const WEEK_AGG_CACHE_MAX = 15;   // 缓存条目上限（约 ±7 周）
@@ -219,12 +279,13 @@ function invalidateWeekViewCache() {
     _weekAggSig = null;
 }
 
-// 取某周的聚合结果：7 天 × { 全天任务、定时任务、时间块布局 } + hasAnyTasks。
-// 命中缓存直接返回；未命中才做 7 次 getTasksForDate（O(7 × 任务数)，大数据量下
-// 是周视图渲染的主要开销）与 layoutDayTasks，并把结果（含空周）写入缓存。
+// 取某个窗口的聚合结果：days 天 × { 全天任务、定时任务、时间块布局 } + hasAnyTasks。
+// 命中缓存直接返回；未命中才做 days 次 getTasksForDate（O(days × 任务数)，大数据量下
+// 是周视图渲染的主要开销）与 layoutDayTasks，并把结果（含空窗口）写入缓存。
 // 注意：时间块布局依赖 weekViewHourStart / hourHeight，二者为常量（6 / 60，全项目无赋值点），
 // 因此无需纳入签名；若将来做成可配置，必须一并加入 _getWeekAggSig。
-function getWeekAggregate(weekStartDate) {
+function getWeekAggregate(rangeStart, days) {
+    const dayCount = (typeof days === 'number' && days > 0) ? days : 7;
     const sig = _getWeekAggSig();
     if (sig !== _weekAggSig) {
         _weekAggCache.clear();
@@ -232,13 +293,14 @@ function getWeekAggregate(weekStartDate) {
     }
 
     const weekDays = [];
-    for (let i = 0; i < 7; i++) {
-        const d = new Date(weekStartDate);
+    for (let i = 0; i < dayCount; i++) {
+        const d = new Date(rangeStart);
         d.setDate(d.getDate() + i);
         weekDays.push(d);
     }
-    const weekStartStr = formatDate(weekDays[0]);
-    const cached = _weekAggCache.get(weekStartStr);
+    // 缓存键 = 窗口起点 + 天数（见文件头「设计要点 1」为何必须带天数）
+    const cacheKey = formatDate(weekDays[0]) + '#' + dayCount;
+    const cached = _weekAggCache.get(cacheKey);
     if (cached) return cached;
 
     const showCompleted = getWeekConfig().showCompleted !== false;
@@ -259,24 +321,27 @@ function getWeekAggregate(weekStartDate) {
         if (allDay.length > 0 || timed.length > 0) hasAnyTasks = true;
     });
 
-    const result = { weekStartStr, weekDays, allDayTasks, timedTasks, layouts, hasAnyTasks };
-    _weekAggCache.set(weekStartStr, result);
+    const result = { rangeStartStr: cacheKey, weekDays, allDayTasks, timedTasks, layouts, hasAnyTasks };
+    _weekAggCache.set(cacheKey, result);
     if (_weekAggCache.size > WEEK_AGG_CACHE_MAX) {
-        // Map 保持插入顺序：淘汰最旧条目（连续翻页场景下正好淘汰最远的周）
+        // Map 保持插入顺序：淘汰最旧条目（连续翻页场景下正好淘汰最远的窗口）
         _weekAggCache.delete(_weekAggCache.keys().next().value);
     }
     return result;
 }
 
-// 预热相邻周（±1 周）：延迟到本次渲染结束后执行，只填缓存不动 DOM
-function _prewarmAdjacentWeeks(weekStartDate) {
+// 预热相邻窗口（±1 个窗口步长）：延迟到本次渲染结束后执行，只填缓存不动 DOM。
+// 步长随模式变化（7 天/工作周 = 7 天；1/3/5 天 = 对应天数），故不能写死 7。
+function _prewarmAdjacentWeeks(rangeStart, days, stepDays) {
     if (_weekPrewarmTimer) { clearTimeout(_weekPrewarmTimer); _weekPrewarmTimer = null; }
+    const d = (typeof days === 'number' && days > 0) ? days : 7;
+    const s = (typeof stepDays === 'number' && stepDays > 0) ? stepDays : d;
     _weekPrewarmTimer = setTimeout(() => {
         _weekPrewarmTimer = null;
-        [-1, 1].forEach(step => {
-            const ws = new Date(weekStartDate);
-            ws.setDate(ws.getDate() + step * 7);
-            getWeekAggregate(ws); // 命中缓存则为空操作
+        [-1, 1].forEach(k => {
+            const ws = new Date(rangeStart);
+            ws.setDate(ws.getDate() + k * s);
+            getWeekAggregate(ws, d); // 命中缓存则为空操作
         });
     }, 120);
 }
@@ -380,9 +445,13 @@ function _observeWeekNavPill() {
 }
 
 function renderWeekView(container) {
-    // 周聚合（含空周）统一走缓存：命中则零开销复用，未命中才计算并落缓存
-    const weekStart = getWeekStartDate(currentDate, settings.weekStart === 'monday');
-    const agg = getWeekAggregate(weekStart);
+    // 显示天数：移动端固定 7 天 —— 移动端单日模式（mobile.js/enhanceWeekViewMobile）
+    // 依赖 7 列结构，故本设置只作用于桌面端（见 DESIGN_周视图显示天数.md 决策 3）。
+    const mobile = typeof isMobileView === 'function' && isMobileView();
+    const mode = mobile ? '7' : getWeekDisplayDays();
+    const range = getWeekViewRange(currentDate, mode, settings.weekStart === 'monday');
+    // 窗口聚合（含空窗口）统一走缓存：命中则零开销复用，未命中才计算并落缓存
+    const agg = getWeekAggregate(range.start, range.days);
     const weekDays = agg.weekDays;
     const allDayTasks = agg.allDayTasks;
     const layouts = agg.layouts;
@@ -393,14 +462,19 @@ function renderWeekView(container) {
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     
-    const weekNum = getWeekNumber(weekDays[0], settings.weekStart === 'monday');
+    // 左上角标签：周类模式（7 天 / 工作周）显示周序号；滚动模式（1/3/5 天）显示窗口首日 M/D
+    // —— 「第 N 周」对滚动窗口没有意义，首日日期更便于定位。
+    const isWeekLike = (mode === '7' || mode === 'workweek');
+    const cornerLabel = isWeekLike
+        ? `${getWeekNumber(weekDays[0], settings.weekStart === 'monday')}周`
+        : `${range.start.getMonth() + 1}/${range.start.getDate()}`;
     
     const hourHeight = 60;
     const totalHours = weekViewHourEnd - weekViewHourStart;
     
     let allDayHtml = '';
     allDayHtml += '<div class="flex-shrink-0 flex week-header-sticky" style="position: sticky; top: 0; z-index: 15;">';
-    allDayHtml += `<div class="flex-shrink-0" style="width: 52px;"><div class="text-xs text-theme-muted text-right pr-2 pt-1">${weekNum}周</div></div>`;
+    allDayHtml += `<div class="flex-shrink-0" style="width: 52px;"><div class="text-xs text-theme-muted text-right pr-2 pt-1">${cornerLabel}</div></div>`;
     allDayHtml += '<div class="flex-1 flex min-w-0">';
     weekDays.forEach(date => {
         const dateStr = formatDate(date);
@@ -535,10 +609,10 @@ function renderWeekView(container) {
             </div>
         </div>`;
     
-    // 底部导航栏标题：与其他视图统一为「年 + 月」表达，取该周「中间日」所在月。
-    // weekDays[0] 即周起始日（getWeekAggregate 由 getWeekStartDate 展开而来）。
+    // 底部导航栏标题：与其他视图统一为「年 + 月」表达，取窗口「中间日」所在月。
+    // range.start 即窗口首日（周类模式为周起始日，滚动模式为锚定日）。
     // 不再显示「8月 - 9月」跨月形式：标题宽度恒定，_placeWeekEmptyHint() 的落位不再随标题长度抖动。
-    const navAnchor = getWeekAnchorDate(weekDays[0]);
+    const navAnchor = getWeekAnchorDate(range.start, range.days);
     const navYear = navAnchor.getFullYear();
     const navMonth = navAnchor.getMonth();
 
@@ -569,8 +643,8 @@ function renderWeekView(container) {
         }
     }
 
-    // 相邻周预热：延迟填充 ±1 周缓存，翻页时直接命中（只填缓存，不触碰 DOM）
-    _prewarmAdjacentWeeks(weekStart);
+    // 相邻窗口预热：延迟填充 ±1 个窗口步长缓存，翻页时直接命中（只填缓存，不触碰 DOM）
+    _prewarmAdjacentWeeks(range.start, range.days, range.step);
 }
 
 function layoutDayTasks(dayTasks, hourHeight) {
@@ -842,7 +916,11 @@ function _playCalendarNavTransition(direction, render) {
 }
 
 function navigateWeek(direction) {
-    currentDate.setDate(currentDate.getDate() + direction * 7);
+    // 翻页步长随「显示天数」模式变化：7 天/工作周 = 7 天；1/3/5 天 = 对应天数（滚动窗口）
+    const mobile = typeof isMobileView === 'function' && isMobileView();
+    const mode = mobile ? '7' : getWeekDisplayDays();
+    const range = getWeekViewRange(currentDate, mode, settings.weekStart === 'monday');
+    currentDate.setDate(currentDate.getDate() + direction * range.step);
     _playCalendarNavTransition(direction, renderView);
 }
 
@@ -1467,21 +1545,23 @@ function _qtpWeekStartsOnMonday() {
     return typeof settings !== 'undefined' && settings.weekStart === 'monday';
 }
 
-// 周所属年月：取该周「中间日」（第 4 天）所在年月。
-// 为什么不用「周起始日所在月」：2026-03-01 是周日，其所在周为 2/23–3/1，周起始日落在 2 月，
+// 窗口所属年月：取窗口「中间日」所在年月。
+// 为什么不用「起点所在月」：2026-03-01 是周日，其所在周为 2/23–3/1，周起始日落在 2 月，
 // 于是「选 3 月」却显示「2026年2月」，与用户刚选的月份对不上。
 // 改用中间日后：一个 7 天周里中间日所在月恒占 4~7 天（多数），且每个周唯一归属一个月，
 // 无重叠无遗漏，「标题显示的是多数天数所在月」也便于解释。
-function getWeekAnchorDate(weekStart) {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + 3);
+// days 缺省为 7 → 偏移 +3，与改动前的 7 天口径逐像素一致（无回归）。
+// 5 天 → +2、3 天 → +1、1 天 → +0。
+function getWeekAnchorDate(rangeStart, days) {
+    const d = new Date(rangeStart);
+    d.setDate(d.getDate() + Math.floor(((days || 7) - 1) / 2));
     return d;
 }
 
 // 该月「第 1 周」的周起始日：中间日落在该月的第一周（与 getWeekAnchorDate 同口径）。
 function getFirstWeekStartOfMonth(year, month, weekStartsOnMonday) {
     let ws = getWeekStartDate(new Date(year, month, 1), weekStartsOnMonday);
-    const mid = getWeekAnchorDate(ws);
+    const mid = getWeekAnchorDate(ws, 7);
     if (mid.getFullYear() !== year || mid.getMonth() !== month) {
         ws = new Date(ws);
         ws.setDate(ws.getDate() + 7);
@@ -1503,7 +1583,9 @@ function _qtpCurrentContext() {
     }
     let d = currentDate;
     if (typeof currentView !== 'undefined' && currentView === 'week') {
-        d = getWeekAnchorDate(getWeekStartDate(currentDate, _qtpWeekStartsOnMonday()));
+        const mode = (typeof isMobileView === 'function' && isMobileView()) ? '7' : getWeekDisplayDays();
+        const r = getWeekViewRange(currentDate, mode, _qtpWeekStartsOnMonday());
+        d = getWeekAnchorDate(r.start, r.days);
     }
     return { year: d.getFullYear(), month: d.getMonth() };
 }
@@ -1587,16 +1669,25 @@ function jumpToMonth(year, month) {
         return;
     }
 
-    // 周视图：落到该月「第 1 周」＝中间日落在该月的第一周（见 getFirstWeekStartOfMonth）。
+    // 周视图：周类模式落到该月「第 1 周」＝中间日落在该月的第一周（见 getFirstWeekStartOfMonth）。
     // 不能简单地设成该月 1 日：1 日若落在周中，其所在周的中间日可能仍在上个月，
     // 标题就会显示成上个月，与用户刚选的月份对不上。
+    // 滚动模式（1/3/5 天）例外：锚点即窗口起点，落到该月 1 日才与所选月份一致。
     if (typeof currentView !== 'undefined' && currentView === 'week') {
         const monday = _qtpWeekStartsOnMonday();
-        const newWeekStart = getFirstWeekStartOfMonth(year, month, monday);
+        const isMobile = typeof isMobileView === 'function' && isMobileView();
+        const mode = isMobile ? '7' : getWeekDisplayDays();
+
+        // 滚动模式（1/3/5 天）的锚点即窗口起点，直接落到该月 1 日；
+        // 若沿用「该月第 1 周起始日」，窗口会从上月末开始，与刚选的月份对不上。
+        // 周类模式（7 天 / 工作周）保持原逻辑：落到「中间日落在该月」的第一周起始日。
+        const newWeekStart = (mode === '1' || mode === '3' || mode === '5')
+            ? new Date(year, month, 1)
+            : getFirstWeekStartOfMonth(year, month, monday);
 
         // 移动端周视图的单日模式：选中日期平移 N*7 天以保持原来的「星期几」，
         // 否则重渲染时 mobile.js 会因该日不在本周而回落到 weekStrs[0]（周一）。
-        if (typeof isMobileView === 'function' && isMobileView()
+        if (isMobile
             && typeof _mobileWeekSelectedDate === 'string'
             && /^\d{4}-\d{2}-\d{2}$/.test(_mobileWeekSelectedDate)) {
             const oldSel = new Date(_mobileWeekSelectedDate + 'T00:00:00');

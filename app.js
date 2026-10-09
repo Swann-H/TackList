@@ -20,6 +20,8 @@ async function init() {
     performAutoBackup();
 
     await loadHolidayData();
+    // 预置「今年/明年/后年」的节日当天，避免后续暂无假期信息时侧边栏显示「暂无假期信息」
+    if (typeof ensureFestivalSeeds === 'function') ensureFestivalSeeds();
     checkHolidayDataUpdate();
     updateHolidayCountdown();
     // 跨天自动刷新侧边栏倒计时（日期变更时重算 days，避免挂着过夜后停在昨天）
@@ -337,9 +339,9 @@ function openSettingsModal() {
     document.getElementById('settings-default-urgent').checked = settings.defaultUrgent || false;
     document.getElementById('settings-default-duration').value = settings.defaultDuration !== undefined ? settings.defaultDuration : 30;
     document.getElementById('settings-week-start').value = settings.weekStart || 'monday';
-    // 书写态正文宽度（standard 720 / wide 以右下停靠区左边界为限 / full 拉满），默认 wide
+    // 书写态正文宽度（standard 720 / wide 以右下停靠区左边界为限 / full 拉满），默认 standard
     const _wWidth = document.getElementById('settings-write-mode-width');
-    if (_wWidth) _wWidth.value = settings.writeModeWidth || 'wide';
+    if (_wWidth) _wWidth.value = settings.writeModeWidth || 'standard';
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
@@ -1075,7 +1077,7 @@ function saveSettings(silent) {
     settings.defaultDuration = parseInt(document.getElementById('settings-default-duration').value) || 30;
     settings.weekStart = document.getElementById('settings-week-start').value;
     const _wWidthEl = document.getElementById('settings-write-mode-width');
-    if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'wide';
+    if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'standard';
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
@@ -1352,14 +1354,12 @@ function goToToday() {
             const sameMonth = prevDate.getFullYear() === currentDate.getFullYear() && prevDate.getMonth() === currentDate.getMonth();
             if (!sameMonth) dir = prevDate.getTime() < currentDate.getTime() ? 1 : -1;
         } else {
-            const off = settings.weekStart === 'monday' ? 1 : 0;
-            const weekStartTs = d => {
-                const x = new Date(d);
-                x.setDate(x.getDate() - x.getDay() + off);
-                if (d.getDay() === 0 && off === 1) x.setDate(x.getDate() - 7);
-                return x.getTime();
-            };
-            const a = weekStartTs(prevDate), b = weekStartTs(currentDate);
+            // 显示天数：与 renderWeekView 同口径，比较「窗口起点」而非周起始日 ——
+            // 滚动模式（1/3/5 天）下窗口起点就是锚定日，按周比较会误判滑动方向。
+            const _wvMode = (typeof isMobileView === 'function' && isMobileView())
+                ? '7' : (typeof getWeekDisplayDays === 'function' ? getWeekDisplayDays() : '7');
+            const rangeStartTs = d => getWeekViewRange(d, _wvMode, settings.weekStart === 'monday').start.getTime();
+            const a = rangeStartTs(prevDate), b = rangeStartTs(currentDate);
             if (a !== b) dir = a < b ? 1 : -1;
         }
         if (dir !== 0) {

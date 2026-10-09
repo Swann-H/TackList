@@ -938,8 +938,11 @@ const DEFAULT_SETTINGS = {
     },
     // 日程视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
     scheduleConfig: {},
-    // 周视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
-    weekConfig: {},
+    // 周视图配置：showCompleted/showLunar 迁移自全局的可分离项（不设默认值=未显式设置）；
+    // displayDays = 显示天数，'1' | '3' | '5' | 'workweek' | '7'（默认 7 天，等价于原行为）
+    weekConfig: {
+        displayDays: '7'
+    },
     // 月视图配置（showCompleted/showLunar 迁移自全局的可分离项，不设默认值=未显式设置）
     monthConfig: {
         showSwapInfo: true      // 显示调休信息（日期数字左侧的「班/休」标记，新增配置项，默认显示）
@@ -1222,6 +1225,13 @@ async function loadData() {
             currentFilter = fs.currentFilter || null;
             currentTagIds = fs.currentTagIds || [];
             currentFilterId = fs.currentFilterId || null;
+            // 互斥归一化兜底：清单 / 标签 / 自定义过滤器 是单选关系，但旧版本 selectList()
+            // 未清标签，可能已把「清单+标签」的非法组合持久化下来。恢复时若选中了清单，
+            // 则丢弃标签与过滤器；否则 filterTasks 会按 AND 求交集 → 右侧空白且高亮错位。
+            if (currentListId) {
+                currentTagIds = [];
+                currentFilterId = null;
+            }
         }
     }
     _initialLoadDone = true;
