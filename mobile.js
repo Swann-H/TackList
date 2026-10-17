@@ -157,7 +157,8 @@ function _syncMobileMoreMenu() {
         ['today-btn', 'mobile-more-today'],
         ['plan-btn', 'mobile-more-plan'],
         ['postpone-btn', 'mobile-more-postpone'],
-        ['toggle-all-groups-btn', 'mobile-more-toggle-groups']
+        ['toggle-all-groups-btn', 'mobile-more-toggle-groups'],
+        ['batch-select-btn', 'mobile-more-multi-select'] // FR-03 批量管理（桌面头部按钮在移动端隐藏，映射进「更多」）
     ];
     pairs.forEach(([srcId, dstId]) => {
         const src = document.getElementById(srcId);

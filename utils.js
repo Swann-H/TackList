@@ -55,7 +55,8 @@ const SIDEBAR_ITEM_DEFAULTS = {
     recent7days: 'show',
     summary: 'show',
     tags: 'show',
-    filters: 'show'
+    filters: 'show',
+    trash: 'show'
 };
 
 // 当前（或给定）筛选是否为侧边栏特殊时间筛选
@@ -226,127 +227,468 @@ function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null)
     return html;
 }
 
-// Toast通知 - 游戏任务提示风格
-function showToast(message, type = 'info', customDuration = null, title = null) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
+// ==================== Toast 标题词表（方案 A） ====================
+// 口径：标题行只表达「状态」，不描述具体动作；一律由 type 派生，调用点不得手写自由文本。
+//   历史问题：四个默认词语法各不相同（名词+后置形容词 QUEST COMPLETE / 名词+过去式 MISSION FAILED
+//   / 形容词+名词 NEW QUEST / 单个名词 WARNING），且 QUEST 与 MISSION 指同一个「任务」，
+//   属于同一概念两套说法——标题既不成体系，又常与语义错位（删除撤销弹的是 NEW QUEST）。
+//   现收敛为「单词状态词」：四个词同词性、同长度，结构上不会再跑偏。
+// ⚠️ 需要表达「对象 / 时间 / 原因」时写进正文（message），不要塞回标题。
+// ⚠️ 唯一例外是 showReminderToast：它的标题行是「时间 · 对象」头部，属 actionable 通道，
+//    不是状态标签，故不参与本词表（见 utils.js:buildReminderDisplayTitle）。
+const TOAST_TITLES = Object.freeze({
+    success: 'SUCCESS',
+    error:   'FAILED',
+    info:    'NOTICE',
+    warning: 'CAUTION',
+    confirm: 'CONFIRM'   // 仅 showConfirmToast 使用：交互询问，不是状态
+});
 
-    const toast = document.createElement('div');
+// 严格模式（URL 带 ?toastdebug=1，或 localStorage['tacklist.toastDebug']='1'）下，
+// 任何不在词表内的标题会 console.warn 并回落为 type 默认词——用于防止规范回退。
+const _TOAST_TITLE_STRICT = (function () {
+    try {
+        return /[?&]toastdebug\b/.test(location.search)
+            || localStorage.getItem('tacklist.toastDebug') === '1';
+    } catch (e) { return false; }
+})();
 
-    const themes = {
-        success: {
-            color: 'text-green-400', border: 'border-green-500', bg: 'bg-green-500',
-            shadow: 'shadow-[0_0_15px_rgba(34,197,94,0.3)]', icon: 'fa-check-double', defaultTitle: 'QUEST COMPLETE'
-        },
-        error: {
-            color: 'text-red-500', border: 'border-red-600', bg: 'bg-red-600',
-            shadow: 'shadow-[0_0_15px_rgba(220,38,38,0.3)]', icon: 'fa-skull', defaultTitle: 'MISSION FAILED'
-        },
-        info: {
-            color: 'text-cyan-400', border: 'border-cyan-500', bg: 'bg-cyan-500',
-            shadow: 'shadow-[0_0_15px_rgba(6,182,212,0.3)]', icon: 'fa-scroll', defaultTitle: 'NEW QUEST'
-        },
-        warning: {
-            color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
-            shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', icon: 'fa-exclamation-triangle', defaultTitle: 'WARNING'
-        }
-    };
-
-    const theme = themes[type] || themes.info;
-    const displayTitle = title || theme.defaultTitle;
-    const duration = customDuration || (settings?.toastDuration || 5) * 1000;
-
-    toast.className = `quest-toast flex items-center p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full cursor-pointer hover:bg-slate-800 transition-colors`;
-
-    // ⚠️ 第 1 行字号必须与第 2 行统一（都 text-sm）。历史上第 1 行是 text-xs（12px），
-    //    比正文小一号，视觉上"标题比正文还轻"。用户 2026-09-24 要求统一，别再降回 text-xs。
-    toast.innerHTML = `
-        <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
-            <i class="fas ${theme.icon} text-lg"></i>
-        </div>
-        <div class="flex-1 relative z-10 flex flex-col justify-center">
-            <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
-                ${displayTitle}
-            </div>
-            <div class="text-sm font-medium text-slate-300 leading-snug">
-                ${message}
-            </div>
-        </div>
-        <div class="absolute bottom-0 left-0 h-1 ${theme.bg} opacity-80"
-             style="animation: progressShrink ${duration}ms linear forwards;">
-        </div>
-    `;
-
-    container.appendChild(toast);
-
-    let isRemoved = false;
-    function removeToast() {
-        if (isRemoved) return;
-        isRemoved = true;
-        toast.classList.add('quest-toast-out');
-        setTimeout(() => toast.remove(), 400);
-    }
-
-    toast.addEventListener('click', () => {
-        removeToast();
-    });
-
-    setTimeout(() => {
-        removeToast();
-    }, duration);
+function resolveToastTitle(title, type) {
+    const fallback = TOAST_TITLES[type] || TOAST_TITLES.info;
+    if (!title) return fallback;
+    const t = String(title).trim();
+    if (Object.values(TOAST_TITLES).includes(t)) return t;
+    if (_TOAST_TITLE_STRICT) console.warn('[toast] 标题不在词表内，已回落为 ' + fallback + '：', title);
+    return fallback;
 }
 
-function showConfirmToast(message, onConfirm, onCancel) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
+// ==================== Toast 内核 ====================
+// 四个公开函数只负责「配参数」；卡片 DOM / 类名 / 进出场 / 计时 / 关闭收敛到这里。
+// ⚠️ 配色只有这一张表。历史上 showToast 与 showUndoToast 各存一份逐字节相同的副本，
+//    提醒卡又自带 sky/amber 两套，改色要改四处——调色一律改这里。
 
-    const toast = document.createElement('div');
-    const theme = {
+const TOAST_THEMES = Object.freeze({
+    success: {
+        color: 'text-green-400', border: 'border-green-500', bg: 'bg-green-500',
+        shadow: 'shadow-[0_0_15px_rgba(34,197,94,0.3)]', shadowSoft: 'shadow-[0_0_12px_rgba(34,197,94,0.25)]', icon: 'fa-check-double'
+    },
+    error: {
+        color: 'text-red-500', border: 'border-red-600', bg: 'bg-red-600',
+        shadow: 'shadow-[0_0_15px_rgba(220,38,38,0.3)]', shadowSoft: 'shadow-[0_0_12px_rgba(220,38,38,0.25)]', icon: 'fa-skull'
+    },
+    info: {
         color: 'text-cyan-400', border: 'border-cyan-500', bg: 'bg-cyan-500',
-        shadow: 'shadow-[0_0_15px_rgba(6,182,212,0.3)]', icon: 'fa-question-circle', defaultTitle: 'CONFIRM'
-    };
+        shadow: 'shadow-[0_0_15px_rgba(6,182,212,0.3)]', shadowSoft: 'shadow-[0_0_12px_rgba(6,182,212,0.25)]', icon: 'fa-scroll'
+    },
+    warning: {
+        color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
+        shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', shadowSoft: 'shadow-[0_0_12px_rgba(245,158,11,0.25)]', icon: 'fa-exclamation-triangle'
+    },
+    // 提醒卡两态：主任务琥珀 / 子任务蓝。不属于 type 体系，但同样登记在此。
+    reminder: {
+        color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
+        shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', icon: 'fa-bell'
+    },
+    'reminder-subtask': {
+        color: 'text-sky-400', border: 'border-sky-500', bg: 'bg-sky-500',
+        shadow: 'shadow-[0_0_15px_rgba(14,165,233,0.3)]', icon: 'fa-list-check'
+    }
+});
 
-    toast.className = `quest-toast flex items-center p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full`;
+// 正文默认转义。内核自己拼的 HTML 片段（子任务列表 / 聚合提示 / 徽标）走 raw，不经过这里。
+function _toastEscape(s) {
+    if (typeof escapeHtml === 'function') return escapeHtml(s);
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
 
-    // 第 1 行字号与第 2 行统一（text-sm），理由见 showToast 上方注释
-    toast.innerHTML = `
-        <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
-            <i class="fas ${theme.icon} text-lg"></i>
-        </div>
-        <div class="flex-1 relative z-10 flex flex-col justify-center">
-            <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md">
-                ${theme.defaultTitle}
-            </div>
-            <div class="text-sm font-medium text-slate-300 leading-snug">
-                ${message}
-            </div>
-        </div>
-        <div class="flex gap-2 relative z-10 flex-shrink-0">
-            <button class="confirm-yes-btn px-3 py-1.5 bg-cyan-500/20 text-cyan-400 border border-cyan-500 rounded font-bold hover:bg-cyan-500/30 transition text-xs tracking-wider">YES</button>
-            <button class="confirm-no-btn px-3 py-1.5 bg-slate-700/50 text-slate-400 border border-slate-600 rounded font-bold hover:bg-slate-600/50 transition text-xs tracking-wider">NO</button>
-        </div>
+// 时长三档：由 settings.toastPace 选一组固定值（不做乘法，便于断言与解释）
+const TOAST_LIFE = Object.freeze({
+    fast:   { short: 1500, normal: 3000, long: 5000 },
+    normal: { short: 2500, normal: 5000, long: 8000 },
+    slow:   { short: 4000, normal: 7000, long: 12000 }
+});
+
+function _toastPace() {
+    const p = (typeof settings !== 'undefined' && settings && settings.toastPace) ? settings.toastPace : 'normal';
+    return TOAST_LIFE[p] ? p : 'normal';
+}
+
+// life：'short'|'normal'|'long' 走节奏表；数字 = 功能性时长（撤销/确认），不随节奏缩放；0 = 常驻
+function _resolveToastLife(life) {
+    if (life === 0) return 0;
+    if (typeof life === 'number' && life > 0) return life;
+    const table = TOAST_LIFE[_toastPace()];
+    return table[life] || table.normal;
+}
+
+// 堆叠档：同类提示过多时挤掉最旧的，避免刷屏。
+//   flash  = success / info（最多 1 条，后来的顶掉前面的）
+//   notice = error / warning（最多 3 条）
+//   action = 提醒 / 撤销 / 确认（不限，需要用户处理）
+const TOAST_PROFILES = Object.freeze({
+    flash: { stack: 1 },
+    notice: { stack: 3 },
+    action: { stack: 0 }
+});
+
+function _toastProfileOfTone(tone) {
+    return (tone === 'error' || tone === 'warning') ? 'notice' : 'flash';
+}
+
+function _trimToastStack(container, stackKey, max) {
+    if (!max) return;
+    const same = Array.prototype.filter.call(
+        container.children,
+        el => el.getAttribute('data-stack') === stackKey && !el.hasAttribute('data-closing')
+    );
+    const overflow = same.length - max + 1;
+    for (let i = 0; i < overflow; i++) {
+        const old = same[i];
+        if (!old) break;
+        old.setAttribute('data-closing', '1');
+        old.style.transition = 'opacity .18s';
+        old.style.opacity = '0';
+        setTimeout(() => old.remove(), 200);
+    }
+}
+
+// Esc 关闭最上面一张带按钮的卡（只有存在时才处理，不干扰弹窗自身的 Esc）
+let _toastEscBound = false;
+function _bindToastEsc() {
+    if (_toastEscBound) return;
+    _toastEscBound = true;
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        const list = document.querySelectorAll('#toast-container [data-toast-esc]');
+        const last = list[list.length - 1];
+        if (!last) return;
+        // 不 stopPropagation：应用自身的 Esc（关弹窗/详情栏）应照常生效
+        last.dispatchEvent(new CustomEvent('toast:close'));
+    });
+}
+
+// 内核：渲染一张卡并接管生命周期，返回 { el, close, isClosed }
+// cfg = {
+//   tone, title, titleRaw, titleCls,
+//   body, bodyCls, extraHtml, badge, icon,
+//   actions: [{ label, variant, cls, onClick }],
+//   layout: 'row' | 'col', variant: 'compact',
+//   life: 毫秒 | 0（常驻）,
+//   clickToClose, onBodyClick, onExpire
+// }
+function _toast(cfg) {
+    const container = document.getElementById('toast-container');
+    if (!container) return null;
+
+    const tone = cfg.tone || 'info';
+    const theme = TOAST_THEMES[tone] || TOAST_THEMES.info;
+    const compact = cfg.variant === 'compact';
+    const life = _resolveToastLife(cfg.life);
+    const titleText = compact ? '' : (cfg.titleRaw ? String(cfg.title || '') : resolveToastTitle(cfg.title, tone));
+
+    const actions = Array.isArray(cfg.actions) ? cfg.actions : [];
+    const actHtml = (a, i) =>
+        `<button data-toast-act="${i}" class="toast-btn toast-btn-${a.variant || 'primary'} ${a.cls || ''} relative z-10">${a.label}</button>`;
+
+    // 堆叠档：同类提示超过上限时先挤掉最旧的
+    const stackKey = cfg.stackKey || 'action';
+    const stackMax = (TOAST_PROFILES[stackKey] || TOAST_PROFILES.action).stack;
+    _trimToastStack(container, stackKey, stackMax);
+
+    const el = document.createElement('div');
+    el.setAttribute('data-stack', stackKey);
+    // 读屏：错误用 alert（立即播报），其余用 status（排队播报）
+    el.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+    el.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+    el.setAttribute('aria-atomic', 'true');
+
+    if (compact) {
+        el.className = `undo-toast flex items-center justify-between gap-3 px-3.5 py-2 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadowSoft || theme.shadow} rounded-r-md w-full cursor-pointer hover:bg-slate-800 opacity-0`;
+        el.innerHTML = `
+        <span class="undo-msg flex-1 min-w-0 text-sm font-medium text-slate-300 truncate select-none leading-snug">${_toastEscape(cfg.body)}</span>
+        ${actions.map((a, i) => actHtml(a, i)).join('')}
     `;
+        // 单行 truncate 会截掉长文案，用原生 tooltip 补回全文（属性赋值，不拼 HTML）
+        const msgEl = el.querySelector('.undo-msg');
+        if (msgEl && cfg.body) msgEl.title = String(cfg.body);
+    } else {
+        const cls = ['quest-toast', 'flex', 'p-4', 'bg-slate-900/95', 'backdrop-blur-sm', 'border-l-4',
+            theme.border, 'text-slate-200', theme.shadow, 'w-full'];
+        if (cfg.layout === 'col') cls.push('flex-col');
+        else cls.push('items-center');
+        if (cfg.clickToClose) cls.push('cursor-pointer', 'hover:bg-slate-800', 'transition-colors');
+        el.className = cls.join(' ');
 
-    container.appendChild(toast);
+        const orb = `
+        <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
+            <i class="fas ${cfg.icon || theme.icon} text-lg"></i>${cfg.badge || ''}
+        </div>`;
+        const titleHtml = titleText
+            ? `<div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md${cfg.titleCls ? ' ' + cfg.titleCls : ''}">${cfg.titleRaw ? _toastEscape(titleText) : titleText}</div>`
+            : '';
+        const bodyText = cfg.html ? (cfg.body || '') : _toastEscape(cfg.body);
+        const bodyHtml = bodyText
+            ? `<div class="text-sm font-medium text-slate-300 leading-snug break-words${cfg.bodyCls ? ' ' + cfg.bodyCls : ''}">${bodyText}</div>`
+            : '';
+        const info = `<div class="flex-1 min-w-0 relative z-10 flex flex-col justify-center">${titleHtml}${bodyHtml}${cfg.extraHtml || ''}</div>`;
 
-    const yesBtn = toast.querySelector('.confirm-yes-btn');
-    const noBtn = toast.querySelector('.confirm-no-btn');
+        if (cfg.layout === 'col') {
+            el.innerHTML = `
+        <div class="flex items-center">${orb}${info}</div>
+        ${actions.length ? `<div class="flex gap-2 mt-3 relative z-10 justify-end">${actions.map((a, i) => actHtml(a, i)).join('')}</div>` : ''}
+    `;
+        } else {
+            el.innerHTML = `
+        ${orb}${info}
+        ${actions.length ? `<div class="flex gap-2 relative z-10 flex-shrink-0">${actions.map((a, i) => actHtml(a, i)).join('')}</div>` : ''}
+        ${life > 0 && cfg.progress !== false
+                    ? `<div class="toast-progress absolute bottom-0 left-0 h-1 ${theme.bg} opacity-80" style="animation: progressShrink ${life}ms linear forwards;"></div>`
+                    : ''}
+    `;
+        }
+    }
 
-    let isRemoved = false;
-    const remove = () => {
-        if (isRemoved) return;
-        isRemoved = true;
-        toast.classList.add('quest-toast-out');
-        setTimeout(() => toast.remove(), 400);
-    };
+    container.appendChild(el);
 
-    yesBtn.addEventListener('click', () => { clearTimeout(autoRemoveTimer); remove(); if (onConfirm) onConfirm(); });
-    noBtn.addEventListener('click', () => { clearTimeout(autoRemoveTimer); remove(); if (onCancel) onCancel(); });
+    // 单行条走透明度渐变，必须先强制一次样式计算，否则首帧与目标帧合并、渐变不触发
+    if (compact) {
+        void el.offsetWidth;
+        requestAnimationFrame(() => {
+            el.classList.remove('opacity-0');
+            el.classList.add('opacity-100');
+        });
+    }
 
-    const autoRemoveTimer = setTimeout(() => {
-        remove();
-        if (onCancel) onCancel();
-    }, 30000);
+    let closed = false;
+    let timer = null, remaining = life, startedAt = 0;
+
+    function close() {
+        if (closed) return;
+        closed = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (compact) {
+            el.classList.remove('opacity-100');
+            el.classList.add('opacity-0');
+            setTimeout(() => el.remove(), 300);
+        } else {
+            el.classList.add('quest-toast-out');
+            setTimeout(() => el.remove(), 400);
+        }
+    }
+
+    function startTimer() {
+        if (!remaining) return;
+        startedAt = Date.now();
+        timer = setTimeout(() => {
+            close();
+            if (typeof cfg.onExpire === 'function') cfg.onExpire();
+        }, remaining);
+    }
+
+    // 重置计时：给「结果态」条子（如 UNDO 原地改写后）续一段可读时长。
+    // 悬停中调用会顺带解除暂停态，与 mouseleave 后的重启口径一致。
+    function renew(nextLife) {
+        if (closed) return;
+        if (timer) { clearTimeout(timer); timer = null; }
+        remaining = _resolveToastLife(nextLife);
+        el.classList.remove('toast-paused');
+        startTimer();
+    }
+
+    if (life > 0) {
+        startTimer();
+        // 悬停暂停：进度条与计时器一起停（只停 CSS 会出现「条停住、卡照走」）
+        el.addEventListener('mouseenter', () => {
+            if (!timer) return;
+            clearTimeout(timer); timer = null;
+            remaining = Math.max(600, remaining - (Date.now() - startedAt));
+            el.classList.add('toast-paused');
+        });
+        el.addEventListener('mouseleave', () => {
+            if (closed || timer) return;
+            el.classList.remove('toast-paused');
+            startTimer();
+        });
+    }
+
+    // 带按钮的卡可用 Esc 关闭（最上面那张）
+    if (actions.length) {
+        el.setAttribute('data-toast-esc', '1');
+        el.tabIndex = 0;
+        el.addEventListener('toast:close', close);
+        _bindToastEsc();
+    }
+
+    actions.forEach((a, i) => {
+        const btn = el.querySelector('[data-toast-act="' + i + '"]');
+        if (!btn) return;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // keepOpen：点击后不自动关闭，由 onClick 自行处置
+            // （撤销条结果态原地改写：UNDO → 状态文字，条子续显后自然淡出）
+            if (a.keepOpen) {
+                if (typeof a.onClick === 'function') a.onClick({ el: el, close: close, renew: renew });
+                return;
+            }
+            close();
+            if (typeof a.onClick === 'function') a.onClick();
+        });
+    });
+
+    if (cfg.onBodyClick) {
+        el.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            close();
+            cfg.onBodyClick();
+        });
+    } else if (cfg.clickToClose) {
+        el.addEventListener('click', () => close());
+    }
+
+    return { el, close, isClosed: () => closed, renew: renew };
+}
+
+// Toast通知 - 游戏任务提示风格
+// 堆叠档由 type 自动决定：success/info → flash（同类顶替），error/warning → notice（最多 3 条）
+function showToast(message, type = 'info', customDuration = null, title = null) {
+    return _toast({
+        tone: type,
+        title: title,
+        body: message,
+        life: customDuration,
+        stackKey: _toastProfileOfTone(type),
+        clickToClose: true
+    });
+}
+
+// 带动作按钮的 Toast（精简单行版）：FR-01 撤销入口
+// 设计意图：它是「可操作提示」而不是「状态播报」，视觉权重应当低于 showToast。
+//   砍掉大图标 / 大写状态标题 / 倒计时条，只保留单行「文本 + 撤销按钮」，
+//   内边距由 p-4 收到 px-3.5 py-2，进出场改为 0.3s 纯淡入淡出（无位移关键帧）。
+// ⚠️ 不带 .quest-toast 类，所以没有切角 / 入场位移 / 扫光 / 进度条；
+//    而 #toast-container 是 pointer-events-none，**必须**靠 .undo-toast 单独开启
+//    pointer-events，否则整条（含 UNDO 按钮）点不动（规则见 index_offline.html）。
+// ⚠️ 消息单行 truncate：超长文案（如外部订阅删除的那段说明）会被截断，这是单行设计的代价，
+//    内核会给文本加原生 title 补回全文。
+// 使用最低一档时长（short，随「消息显示时长」缩放），到点只关 Toast、不清撤销栈。
+// 点击 UNDO：执行 undoFn()（内部完成数据回滚 + 保存 + 重渲染）→ **不弹新提示**，
+//   在本条内原地改写为结果态——UNDO 按钮位置换成状态文字（已撤销 / 撤销失败），
+//   并 renew('short') 续一次最短档时长后自然淡出。
+//   undoFn 必须返回 _executeUndoEntry 的结果对象 { ok, reason }（见 trash.js）：
+//     ok=true           成功。reason==='already-done' 表示该操作此前已被其他入口撤销过，
+//                      数据确已恢复，仍按成功态展示（绿字），仅 title 补一句说明；
+//     ok=false, reason  失败，reason 映射为短文案显示在正文位置：
+//                        invalid    → 操作已失效
+//                        exception  → 撤销时出错（异常详情进 console.error 与 title）
+// 点击卡片其余区域：仅关闭（栈由 undoFn 侧自行管理，不在此清空）。
+function showUndoToast(message, undoFn, opts = {}) {
+    return _toast({
+        variant: 'compact',
+        tone: opts.type || 'info',
+        body: message,
+        life: 'short',
+        clickToClose: true,
+        actions: [{
+            label: opts.actionLabel || 'UNDO',
+            variant: 'primary',
+            cls: 'toast-action-btn flex-shrink-0 text-xs !py-1 !px-2.5 uppercase tracking-wider',
+            keepOpen: true,
+            onClick: function (ctx) {
+                // 结果态原地改写：UNDO 按钮 → 状态文字；失败时正文换为原因短语
+                let r = null;
+                try {
+                    r = (typeof undoFn === 'function') ? undoFn() : null;
+                } catch (e) {
+                    console.error('[toast] 撤销回调执行异常：', e);
+                    r = { ok: false, reason: 'exception' };
+                }
+                const ok = !!(r && r.ok);
+                const el = (ctx && ctx.el) || null;
+                if (!el) return;
+                // 颜色走行内样式：Tailwind JIT 对运行时新增类有首帧延迟，
+                // 左边框变色会闪一帧（历史教训见 index.html .undo-toast 注释）
+                el.style.borderLeftColor = ok ? '#22c55e' : '#f59e0b';
+                if (ok) {
+                    _setUndoToastStatus(el, '已撤销', '#4ade80',
+                        (r && r.reason === 'already-done') ? '该操作此前已撤销过' : '');
+                } else {
+                    const reasonText = { invalid: '操作已失效', exception: '撤销时出错' }[r && r.reason] || '撤销失败';
+                    _setUndoToastStatus(el, '撤销失败', '#fbbf24', '');
+                    // 失败原因写到正文位置（flex-1 比按钮位宽，truncate 前可读）
+                    const msg = el.querySelector('.undo-msg');
+                    if (msg) {
+                        msg.textContent = reasonText;
+                        msg.title = '撤销失败：' + reasonText;
+                    }
+                }
+                // 结果态续一次最短档时长，保证「已撤销 / 撤销失败」读得完
+                if (ctx && typeof ctx.renew === 'function') ctx.renew('short');
+            }
+        }]
+    });
+}
+
+// 撤销条结果态：把 UNDO 按钮替换为纯文字状态（无交互）。
+// ⚠️ 盒模型必须复刻 UNDO 按钮（padding 6px 12px + 1px 透明边框，与 .toast-btn 一致）：
+//    条高由最高 flex 子元素决定，芯片若只写文字会比按钮矮一截、整条塌陷；
+//    复刻盒模型后芯片与按钮等高（实测均 30px），正文截断边界也与点击前一致。
+//    颜色走行内样式（防 JIT 首帧闪色）。
+function _setUndoToastStatus(el, text, color, tip) {
+    const btn = el.querySelector('.toast-action-btn');
+    if (!btn) return;
+    const span = document.createElement('span');
+    span.className = 'flex-shrink-0 text-xs font-bold tracking-wider select-none';
+    span.style.padding = '6px 12px';
+    span.style.border = '1px solid transparent';
+    span.style.color = color;
+    span.textContent = text;
+    if (tip) span.title = tip;
+    btn.replaceWith(span);
+}
+
+// 精简单行状态条（无按钮）：与 showUndoToast 同骨架（.undo-toast 单行条），
+// 省去动作按钮，只播报状态。供撤销类通知使用：
+//   Ctrl+Z / 命令面板 /undo 的成功结果（tone:'success'）、空栈提示（tone:'info'）、
+//   以及「撤销跳过周期 / 撤销配色编辑」等独立撤销操作的结果。
+function showCompactToast(message, opts = {}) {
+    return _toast({
+        variant: 'compact',
+        tone: opts.tone || 'info',
+        body: message,
+        life: opts.life || 'short',
+        clickToClose: true
+    });
+}
+
+// 确认卡：常驻直到用户选择；30s 未响应走 onExpire（默认 = onCancel）
+// 第 4 参 opts 可选：
+//   confirmLabel / cancelLabel —— 覆盖默认 YES / NO 文案；
+//   onExpire —— 覆盖超时动作。⚠️ 用 hasOwnProperty 判存，传 **null 表示「超时什么都不做」**
+//     （只收起卡片）；当 onCancel 具有破坏性（如丢弃未保存的修改）时必须传 null，
+//     否则「用户只是走神了」会被判定成「用户选了取消」。不传则沿用 onCancel（旧行为）。
+// 布局固定 layout:'col'：两个按钮排在正文下方，而不是挤在正文右侧——
+//   中文动作名比 YES / NO 长得多，右侧横排会把卡片撑宽并压扁正文。
+// ⚠️ 只改按钮文字与位置，不新增弹层样式——按钮仍走 .toast-btn primary / ghost 两个 variant，
+//    需要中文动作名（如「应用并退出」/「直接退出」）的调用方一律复用本卡，不要另造弹层。
+function showConfirmToast(message, onConfirm, onCancel, opts) {
+    opts = opts || {};
+    const onExpire = Object.prototype.hasOwnProperty.call(opts, 'onExpire') ? opts.onExpire : onCancel;
+    return _toast({
+        tone: 'info',
+        icon: 'fa-question-circle',
+        title: TOAST_TITLES.confirm,
+        body: message,
+        layout: 'col',
+        life: 30000,
+        progress: false,
+        onExpire: onExpire,
+        actions: [
+            { label: opts.confirmLabel || 'YES', variant: 'primary', cls: 'confirm-yes-btn', onClick: onConfirm },
+            { label: opts.cancelLabel || 'NO', variant: 'ghost', cls: 'confirm-no-btn', onClick: onCancel }
+        ]
+    });
 }
 
 // 构造提醒Toast第2行显示文本
@@ -446,15 +788,13 @@ function buildReminderDisplayTitle(title, task, taskTitle, displayMessage) {
 //     - 展示 5 秒窗口内同时到点的其他子任务
 //   reminderKind === 'advance' 时在图标正下方（6 点钟方向）挂提前量徽标，
 //   与准点提醒（无徽标）区分——标题行保持「时间 [任务名]」的规整格式，不放时机语义。
-// ⚠️ 第 1 行字号与第 2 行统一（都 text-sm），理由见 showToast 上方注释。
-// ⚠️ 第 2 行带 .reminder-toast-body（纯 CSS，-webkit-line-clamp:2）：
+// ⚠️ 卡片由 _toast 渲染，这里只负责「算文案 + 配动作」。
+//    标题行是「时间 · 对象」头部而不是状态词，故用 titleRaw 跳过方案 A 的词表校验。
+// ⚠️ 第 2 行保留 .reminder-toast-body（纯 CSS，-webkit-line-clamp:2）：
 //    详情描述是自由文本，不设上限时 400 字能把 Toast 撑到 534px（基线 149px）。
 //    该类同时是测试脚本定位第 2 行的稳定锚点——**别用 .text-sm 定位**，
 //    因为第 1 行现在也是 text-sm，querySelector 会先命中标题行。
 function showReminderToast(title, message, taskId, opts = {}) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-
     const subtaskId = opts.subtaskId || null;
     const pendingSubtasks = Array.isArray(opts.pendingSubtasks) ? opts.pendingSubtasks : [];
     // 提前提醒徽标文案（准点/稍后提醒为空串 → 不渲染徽标）
@@ -475,136 +815,22 @@ function showReminderToast(title, message, taskId, opts = {}) {
     // 第1行：若第2行已含任务名则只显示时间，否则显示"时间 任务名"
     const displayTitle = buildReminderDisplayTitle(title, task, taskTitle, displayMessage);
 
-    const toast = document.createElement('div');
-    const theme = subtaskId
-        ? {
-            color: 'text-sky-400', border: 'border-sky-500', bg: 'bg-sky-500',
-            shadow: 'shadow-[0_0_15px_rgba(14,165,233,0.3)]', icon: 'fa-list-check'
-        }
-        : {
-            color: 'text-amber-400', border: 'border-amber-500', bg: 'bg-amber-500',
-            shadow: 'shadow-[0_0_15px_rgba(245,158,11,0.3)]', icon: 'fa-bell'
-        };
-
     // 同时到点的其他子任务（聚合提示，避免多条 Toast 糊满屏幕）
-    const extraHtml = (subtaskId && pendingSubtasks.length)
+    const pendingHtml = (subtaskId && pendingSubtasks.length)
         ? `<div class="text-xs text-slate-400 mt-1 relative z-10">另有 ${pendingSubtasks.length} 个子任务同时到点：${escapeHtml(pendingSubtasks.join('、'))}</div>`
         : '';
+    const badgeHtml = advanceBadge
+        ? `<span class="reminder-advance-badge" title="提前 ${escapeHtml(_humanizeAdvance(opts.reminderMinute))}提醒">${escapeHtml(advanceBadge)}</span>`
+        : '';
 
-    toast.className = `quest-toast flex flex-col p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 ${theme.border} text-slate-200 ${theme.shadow} w-full`;
-
-    toast.innerHTML = `
-        <div class="flex items-center">
-            <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 ${theme.border} ${theme.color} bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
-                <i class="fas ${theme.icon} text-lg"></i>
-                ${advanceBadge ? `<span class="reminder-advance-badge" title="提前 ${escapeHtml(_humanizeAdvance(opts.reminderMinute))}提醒">${escapeHtml(advanceBadge)}</span>` : ''}
-            </div>
-            <div class="flex-1 min-w-0 relative z-10 flex flex-col justify-center">
-                <div class="${theme.color} text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md truncate">
-                    ${displayTitle}
-                </div>
-                ${displayMessage ? `<div class="text-sm font-medium text-slate-300 leading-snug break-words reminder-toast-body">${displayMessage}</div>` : ''}
-                ${subtaskHtml}
-                ${extraHtml}
-            </div>
-        </div>
-        <div class="flex gap-2 mt-3 relative z-10 justify-end">
-            <button class="reminder-focus-btn px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500 rounded font-bold hover:bg-green-500/30 transition text-xs tracking-wider">FOCUS</button>
-            <button class="reminder-done-btn px-3 py-1.5 bg-amber-500/20 text-amber-400 border border-amber-500 rounded font-bold hover:bg-amber-500/30 transition text-xs tracking-wider">DONE</button>
-            <button class="reminder-later-btn px-3 py-1.5 bg-cyan-500/20 text-cyan-400 border border-cyan-500 rounded font-bold hover:bg-cyan-500/30 transition text-xs tracking-wider">LATER</button>
-            <button class="reminder-ok-btn px-3 py-1.5 bg-slate-700/50 text-slate-400 border border-slate-600 rounded font-bold hover:bg-slate-600/50 transition text-xs tracking-wider">OK</button>
-        </div>
-    `;
-
-    container.appendChild(toast);
-
-    const focusBtn = toast.querySelector('.reminder-focus-btn');
-    const doneBtn = toast.querySelector('.reminder-done-btn');
-    const laterBtn = toast.querySelector('.reminder-later-btn');
-    const okBtn = toast.querySelector('.reminder-ok-btn');
-
-    let isRemoved = false;
-    const remove = () => {
-        if (isRemoved) return;
-        isRemoved = true;
-        toast.classList.add('quest-toast-out');
-        setTimeout(() => toast.remove(), 400);
-    };
-
-    // Focus: 开始/切换番茄专注
-    focusBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        remove();
-        if (taskId && typeof startPomodoroForTask === 'function') {
-            startPomodoroForTask(taskId);
-        }
-    });
-
-    // Done: 主任务提醒 → 标记任务完成；子任务提醒 → 勾选该子任务
-    // （子任务场景下若沿用"完成整个任务"会造成误操作，语义必须区分）
-    doneBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        remove();
+    // 点击卡片非按钮区域：关闭 Toast 并打开任务详情栏
+    const openDetail = function () {
         if (!taskId) return;
-        if (subtaskId) {
-            if (typeof toggleSubtaskComplete === 'function') {
-                const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
-                const st = task ? (task.subtasks || []).find(x => x.id === subtaskId) : null;
-                if (st && !st.completed) {
-                    // 显式传 taskId：提醒弹出时详情面板可能未打开或显示别的任务
-                    toggleSubtaskComplete(subtaskId, true, taskId);
-                }
-            }
-            return;
-        }
-        if (typeof toggleTaskComplete === 'function') {
-            const task = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
-            if (task && !task.completed) {
-                toggleTaskComplete(taskId);
-            }
-        }
-    });
-
-    // Later: 稍后提醒（子任务场景下延迟的是该子任务）
-    laterBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        remove();
-        if (taskId) {
-            const delayMinutes = (typeof settings !== 'undefined' && settings.snoozeDelay) ? settings.snoozeDelay : 15;
-            const payload = { taskId: taskId, delayMinutes: delayMinutes };
-            if (subtaskId) payload.subtaskId = subtaskId;
-            fetch('/api/reminder/snooze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            }).catch(err => console.error('Snooze error:', err));
-            if (typeof showToast === 'function') {
-                const snoozeTask = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
-                const snoozeMsg = snoozeTask ? buildTaskToastMessage(snoozeTask) : taskTitle;
-                showToast(snoozeMsg, 'info', null, delayMinutes + '分钟后再次提醒');
-            }
-        }
-    });
-
-    // OK: 仅关闭
-    okBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        remove();
-    });
-
-    // 点击Toast非按钮区域：关闭Toast并打开任务详情栏
-    toast.addEventListener('click', (e) => {
-        // 检查是否点击在按钮上（按钮已通过stopPropagation阻止冒泡，这里做二次保险）
-        if (e.target.closest('button')) return;
-        remove();
-        if (!taskId) return;
-
         // 若处于番茄专注页面或其他非默认视图，先切换回默认视图
         const pomodoroPage = document.getElementById('pomodoro-page');
         if (pomodoroPage && !pomodoroPage.classList.contains('hidden')) {
             if (typeof closePomodoroPage === 'function') closePomodoroPage();
         }
-
         // 确保处于默认任务视图
         if (typeof currentView !== 'undefined' && currentView !== 'task') {
             if (typeof switchToTaskView === 'function') {
@@ -615,12 +841,85 @@ function showReminderToast(title, message, taskId, opts = {}) {
                 if (typeof updateSidebarHighlight === 'function') updateSidebarHighlight();
             }
         }
-
-        // 打开任务详情栏
         if (typeof openTaskDetailPanel === 'function') {
             // 等待视图切换渲染完成后再打开详情面板
             setTimeout(() => openTaskDetailPanel(taskId), 0);
         }
+    };
+
+    _toast({
+        layout: 'col',
+        tone: subtaskId ? 'reminder-subtask' : 'reminder',
+        titleRaw: true,
+        title: displayTitle,
+        titleCls: 'truncate',
+        body: displayMessage,
+        bodyCls: 'reminder-toast-body',
+        extraHtml: subtaskHtml + pendingHtml,
+        badge: badgeHtml,
+        life: 0,
+        onBodyClick: openDetail,
+        actions: [
+            {
+                // Focus: 开始/切换番茄专注
+                label: 'FOCUS', variant: 'primary', cls: 'reminder-focus-btn',
+                onClick: function () {
+                    if (taskId && typeof startPomodoroForTask === 'function') {
+                        startPomodoroForTask(taskId);
+                    }
+                }
+            },
+            {
+                // Done: 主任务提醒 → 标记任务完成；子任务提醒 → 勾选该子任务
+                // （子任务场景下若沿用"完成整个任务"会造成误操作，语义必须区分）
+                label: 'DONE', variant: 'success', cls: 'reminder-done-btn',
+                onClick: function () {
+                    if (!taskId) return;
+                    if (subtaskId) {
+                        if (typeof toggleSubtaskComplete === 'function') {
+                            const t = (typeof tasks !== 'undefined') ? tasks.find(x => x.id === taskId) : null;
+                            const st = t ? (t.subtasks || []).find(x => x.id === subtaskId) : null;
+                            if (st && !st.completed) {
+                                // 显式传 taskId：提醒弹出时详情面板可能未打开或显示别的任务
+                                toggleSubtaskComplete(subtaskId, true, taskId);
+                            }
+                        }
+                        return;
+                    }
+                    if (typeof toggleTaskComplete === 'function') {
+                        const t = (typeof tasks !== 'undefined') ? tasks.find(x => x.id === taskId) : null;
+                        if (t && !t.completed) toggleTaskComplete(taskId);
+                    }
+                }
+            },
+            {
+                // Later: 稍后提醒（子任务场景下延迟的是该子任务）
+                // 灰色 = 关闭/推迟，与 FOCUS 的青色主操作区分（一卡只留一个 primary）
+                label: 'LATER', variant: 'ghost', cls: 'reminder-later-btn',
+                onClick: function () {
+                    if (!taskId) return;
+                    const delayMinutes = (typeof settings !== 'undefined' && settings.snoozeDelay) ? settings.snoozeDelay : 15;
+                    const payload = { taskId: taskId, delayMinutes: delayMinutes };
+                    if (subtaskId) payload.subtaskId = subtaskId;
+                    fetch('/api/reminder/snooze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    }).catch(err => console.error('Snooze error:', err));
+                    if (typeof showToast === 'function') {
+                        const snoozeTask = (typeof tasks !== 'undefined') ? tasks.find(t => t.id === taskId) : null;
+                        const snoozeMsg = snoozeTask ? buildTaskToastMessage(snoozeTask) : taskTitle;
+                        // 方案 A：标题只表达状态，时机信息并入正文
+                        showToast(snoozeMsg + ' · ' + delayMinutes + ' 分钟后再次提醒', 'info');
+                    }
+                }
+            },
+            {
+                // OK: 仅关闭（内核已负责关闭）
+                label: 'OK', variant: 'ghost', cls: 'reminder-ok-btn',
+                onClick: function () { }
+            }
+        ]
     });
 }
 
@@ -656,12 +955,24 @@ function sendBrowserNotification(title, body) {
     }
 }
 
-function showInAppNotification(title, body) {
+// 系统通知（番茄阶段 / 休眠检测等）的 title 是「信息」而非「状态」。
+// 方案 A 下标题行只放状态词，故把标题并入正文首段；系统通知栏仍用原标题（那里只有一行，必须有标题）。
+function _mergeNoticeTitle(title, body) {
+    const t = (title || '').trim();
+    const b = (body || '').trim();
+    if (!t) return b;
+    if (!b) return t;
+    return t + '：' + b;
+}
+
+// type 由调用方按语义指定（如「专注完成」→ success、「系统休眠检测」→ warning），
+// 标题行统一交给 type 派生，不再透传自由文本。
+function showInAppNotification(title, body, type = 'info') {
     if (typeof sendBackendNotification === 'function') {
         sendBackendNotification(title, body);
     }
     if (!document.hidden) {
-        showToast(body || '', 'info', 8000, title);
+        showToast(_mergeNoticeTitle(title, body), type, 'long');
         // 页面可见时已直接显示Toast，标记该通知为已展示，避免checkBrowserNotifications重复弹出
         // 键格式与 _notifKey 保持一致（末尾空 subtaskId）
         _displayedNotificationKeys.add(title + ':' + body + ':');
@@ -682,7 +993,7 @@ function _displayNotification(n) {
             reminderMinute: n.reminderMinute || 0
         });
     } else {
-        showToast(n.body || '', 'info', 8000, n.title);
+        showToast(_mergeNoticeTitle(n.title, n.body), 'info', 'long');
     }
 }
 
@@ -1040,6 +1351,19 @@ function recordExternalTaskDeletion(task) {
     }
 }
 
+// 撤销外部订阅任务的删除（FR-01，V1-7）：把黑名单记录移除，使下次同步允许该 UID 重建。
+// 与 recordExternalTaskDeletion 对称，仅由撤销栈调用。
+function removeExternalTaskDeletion(task) {
+    if (!task || !task.extSourceId || !task.extEventUid) return;
+    if (!settings || !Array.isArray(settings.calendarSubscriptions)) return;
+    const sub = settings.calendarSubscriptions.find(function (s) { return s.id === task.extSourceId; });
+    if (!sub || !Array.isArray(sub.extDeletedUids)) return;
+    sub.extDeletedUids = sub.extDeletedUids.filter(function (d) {
+        const uid = typeof d === 'string' ? d : (d && d.uid);
+        return uid !== task.extEventUid;
+    });
+}
+
 // 工具函数
 // filterTasks：单次遍历合并所有条件，避免链式 .filter() 重复扫描与中间数组分配。
 // 取得某文件夹的全部子孙清单 id（递归，含嵌套文件夹），用于按文件夹筛选其下所有任务。
@@ -1159,10 +1483,16 @@ function filterTasks(taskList, opts) {
         : (settings.showCompleted !== false);
     const hideCompleted = !includeCompleted;
 
+    // FR-02 回收站：默认排除软删除任务（task.deletedAt 非空）；回收站视图自身传 { includeTrashed: true }
+    const _hideTrashed = !opts || opts.includeTrashed !== true;
+
     // 单次遍历合并所有条件
     const filtered = [];
     for (let i = 0; i < taskList.length; i++) {
         const task = taskList[i];
+
+        // 回收站任务不进入任何常规视图（七个视图均经本管线取数）
+        if (_hideTrashed && task.deletedAt) continue;
 
         // 离线版「显示外部日历」关闭：跳过外部订阅任务
         if (_hideExtTasks && task.extSourceId) continue;
@@ -1840,10 +2170,13 @@ const SYSTEM_FONT_CANDIDATES = [
 ];
 
 // 用 canvas 检测单个字体是否已安装
+// 复用同一个 canvas：旧实现每个候选字体新建 canvas + 2 次 measureText，
+// 110 个候选累计 ~400ms，是设置面板打开卡顿的来源之一
+let _fontProbeCanvas = null;
 function _isFontAvailable(fontName) {
     if (!fontName || typeof fontName !== 'string') return false;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    if (!_fontProbeCanvas) _fontProbeCanvas = document.createElement('canvas');
+    const ctx = _fontProbeCanvas.getContext('2d');
     const testText = '测试字体mmmwWW1234中文';
     // 基准字体（普遍存在的 monospace）
     const baselineFont = 'monospace';

@@ -19,6 +19,11 @@ async function init() {
 
     performAutoBackup();
 
+    // FR-01/FR-02：撤销快捷键注册；启动时清理回收站过期任务（每日一次由跨天观察器负责）
+    if (typeof initUndoHotkey === 'function') initUndoHotkey();
+    if (typeof cleanupTrashedTasks === 'function') cleanupTrashedTasks();
+    if (typeof startTrashDayRolloverWatch === 'function') startTrashDayRolloverWatch();
+
     await loadHolidayData();
     // 预置「今年/明年/后年」的节日当天，避免后续暂无假期信息时侧边栏显示「暂无假期信息」
     if (typeof ensureFestivalSeeds === 'function') ensureFestivalSeeds();
@@ -304,7 +309,8 @@ const SIDEBAR_ITEM_SETTING_IDS = {
     recent7days: 'settings-sidebar-recent7days',
     summary: 'settings-sidebar-summary',
     tags: 'settings-sidebar-tags',
-    filters: 'settings-sidebar-filters'
+    filters: 'settings-sidebar-filters',
+    trash: 'settings-sidebar-trash'
 };
 
 function _sidebarItemDefaultOf(key) {
@@ -333,6 +339,176 @@ function saveSidebarItemsSettings() {
     settings.sidebarItems = cfg;
 }
 
+// ==================== 模糊时间偏好的快速时间选择面板 ====================
+// 与任务设置时间的 openTimePicker（tasks.js）保持一致：点击输入框弹出下拉、15 分钟间隔、
+// 点击写入 input.value 并派发 change。差异：选项限定在该词语的可选区间内，第一行提示可选时间段。
+// —— 单击面板外任意位置自动收起（2026-10-11 新增）——
+// document 级 click 监听，懒注册一次即可（5 个面板共用同一全局监听器）。
+// 两类点击跳过收起、交由各自逻辑处理：
+// 1) 面板内部（含选项、提示行）——选项 onclick 自己负责写入并收起；
+// 2) 5 个模糊时间输入框本身——其 inline onclick 已实现 toggle（再点一次收起），
+//    若不排除，本监听会在 input onclick 开启面板后（冒泡到 document）立即又把它关掉。
+let _fuzzyPickerOutsideInstalled = false;
+function _ensureFuzzyPickerOutsideHandler() {
+    if (_fuzzyPickerOutsideInstalled) return;
+    _fuzzyPickerOutsideInstalled = true;
+    document.addEventListener('click', function (e) {
+        const t = e.target;
+        if (t && t.closest) {
+            if (t.closest('.fuzzy-time-picker')) return;
+            if (t.closest('input[type="time"][id^="settings-fuzzy-"]')) return;
+        }
+        document.querySelectorAll('.fuzzy-time-picker').forEach(function (p) {
+            p.classList.add('hidden');
+        });
+    });
+}
+
+// ==================== 设置面板分段控件（方案 D，2026-10-11） ====================
+// 分段按钮点击 → 写回隐藏 input（保留原 select 的 id，load/save 仍读写 el.value）并派发 change，
+// 使既有 inline onchange（onWebModeChange/onBindAddressChange）与保存逻辑零改动生效。
+document.addEventListener('click', function (e) {
+    const btn = (e.target && e.target.closest) ? e.target.closest('.seg button') : null;
+    if (!btn) return;
+    const seg = btn.closest('.seg');
+    const target = (seg && seg.dataset.segFor) ? document.getElementById(seg.dataset.segFor) : null;
+    if (!target) return;
+    seg.querySelectorAll('button').forEach(function (b) {
+        b.classList.toggle('seg-active', b === btn);
+    });
+    if (target.value !== btn.dataset.value) {
+        target.value = btn.dataset.value;
+        target.dispatchEvent(new Event('change'));
+    }
+});
+
+// 打开设置面板时按隐藏 input 的当前值同步各分段按钮选中态（openSettingsModal 调用）
+function syncSegButtons() {
+    document.querySelectorAll('.seg[data-seg-for]').forEach(function (seg) {
+        const target = document.getElementById(seg.dataset.segFor);
+        if (!target) return;
+        seg.querySelectorAll('button').forEach(function (b) {
+            b.classList.toggle('seg-active', b.dataset.value === target.value);
+        });
+    });
+}
+
+function openFuzzyTimePicker(inputEl, pickerId, wordKey) {
+    _ensureFuzzyPickerOutsideHandler();
+    const picker = document.getElementById(pickerId);
+    if (!picker) return;
+    // 关闭其他模糊时间面板
+    document.querySelectorAll('.fuzzy-time-picker').forEach(p => {
+        if (p.id !== pickerId) p.classList.add('hidden');
+    });
+    // 已打开时再次点击输入框，关闭面板（与 openTimePicker 的 toggle 行为一致）
+    if (!picker.classList.contains('hidden')) {
+        picker.classList.add('hidden');
+        return;
+    }
+    const cfg = (typeof FUZZY_TIME_WORDS !== 'undefined')
+        ? FUZZY_TIME_WORDS.find(w => w.key === wordKey) : null;
+    if (!cfg) return;
+    const toTime = function (mm) {
+        return String(Math.floor(mm / 60)).padStart(2, '0') + ':' + String(mm % 60).padStart(2, '0');
+    };
+
+    picker.innerHTML = '';
+    // 第一行：可选时间段提示（不参与选择）
+    const hint = document.createElement('div');
+    hint.className = 'px-3 py-1.5 text-xs text-theme-muted border-b border-theme sticky top-0 bg-theme-tertiary';
+    hint.textContent = '可选 ' + toTime(cfg.min) + ' - ' + toTime(cfg.max);
+    hint.style.cursor = 'default';
+    picker.appendChild(hint);
+
+    // 区间内 15 分钟间隔的选项（区间边界均为 15 分钟整倍数，直接按区间裁剪）
+    // ⚠️ 右端点 1440（24:00）只是文案边界：<input type="time"> 不接受 24:00，
+    //    故选项生成封顶到 1439（晚上区间末项为 23:45）。
+    const startSlot = Math.ceil(cfg.min / 15) * 15;
+    const lastSlot = Math.min(cfg.max, 1439);
+    const currentValue = inputEl.value;
+    for (let s = startSlot; s <= lastSlot; s += 15) {
+        const timeStr = toTime(s);
+        const item = document.createElement('div');
+        item.className = 'px-3 py-1.5 text-sm cursor-pointer text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition';
+        if (timeStr === currentValue) item.style.fontWeight = '600';
+        item.textContent = timeStr;
+        item.dataset.value = timeStr;
+        item.onclick = (e) => {
+            e.stopPropagation();
+            inputEl.value = timeStr;
+            picker.classList.add('hidden');
+            inputEl.dispatchEvent(new Event('change'));
+        };
+        picker.appendChild(item);
+    }
+
+    picker.classList.remove('hidden');
+    picker.classList.add('fuzzy-time-picker');
+
+    // —— 展开方向：默认在输入框下方呼出，下方空间不足且上方更宽敞时改为向上呼出 ——
+    // 以设置面板滚动容器(#settings-content-scroll)的可视区为参照，避免面板超出可视区被裁剪。
+    // 用内联 style 而非 Tailwind 类切换，避免动态类名不在预构建 CSS 中。
+    const scrollBox = document.getElementById('settings-content-scroll');
+    const inputRect = inputEl.getBoundingClientRect();
+    const boxRect = scrollBox ? scrollBox.getBoundingClientRect()
+        : { top: 0, bottom: (window.innerHeight || 0) };
+    const PANEL_MAX = 192; // 对应 max-h-48
+    const panelH = picker.offsetHeight || PANEL_MAX;
+    const spaceBelow = boxRect.bottom - inputRect.bottom;
+    const spaceAbove = inputRect.top - boxRect.top;
+    const openUp = spaceBelow < panelH && spaceAbove > spaceBelow;
+    if (openUp) {
+        picker.style.bottom = '100%';
+        picker.style.marginTop = '0';
+        picker.style.marginBottom = '0.25rem';
+    } else {
+        picker.style.bottom = 'auto';
+        picker.style.marginTop = '0.25rem';
+        picker.style.marginBottom = '0';
+    }
+    // 高度不超过该方向的可用空间：扣掉 4px 间距再留 8px 余量，保证面板完整可见不被容器裁剪。
+    // 下限取 48px（约 1.5 个选项），避免空间极小时反而超出。
+    const avail = openUp ? spaceAbove : spaceBelow;
+    picker.style.maxHeight = Math.max(48, Math.min(PANEL_MAX, avail - 12)) + 'px';
+
+    // —— 定位到当前值：只滚动面板自身 ——
+    // 不能用 scrollIntoView，它会连带滚动设置面板/页面，使设置项"跳到固定位置"。
+    const target = picker.querySelector('[data-value="' + currentValue + '"]');
+    if (target) {
+        picker.scrollTop = Math.max(0, target.offsetTop - picker.clientHeight / 2 + target.clientHeight / 2);
+    }
+}
+
+// 智能计划开关联动：仅开启时显示「任务时间粒度」
+function updateFuzzyGranVisibility() {
+    const smartEl = document.getElementById('settings-fuzzy-smart');
+    const row = document.getElementById('settings-fuzzy-gran-row');
+    if (!row) return;
+    row.style.display = (smartEl && smartEl.checked) ? '' : 'none';
+}
+
+// 模糊时间输入超出可选区间时：toast 提示并落入最近的有效时间
+function validateFuzzyTimeInput(inputEl, wordKey) {
+    const cfg = (typeof FUZZY_TIME_WORDS !== 'undefined')
+        ? FUZZY_TIME_WORDS.find(w => w.key === wordKey) : null;
+    if (!cfg) return;
+    const v = inputEl.value;
+    if (!v) return;
+    const p = String(v).split(':');
+    const mm = (parseInt(p[0]) || 0) * 60 + (parseInt(p[1]) || 0);
+    if (mm >= cfg.min && mm <= cfg.max) return;
+    const clamped = mm < cfg.min ? cfg.min : cfg.max;
+    const toTime = function (x) {
+        return String(Math.floor(x / 60)).padStart(2, '0') + ':' + String(x % 60).padStart(2, '0');
+    };
+    if (typeof showToast === 'function') {
+        showToast(cfg.word + ' 的可选时间为 ' + toTime(cfg.min) + '~' + toTime(cfg.max) + '，已调整为 ' + toTime(clamped),
+            'warning');
+    }
+    inputEl.value = toTime(clamped);
+}
+
 function openSettingsModal() {
     document.getElementById('settings-default-list').value = settings.defaultListId || 'default';
     document.getElementById('settings-default-important').checked = settings.defaultImportant || false;
@@ -346,10 +522,44 @@ function openSettingsModal() {
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
     document.getElementById('settings-cmd-remove-time').checked = settings.cmdRemoveTimeText !== false;
+    // 模糊时间偏好（命令面板输入模糊时段词/相对词的偏好时间）
+    (function () {
+        const prefs = settings.commandTimePrefs || {};
+        const ranges = { morning:[360,720], noon:[690,810], afternoon:[720,1080], evening:[1080,1440] };
+        const ids = { morning:'settings-fuzzy-morning', noon:'settings-fuzzy-noon', afternoon:'settings-fuzzy-afternoon', evening:'settings-fuzzy-evening' };
+        const defs = { morning:540, noon:720, afternoon:900, evening:1140 };
+        const toTime = function (mm) { return String(Math.floor(mm/60)).padStart(2,'0') + ':' + String(mm%60).padStart(2,'0'); };
+        Object.keys(ids).forEach(function (k) {
+            const el = document.getElementById(ids[k]);
+            if (!el) return;
+            const v = (prefs[k] !== undefined) ? prefs[k] : defs[k];
+            // 1439 封顶：右端点 1440（24:00）不是合法的 time 输入值，不能直接写回输入框
+            el.value = toTime(Math.min(1439, Math.max(ranges[k][0], Math.min(ranges[k][1], v))));
+            // 手动输入超出可选区间时，toast 提示并落入有效时间
+            el.onchange = function () { validateFuzzyTimeInput(el, k); };
+        });
+        const laterEl = document.getElementById('settings-fuzzy-later');
+        if (laterEl) {
+            const lv = (prefs.laterMinutes !== undefined) ? prefs.laterMinutes : 15;
+            laterEl.value = Math.max(5, Math.min(120, lv));
+        }
+        const smartEl = document.getElementById('settings-fuzzy-smart');
+        if (smartEl) {
+            smartEl.checked = prefs.smartSchedule !== false;
+            smartEl.onchange = updateFuzzyGranVisibility;
+        }
+        const granEl = document.getElementById('settings-fuzzy-granularity');
+        if (granEl) {
+            const gv = (prefs.timeGranularity !== undefined) ? prefs.timeGranularity : 30;
+            granEl.value = Math.max(1, Math.min(120, gv));
+        }
+        updateFuzzyGranVisibility();
+    })();
     document.getElementById('settings-priority-display-mode').value = getPriorityDisplayMode();
     // 注：原「全局默认」（显示已完成/农历/专注按钮/无日期位置）已移至各视图配置面板，
     // 旧数据由 applySettings 内的迁移逻辑无感升级到各视图配置
-    document.getElementById('settings-default-task-date').value = settings.defaultTaskDate || 'today';
+    // 默认任务日期仅保留「无日期/今天」两项，历史遗留值（明天/下周一）回退为今天
+    document.getElementById('settings-default-task-date').value = ['none', 'today'].includes(settings.defaultTaskDate) ? settings.defaultTaskDate : 'today';
     loadSidebarItemsSettings();
     document.getElementById('settings-focus-duration').value = settings.focusDuration || 25;
     document.getElementById('settings-short-break-duration').value = settings.shortBreakDuration || 5;
@@ -363,8 +573,7 @@ function openSettingsModal() {
     document.getElementById('settings-advanced-particle').checked = settings.advancedParticleAnimation !== false;
     document.getElementById('settings-smooth-animations').checked = settings.smoothAnimations === true;
     document.getElementById('settings-feature-animations').checked = settings.featureAnimations === true;
-    document.getElementById('settings-auto-create').checked = settings.autoCreateTask !== false;
-    document.getElementById('settings-toast-duration').value = settings.toastDuration || 5;
+    document.getElementById('settings-toast-pace').value = settings.toastPace || 'normal';
     document.getElementById('settings-snooze-delay').value = settings.snoozeDelay || 15;
     document.getElementById('settings-refresh-interval').value = settings.refreshInterval || 30;
     // 外部日历开关（仅离线版设置面板含此元素）
@@ -380,6 +589,10 @@ function openSettingsModal() {
     document.getElementById('backup-enabled').checked = settings.backupEnabled || false;
     document.getElementById('backup-interval').value = settings.backupInterval || 7;
     document.getElementById('retention-period').value = settings.retentionPeriod || 30;
+
+    // FR-02：初始化回收站保留天数设置
+    const _trashRetEl = document.getElementById('trash-retention-days');
+    if (_trashRetEl) _trashRetEl.value = (typeof settings.trashRetentionDays === 'number') ? settings.trashRetentionDays : 30;
 
     // 初始化网络配置
     document.getElementById('settings-bind-address').value = settings.bindAddress || '127.0.0.1';
@@ -418,7 +631,7 @@ function openSettingsModal() {
     // 初始化背景图模式 Tab / 轮播设置区回填 / 填充方式（目录轮播 PRD 4.2/4.3）
     updateBgImageModeTabs();
     updateBgFillModeButtons();
-    updateBgCarouselStatusUI();
+    updateBgCarouselStatusUI(true);
 
     updateSettingsListSelect();
     initVCTemp();
@@ -439,6 +652,9 @@ function openSettingsModal() {
     } else {
         _resetSettingsNavState();
     }
+
+    // 同步分段控件选中态（方案 D：隐藏 input 的值已全部回填完毕）
+    syncSegButtons();
 }
 
 function closeSettingsModal() {
@@ -473,6 +689,8 @@ function updateBgImageModeTabs(mode) {
 }
 
 function _setBgModeTabActive(btn, active) {
+    // 写前比对：状态未变化时不触碰 class，避免无谓触发文档级变更
+    if (btn.classList.contains('border-accent') === !!active) return;
     if (active) {
         btn.classList.add('border-accent', 'bg-accent-soft', 'text-accent-dark');
         btn.classList.remove('border-theme', 'text-theme-secondary', 'hover:bg-theme-secondary');
@@ -507,9 +725,8 @@ function _resyncPaletteForBgSrc(src) {
         settings.themePaletteColors = palettes;
         const brightness = (typeof palettes._brightness === 'number') ? palettes._brightness : bgImageBrightness;
         const detectedTheme = brightness < 0.45 ? 'dark' : 'light';
-        if (settings.theme !== detectedTheme) {
-            setTheme(detectedTheme);
-        }
+        // 自动路径：只按明暗结果应用，不产生图片级手动登记
+        _applyAutoTheme(detectedTheme);
         if (BG_EXTRACTED_PALETTE_KEYS.indexOf(settings.themePalette) !== -1) {
             applyThemePalette(settings.themePalette);
             const container = document.getElementById('palette-preview-container');
@@ -523,8 +740,15 @@ function _resyncPaletteForBgSrc(src) {
 
 // 轮播设置区状态刷新（轮询/配置响应后调用，幂等）。
 // 输入框聚焦时不覆盖用户正在输入的值，避免 5s 轮询打断编辑。
-function updateBgCarouselStatusUI() {
+// force=true：设置面板打开流程在 modal 显示前调用，绕过可见性门控。
+// 默认（5s 轮询路径）：面板关闭时直接跳过全部 DOM 写入——状态卡文本/倒计时每拍变更
+// 会触发 Tailwind JIT 文档级观察器的全量重扫 + 全文档样式重算，形成每 5 秒一次的固定冻结。
+function updateBgCarouselStatusUI(force) {
     if (!document.getElementById('bg-mode-carousel-btn')) return;
+    if (force !== true) {
+        const modal = document.getElementById('settings-modal');
+        if (!modal || modal.classList.contains('hidden')) return;
+    }
     updateBgImageModeTabs();
     const state = bgCarouselState || {};
     const dirInput = document.getElementById('bg-carousel-directory-input');
@@ -546,14 +770,15 @@ function updateBgCarouselStatusUI() {
             const imgSrc = '/api/bg-carousel/image?v=' + state.switchId;
             if (thumb && thumb.getAttribute('src') !== imgSrc) thumb.src = imgSrc;
             const nameEl = document.getElementById('bg-carousel-filename');
-            if (nameEl) nameEl.textContent = state.currentFile;
+            if (nameEl && nameEl.textContent !== state.currentFile) nameEl.textContent = state.currentFile;
             const metaEl = document.getElementById('bg-carousel-meta');
             if (metaEl) {
                 const parts = [(state.imageCount || 0) + ' 张'];
                 parts.push(state.order === 'random' ? '随机' : '顺序');
                 const remain = _bgCarouselRemainSeconds(state);
                 if (remain !== null) parts.push(_bgCarouselFormatCountdown(remain) + '后切换');
-                metaEl.textContent = parts.join(' · ');
+                const metaText = parts.join(' · ');
+                if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
             }
         }
         if (emptyHint) emptyHint.classList.add('hidden');
@@ -593,12 +818,12 @@ function _bgCarouselFormatCountdown(sec) {
 function applyBgCarouselDirectory(value) {
     const dir = (value || '').trim();
     if (!dir) {
-        showToast('请输入或选择图片目录', 'warning', 3000);
+        showToast('请输入或选择图片目录', 'warning');
         return;
     }
     bgCarouselUpdateConfig({ directory: dir }).then(state => {
         if (state && state.success !== false) {
-            showToast('轮播目录已更新', 'success', 2000);
+            showToast('轮播目录已更新', 'success', 'short');
         }
     });
 }
@@ -618,18 +843,18 @@ async function bgCarouselSelectDirectory() {
             const dirInput = document.getElementById('bg-carousel-directory-input');
             if (dirInput) dirInput.value = result.path;
             const state = await bgCarouselUpdateConfig({ directory: result.path });
-            if (state && state.success !== false) showToast('轮播目录已更新', 'success', 2000);
+            if (state && state.success !== false) showToast('轮播目录已更新', 'success', 'short');
         } else if (result && (result.reason === 'unavailable' || result.reason === 'error')) {
             showToast(result.message || (result.reason === 'error'
-                ? '系统目录对话框调用失败，已切换为内置浏览器'
-                : '当前系统没有可用的目录选择对话框，已切换为内置浏览器'), 'info', 4000);
+                ? '无法调用系统目录对话框，已切换为内置浏览器'
+                : '当前系统没有可用的目录选择对话框，已切换为内置浏览器'), 'info');
             const dirInput = document.getElementById('bg-carousel-directory-input');
             openBgDirBrowser(dirInput ? dirInput.value.trim() : '');
         } else if (result && result.success === false) {
-            showToast('未选择目录', 'info', 2000);
+            showToast('未选择目录', 'info', 'short');
         }
     } catch (e) {
-        showToast('目录选择服务不可用', 'error', 3000);
+        showToast('无法选择目录：服务不可用', 'error');
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -685,14 +910,14 @@ function closeBgDirBrowser() {
 async function bgDirBrowserConfirm() {
     const path = _dirBrowserState.path;
     if (!path) {
-        showToast('请先进入一个目录', 'warning', 2500);
+        showToast('请先进入一个目录', 'warning');
         return;
     }
     const dirInput = document.getElementById('bg-carousel-directory-input');
     if (dirInput) dirInput.value = path;
     closeBgDirBrowser();
     const state = await bgCarouselUpdateConfig({ directory: path });
-    if (state && state.success !== false) showToast('轮播目录已更新', 'success', 2000);
+    if (state && state.success !== false) showToast('轮播目录已更新', 'success', 'short');
 }
 
 function _dirBrowserStatus(text) {
@@ -715,7 +940,7 @@ function _dirBrowserLoad(path, allowFallback) {
         if (!state || state.success === false) {
             // 首次带路径进来且该路径不可用：退回主目录，别让用户一进来就是死路
             if (allowFallback) {
-                showToast((state && state.message) || '该目录不可用，已回到主目录', 'warning', 3000);
+                showToast((state && state.message) || '该目录不可用，已回到主目录', 'warning');
                 _dirBrowserLoad('', false);
                 return;
             }
@@ -878,13 +1103,13 @@ function resetAllData() {
                         .then(r => r.json().catch(() => ({ success: false })))
                         .then(result => {
                             if (result.success) {
-                                showToast('备份完成，正在重置数据...', 'success');
+                                showToast('已备份，正在重置数据…', 'success');
                             } else {
-                                showToast('备份失败：' + (result.error || '未知错误') + '，直接重置数据', 'warning');
+                                showToast('无法备份：' + (result.error || '未知错误') + '，将直接重置数据', 'error');
                             }
                             doResetData();
                         }).catch(err => {
-                            showToast('备份失败：' + (err.message || '网络错误') + '，直接重置数据', 'warning');
+                            showToast('无法备份：' + (err.message || '网络错误') + '，将直接重置数据', 'error');
                             doResetData();
                         });
                 }, () => {
@@ -983,7 +1208,7 @@ function doResetData() {
     renderFilters();
     renderView();
     closeSettingsModal();
-    showToast('所有数据已重置', 'success');
+    showToast('已重置所有数据', 'success');
     // 自动刷新页面，清除背景图片等残留样式
     setTimeout(() => { location.reload(); }, 500);
 }
@@ -993,10 +1218,10 @@ function shutdownServer() {
     if (btn.dataset.confirming === 'true') {
         // 第二次点击：执行关闭
         fetch('/api/shutdown', { method: 'POST' }).then(() => {
-            showToast('服务已关闭，可关闭此页面', 'info', 10000);
+            showToast('服务已关闭，可关闭此页面', 'success', 'long');
             document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#666"><div style="text-align:center"><h2>服务已关闭</h2><p>您可以关闭此页面</p></div></div>';
         }).catch(err => {
-            showToast('关闭服务失败: ' + err.message, 'error');
+            showToast('无法关闭服务：' + err.message, 'error');
         });
         return;
     }
@@ -1044,7 +1269,7 @@ function executeRestart() {
     }
 
     fetch('/api/restart', { method: 'POST' }).then(() => {
-        showToast('服务正在重启，请稍候...', 'info', 10000);
+        showToast('正在重启服务，请稍候…', 'info', 'long');
         setTimeout(() => {
             let retries = 0;
             const tryReconnect = () => {
@@ -1059,14 +1284,14 @@ function executeRestart() {
                     if (retries < 20) {
                         setTimeout(tryReconnect, 1000);
                     } else {
-                        showToast('重启超时，请手动刷新页面', 'error', 10000);
+                        showToast('无法重启：等待超时，请手动刷新页面', 'error', 'long');
                     }
                 });
             };
             setTimeout(tryReconnect, 2000);
         }, 1000);
     }).catch(err => {
-        showToast('重启服务失败: ' + err.message, 'error');
+        showToast('无法重启服务：' + err.message, 'error');
     });
 }
 
@@ -1082,6 +1307,27 @@ function saveSettings(silent) {
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
     settings.cmdRemoveTimeText = document.getElementById('settings-cmd-remove-time').checked;
+    // 模糊时间偏好（硬约束截断：超出区间自动夹到边界）
+    (function () {
+        const ranges = { morning:[360,720], noon:[690,810], afternoon:[720,1080], evening:[1080,1440] };
+        const ids = { morning:'settings-fuzzy-morning', noon:'settings-fuzzy-noon', afternoon:'settings-fuzzy-afternoon', evening:'settings-fuzzy-evening' };
+        const toMin = function (s) { const p = String(s||'').split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+        settings.commandTimePrefs = settings.commandTimePrefs || {};
+        Object.keys(ids).forEach(function (k) {
+            const el = document.getElementById(ids[k]);
+            const mm = el ? toMin(el.value) : 0;
+            settings.commandTimePrefs[k] = Math.max(ranges[k][0], Math.min(ranges[k][1], mm));
+        });
+        // 「傍晚」已下线（2026-10-13）：清掉历史数据里的残留键，避免导出/保存继续携带
+        delete settings.commandTimePrefs.dusk;
+        const laterEl = document.getElementById('settings-fuzzy-later');
+        const lv = laterEl ? (parseInt(laterEl.value) || 15) : 15;
+        settings.commandTimePrefs.laterMinutes = Math.max(5, Math.min(120, lv));
+        const smartEl = document.getElementById('settings-fuzzy-smart');
+        settings.commandTimePrefs.smartSchedule = smartEl ? smartEl.checked : true;
+        const granEl = document.getElementById('settings-fuzzy-granularity');
+        settings.commandTimePrefs.timeGranularity = granEl ? Math.max(1, Math.min(120, parseInt(granEl.value) || 30)) : 30;
+    })();
     settings.priorityDisplayMode = document.getElementById('settings-priority-display-mode').value;
     // 注：原「全局默认」4 项已移至各视图配置面板，此处不再读写
     settings.defaultTaskDate = document.getElementById('settings-default-task-date').value;
@@ -1098,8 +1344,7 @@ function saveSettings(silent) {
     settings.advancedParticleAnimation = document.getElementById('settings-advanced-particle').checked;
     settings.smoothAnimations = document.getElementById('settings-smooth-animations').checked;
     settings.featureAnimations = document.getElementById('settings-feature-animations').checked;
-    settings.autoCreateTask = document.getElementById('settings-auto-create').checked;
-    settings.toastDuration = parseInt(document.getElementById('settings-toast-duration').value) || 5;
+    settings.toastPace = document.getElementById('settings-toast-pace').value || 'normal';
     settings.snoozeDelay = parseInt(document.getElementById('settings-snooze-delay').value) || 15;
     if (settings.snoozeDelay < 1) settings.snoozeDelay = 1;
     if (settings.snoozeDelay > 120) settings.snoozeDelay = 120;
@@ -1148,6 +1393,8 @@ function saveSettings(silent) {
     // 应用视图自定义临时状态（完全延迟保存：点保存时才生效）
     applyVCFromTemp();
     saveData();
+    // FR-01-4：settings 变更保存后撤销栈失效（结构性变更使旧撤销上下文不可靠）
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     startDataRefreshTimer();
 
     // 刷新番茄状态背景色（开关变更后立即生效）
@@ -1168,7 +1415,7 @@ function saveSettings(silent) {
                 showConfirmToast(
                     '网络配置已更改，是否重启服务以生效？',
                     () => { executeRestart(); },
-                    () => { showToast('网络配置将在下一次重启服务时生效', 'info', 5000); }
+                    () => { showToast('网络配置将在下一次重启服务时生效', 'info'); }
                 );
             }, 100);
         }
@@ -1183,7 +1430,7 @@ function saveSettings(silent) {
     updateViewButtons();
     if (!silent) {
         setTimeout(() => {
-            showToast('设置已保存！', 'success');
+            showToast('已保存设置', 'success');
         }, 100);
     }
 }
@@ -1284,12 +1531,12 @@ function toggleAutoStart() {
             showToast(enabled ? '已开启开机自动启动' : '已关闭开机自动启动', 'success');
         } else {
             checkbox.checked = !enabled;
-            showToast('设置失败：' + (data.error || '未知错误'), 'error');
+            showToast('无法保存设置：' + (data.error || '未知错误'), 'error');
         }
     })
     .catch(err => {
         checkbox.checked = !enabled;
-        showToast('设置失败', 'error');
+        showToast('无法保存设置', 'error');
     });
 }
 
@@ -1319,9 +1566,9 @@ function testNotification() {
                 : 'Linux系统通知测试成功！'
         })
     }).then(r => r.json()).then(() => {
-        showToast('系统通知已发送，请查看桌面通知', 'success');
+        showToast('已发送系统通知，请查看桌面通知', 'success');
     }).catch(err => {
-        showToast('通知发送失败: ' + err.message, 'error');
+        showToast('无法发送通知：' + err.message, 'error');
     }).finally(() => {
         if (btn) {
             btn.disabled = false;
@@ -1523,7 +1770,7 @@ function copyLanUrl() {
             const sel = window.getSelection();
             sel.removeAllRanges();
             sel.addRange(range);
-            showToast('请手动复制选中的地址', 'info');
+            showToast('请手动复制选中的地址', 'warning');
         });
     }
 }
@@ -1539,7 +1786,7 @@ function copyLocalhostUrl() {
             const sel = window.getSelection();
             sel.removeAllRanges();
             sel.addRange(range);
-            showToast('请手动复制选中的地址', 'info');
+            showToast('请手动复制选中的地址', 'warning');
         });
     }
 }
@@ -1583,7 +1830,7 @@ function initWebMode() {
                 window.location.href = '/index.html';
             } else {
                 // CDN 不可达，保持离线版并提示
-                showToast('互联网不可达，已保持在离线版', 'warning', 5000);
+                showToast('互联网不可达，已保持在离线版', 'warning');
             }
         });
     } else if (currentVersion === 'online') {
@@ -1607,7 +1854,7 @@ function startCdnHeartbeat() {
                 stopCdnHeartbeat();
                 settings.webMode = 'offline';
                 saveDataImmediate();
-                showToast('CDN 不可达，已自动切换回离线版', 'warning', 5000);
+                showToast('CDN 不可达，已自动切换回离线版', 'warning');
                 setTimeout(() => {
                     window.location.href = '/index_offline.html';
                 }, 1500);
@@ -1641,18 +1888,18 @@ async function onWebModeChange() {
 
     // 切换到在线版：先检测 CDN
     if (newMode === 'online') {
-        showToast('正在检测网络连通性...', 'info', 3000);
+        showToast('正在检测网络连通性…', 'info');
         const online = await checkOnlineConnectivity();
         if (!online) {
             // CDN 不可达，回退选择项并提示
             selectEl.value = 'offline';
-            showToast('无法连接 CDN，已保持在离线版', 'warning', 5000);
+            showToast('无法连接 CDN，已保持在离线版', 'warning');
             return;
         }
         // CDN 可达：保存设置并跳转
         settings.webMode = 'online';
         saveDataImmediate();
-        showToast('正在切换到在线版...', 'success', 2000);
+        showToast('正在切换到在线版…', 'info', 'short');
         setTimeout(() => {
             window.location.href = '/index.html';
         }, 800);
@@ -1660,7 +1907,7 @@ async function onWebModeChange() {
         // 切换到离线版：直接保存并跳转
         settings.webMode = 'offline';
         saveDataImmediate();
-        showToast('正在切换到离线版...', 'success', 2000);
+        showToast('正在切换到离线版…', 'info', 'short');
         setTimeout(() => {
             window.location.href = '/index_offline.html';
         }, 800);
@@ -1669,6 +1916,29 @@ async function onWebModeChange() {
 
 // ==================== 字体选择 ====================
 let _detectedSystemFonts = null;
+// 系统字体检测结果的 localStorage 缓存：检测 ~110 个候选字体实测约 400ms，
+// 缓存后打开设置面板零开销，展开字体下拉零延迟；仅首次（或缓存过期）在展开下拉时现场检测
+const SYSTEM_FONTS_CACHE_KEY = 'tacklist_system_fonts_v1';
+const SYSTEM_FONTS_CACHE_TTL = 7 * 24 * 3600 * 1000; // 7 天：兼顾系统安装新字体后的列表刷新
+
+function _loadCachedSystemFonts() {
+    try {
+        const data = JSON.parse(localStorage.getItem(SYSTEM_FONTS_CACHE_KEY) || 'null');
+        if (data && Array.isArray(data.fonts) && data.fonts.length) return data.fonts;
+    } catch (e) {}
+    return null;
+}
+function _saveCachedSystemFonts(fonts) {
+    try {
+        localStorage.setItem(SYSTEM_FONTS_CACHE_KEY, JSON.stringify({ at: Date.now(), fonts: fonts }));
+    } catch (e) { /* 存储满/隐私模式：退化为仅内存缓存 */ }
+}
+function _systemFontsCacheStale() {
+    try {
+        const data = JSON.parse(localStorage.getItem(SYSTEM_FONTS_CACHE_KEY) || 'null');
+        return !data || typeof data.at !== 'number' || Date.now() - data.at > SYSTEM_FONTS_CACHE_TTL;
+    } catch (e) { return true; }
+}
 let _fontDropdownOpen = false;
 
 function initFontFamilySelector() {
@@ -1688,11 +1958,10 @@ function initFontFamilySelector() {
     // 回填当前字体名到输入框
     inputEl.value = settings.fontFamily || '';
 
-    // 异步检测系统字体并初始化下拉列表
+    // 优先使用 localStorage 缓存的检测结果（打开面板零开销）；
+    // 无缓存时延迟到真正展开字体下拉才现场检测（见 _openFontDropdown）
     if (!_detectedSystemFonts) {
-        setTimeout(() => {
-            _detectedSystemFonts = detectSystemFonts();
-        }, 100);
+        _detectedSystemFonts = _loadCachedSystemFonts();
     }
 
     // 绑定输入框交互
@@ -1741,6 +2010,11 @@ function toggleFontDropdown(event) {
 function _openFontDropdown() {
     const listEl = document.getElementById('font-dropdown-list');
     if (!listEl) return;
+    // 首次（无缓存）或缓存过期时在展开瞬间检测并回写缓存；其余情况直接使用缓存，展开零延迟
+    if (!_detectedSystemFonts || _systemFontsCacheStale()) {
+        _detectedSystemFonts = detectSystemFonts();
+        _saveCachedSystemFonts(_detectedSystemFonts);
+    }
     _renderFontDropdown(listEl, '');
     listEl.classList.remove('hidden');
     _fontDropdownOpen = true;
@@ -1871,7 +2145,7 @@ function submitFontInput() {
     const isAvailable = typeof _isFontAvailable === 'function' && _isFontAvailable(font);
     if (!isAvailable) {
         // 未检测到安装，不应用，仅提示
-        showToast('未检测到该字体已安装：' + font, 'warning', 3000);
+        showToast('系统未安装该字体：' + font, 'warning');
         // 恢复输入框为当前实际使用的字体
         inputEl.value = settings.fontFamily || '';
         return;
@@ -1885,7 +2159,7 @@ function _applyFontName(font) {
     const applyAndSave = () => {
         applyFontFamily();
         saveData();
-        showToast(font ? '已切换字体：' + font : '已恢复系统默认字体', 'success', 2000);
+        showToast(font ? '已切换字体：' + font : '已恢复系统默认字体', 'success', 'short');
         _updateClearFontButton();
     };
     // Google 字体需先加载样式表再应用
@@ -1894,7 +2168,7 @@ function _applyFontName(font) {
         if (isOnline) {
             loadGoogleFont(font, applyAndSave);
         } else {
-            showToast('离线版不支持 Google 字体', 'warning', 3000);
+            showToast('离线版不支持 Google 字体', 'warning');
         }
     } else {
         applyAndSave();
@@ -1912,13 +2186,13 @@ function handleFontFileUpload(event) {
 
     // 文件大小限制
     if (file.size > _MAX_FONT_SIZE) {
-        showToast('字体文件过大（超过 20MB），请选择更小的文件', 'error', 4000);
+        showToast('字体文件过大（超过 20MB），请选择更小的文件', 'error');
         return;
     }
 
     const ext = file.name.split('.').pop().toLowerCase();
     if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) {
-        showToast('仅支持 TTF/OTF/WOFF/WOFF2 格式', 'error', 3000);
+        showToast('仅支持 TTF/OTF/WOFF/WOFF2 格式', 'warning');
         return;
     }
 
@@ -1946,11 +2220,11 @@ function handleFontFileUpload(event) {
             if (inputEl) inputEl.value = fontName;
             _updateClearFontButton();
 
-            showToast('字体已上传并应用：' + baseName, 'success', 3000);
+            showToast('已应用上传的字体：' + baseName, 'success');
         });
     };
     reader.onerror = function() {
-        showToast('字体文件读取失败', 'error', 3000);
+        showToast('无法读取字体文件', 'error');
     };
     reader.readAsDataURL(file);
 }
@@ -2015,7 +2289,7 @@ function clearUploadedFont() {
     if (inputEl) inputEl.value = settings.fontFamily || '';
     _updateClearFontButton();
 
-    showToast('已清除上传的字体：' + oldName, 'info', 2000);
+    showToast('已移除上传的字体：' + oldName, 'info', 'short');
 }
 
 function _updateClearFontButton() {
@@ -2437,9 +2711,10 @@ function resetPaletteEdit(paletteKey) {
             _renderPalettePreviews(settings.themePaletteColors);
         }
         _renderPaletteCardButtons();
-        showToast('已恢复原始配色', 'success', 2000);
+        // 撤销类通知统一走简洁通知条（单行、short 档）
+        showCompactToast('已恢复原始配色', { tone: 'success' });
     } else {
-        showToast('该配色未做编辑', 'info', 2000);
+        showCompactToast('配色没有改动', { tone: 'info' });
     }
 }
 
@@ -2519,13 +2794,13 @@ function _paletteHueMismatch(paletteKey) {
 function rederivePaletteLayers(paletteKey) {
     const palette = resolvePaletteObject(paletteKey);
     if (!palette) {
-        showToast('未找到该配色', 'warning', 2500);
+        showToast('没有找到该配色', 'info');
         return;
     }
     const dual = !!(palette.light && palette.dark);
     const variant = dual ? (isDarkThemeActive() ? palette.dark : palette.light) : palette;
     if (!variant || !variant.accent) {
-        showToast('该配色缺少强调色，无法重新派生', 'warning', 3000);
+        showToast('无法重新派生：该配色缺少强调色', 'warning');
         return;
     }
 
@@ -2539,12 +2814,12 @@ function rederivePaletteLayers(paletteKey) {
         // 浅色/深色两个变体各自按自己的强调色派生，保证切换主题后依然协调
         const la = newPalette.light.accent, da = newPalette.dark.accent;
         const dl = generatePaletteFromAccent(la), dd = generatePaletteFromAccent(da);
-        if (!dl || !dd) { showToast('重新派生失败', 'error', 3000); return; }
+        if (!dl || !dd) { showToast('无法重新派生配色', 'error'); return; }
         applyVariant(newPalette.light, dl.light, la);
         applyVariant(newPalette.dark, dd.dark, da);
     } else {
         const d = generatePaletteFromAccent(newPalette.accent);
-        if (!d) { showToast('重新派生失败', 'error', 3000); return; }
+        if (!d) { showToast('无法重新派生配色', 'error'); return; }
         applyVariant(newPalette, d.light, newPalette.accent);
     }
 
@@ -2555,7 +2830,7 @@ function rederivePaletteLayers(paletteKey) {
     _renderBuiltinPalettePreviews();
     if (settings.themePaletteColors) _renderPalettePreviews(settings.themePaletteColors);
     _renderPaletteCardButtons();
-    showToast('已按强调色重新派生其他层次', 'success', 2500);
+    showToast('已按强调色重新派生其他层次', 'success', 'short');
 }
 
 // 高亮当前选中的调色板卡片（扫描所有 data-palette-key 属性的卡片）
@@ -2575,13 +2850,13 @@ function _highlightActivePalette(name) {
 function generatePalettePreview(autoSwitchTheme) {
     const bgSrc = _getEffectiveBgImageSrc();
     if (!bgSrc) {
-        showToast('请先上传背景图片', 'warning', 3000);
+        showToast('请先上传背景图', 'warning');
         return;
     }
-    showToast('正在提取主题色...', 'info', 2000);
+    showToast('正在提取配色…', 'info', 'short');
     extractThemePalettes(bgSrc, function(palettes) {
         if (!palettes) {
-            showToast('主题色提取失败，请检查背景图', 'error', 3000);
+            showToast('无法提取配色，请检查背景图', 'error');
             return;
         }
         settings.themePaletteColors = palettes;
@@ -2592,16 +2867,15 @@ function generatePalettePreview(autoSwitchTheme) {
         if (autoSwitchTheme) {
             const brightness = (typeof palettes._brightness === 'number') ? palettes._brightness : bgImageBrightness;
             const detectedTheme = brightness < 0.45 ? 'dark' : 'light';
-            if (settings.theme !== detectedTheme) {
-                setTheme(detectedTheme);
-            }
+            // 自动路径：只按明暗结果应用，不产生图片级手动登记
+            _applyAutoTheme(detectedTheme);
         }
         const container = document.getElementById('palette-preview-container');
         const hint = document.getElementById('palette-hint-text');
         if (container) container.classList.remove('hidden');
         if (hint) hint.classList.remove('hidden');
         _renderPalettePreviews(palettes);
-        showToast('调色板提取成功，请选择风格', 'success', 2000);
+        showToast('已提取配色，请选择风格', 'success', 'short');
     });
 }
 
@@ -2609,7 +2883,7 @@ function generatePalettePreview(autoSwitchTheme) {
 function regeneratePalettePreview() {
     const bgSrc = _getEffectiveBgImageSrc();
     if (!bgSrc) {
-        showToast('请先上传背景图片', 'warning', 3000);
+        showToast('请先上传背景图', 'warning');
         return;
     }
     const btn = document.getElementById('palette-regenerate-btn');
@@ -2623,7 +2897,7 @@ function regeneratePalettePreview() {
             btn.innerHTML = '<i class="fas fa-dice mr-1"></i>重新生成配色';
         }
         if (!palettes) {
-            showToast('调色板重新生成失败', 'error', 3000);
+            showToast('无法重新生成配色', 'error');
             return;
         }
         settings.themePaletteColors = palettes;
@@ -2632,7 +2906,7 @@ function regeneratePalettePreview() {
         if (settings.themePalette && settings.themePalette !== 'none') {
             applyThemePalette(settings.themePalette);
         }
-        showToast('已生成新调色板', 'success', 2000);
+        showToast('已生成新配色', 'success', 'short');
     }, { randomPerturb: true });
 }
 
@@ -2744,13 +3018,13 @@ async function fetchHolidayData() {
             updateHolidayCountdown();
             const holidayCount = Object.keys(result.data.holidays || {}).length;
             const workdayCount = Object.keys(result.data.workdays || {}).length;
-            showToast(year + '年抓取成功：' + holidayCount + '个假日，' + workdayCount + '个调休日', 'success', 5000);
+            showToast('已抓取 ' + year + ' 年节假日：' + holidayCount + ' 个假日、' + workdayCount + ' 个调休日', 'success');
         } else {
             const errMsg = result.error || '抓取失败';
-            showToast('节假日抓取失败：' + errMsg, 'error', 6000);
+            showToast('节假日抓取失败：' + errMsg, 'error', 'long');
         }
     } catch (err) {
-        showToast('网络错误：' + err.message, 'error', 5000);
+        showToast('无法连接：' + err.message, 'error');
     } finally {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-download mr-1"></i>立即抓取';

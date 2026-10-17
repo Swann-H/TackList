@@ -30,6 +30,9 @@
         </script>
     <link rel="stylesheet" href="offline_assets/css/all.min.css" data-page-node-id="8uDycJBpyj3WC3ZUh0ffD2">
     <style>
+        /* 头部「视图配置」图标（fa-sliders-h）顺时针旋转 90°：三条控制线由横向改竖向，
+           与「批量管理」(fa-list，横向三线) 形成轮廓区分。6 个视图的配置按钮共用此图标 */
+        .fa-sliders-h { transform: rotate(90deg); }
         /* 番茄倒计时专用字体 */
         @font-face {
             font-family: 'Oswald';
@@ -326,11 +329,15 @@
         [data-theme="dark"] .week-weekend-bg {
             background-color: rgba(156, 163, 175, 0.08) !important;
         }
-        /* 深色模式Toast底色：使用bg-theme-tertiary配色，与任务列表分组底色一致 */
-        [data-theme="dark"] .quest-toast {
+        /* 深色模式Toast底色：使用bg-theme-tertiary配色，与任务列表分组底色一致
+           .undo-toast（精简单行撤销条）不在 .quest-toast 体系内，须一并登记，
+           否则深色下它会比同屏其他 Toast 更黑。 */
+        [data-theme="dark"] .quest-toast,
+        [data-theme="dark"] .undo-toast {
             background-color: #374151 !important;
         }
-        [data-theme="dark"] .quest-toast:hover {
+        [data-theme="dark"] .quest-toast:hover,
+        [data-theme="dark"] .undo-toast:hover {
             background-color: #4b5563 !important;
         }
         /* 周视图周末背景：有背景图片时浅色模式也统一 */
@@ -572,16 +579,27 @@
             #sidebar-brand-btn:focus-visible .brand-icon-gear { transform: none; }
         }
 
-        /* ---- 侧栏选中态统一（方案①：仅左缘竖条 + 主题强调色加粗字，去掉整行蓝底） ---- */
-        /* 替代原先两套并存的写法（清单 bg-accent-soft/text-accent-dark，其余 bg-theme-tertiary/font-semibold），
-           并收敛当前版本的「竖条+蓝底+蓝字」整行填充：统一为「左侧 3px 强调色竖条 + 文字主题强调色加粗」，
-           与「融合式分区」去分割线、靠留白分区的轻盈语境一致；hover 退回中性灰底，与常规条目一致。
-           ⚠️ 文字色用 --accent-color（主题强调色）而非 --accent-text-dark：跟随强调色调色板变化。
-           ⚠️ color 必须 !important：Tailwind 的 .hover\:bg-theme-tertiary:hover 等会压过 .sidebar-active。 */
-        .sidebar-active {
+        /* ---- 侧栏选中态统一（方案 A：整行胶囊底 + 左缘竖条 + 强调色加粗字） ---- */
+        /* 背景图模式下 #sidebar 整栏透明（见上方 body.has-bg-image #sidebar），激活文字原本直接压在照片上，
+           深色 / 高饱和底图下信噪比极低。现由「整行胶囊底」承担可读性，两种模式统一有底：
+             · 纯色模式：底 = --accent-bg（跟随调色板与明暗主题），不加模糊；
+             · 背景图模式：底 = 主题面层 92% 遮罩 + accent 10% 叠加 + 模糊（强度 --bg-blur）。
+               遮罩保证任何照片下文字都有稳定底衬（不依赖照片亮度），accent 叠加保留「选中」语义。
+               92% 与本项目「blur=0 提底色保可读性」的既有口径一致：照片仍有 8% 透出，模糊使其只留质感。
+           ⚠️ 选择器必须带 #sidebar 前缀：特异性要压过 Tailwind 的 .hover\:bg-theme-tertiary:hover，
+              否则激活项 hover 时胶囊底会被中性灰底整块顶掉（与下方 color 同一个坑，故保留 !important）。
+           ⚠️ 文字色用 --accent-text-dark（可读版强调色：浅色态更暗、深色态更亮）而非 --accent-color：
+              胶囊是有色底，--accent-color 在其上仅约 3.4:1，--accent-text-dark 约 4.7:1。
+              两者都由 utils.js:applyPaletteToCssVars() 写入，同样跟随调色板。 */
+        #sidebar .sidebar-active {
             position: relative;
             font-weight: 600;
-            color: var(--accent-color, #3b82f6) !important;
+            color: var(--accent-text-dark, var(--accent-color, #3b82f6)) !important;
+            background-color: var(--accent-bg, #eff6ff) !important;
+        }
+        /* hover：胶囊底加深一档，不再退回中性灰底，与常规条目保持区分 */
+        #sidebar .sidebar-active:hover {
+            background-color: var(--accent-bg-strong, #dbeafe) !important;
         }
         /* 竖条：绝对定位，不参与按钮的 flex 布局 */
         .sidebar-active::before {
@@ -597,8 +615,25 @@
             background: var(--accent-color, #3b82f6);
             pointer-events: none;
         }
-        /* 背景图模式：与纯色模式完全一致，激活项同样**无底**，仅「左缘竖条 + 主题强调色加粗字」。
-           （此处刻意不叠任何洗白/实色底 —— 两模式统一为无底，避免照片上多出一层色块。） */
+        /* 背景图模式：胶囊底叠主题面层遮罩 + 毛玻璃 */
+        body.has-bg-image #sidebar .sidebar-active {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.92) !important;
+            background-image: linear-gradient(
+                color-mix(in srgb, var(--accent-color, #3b82f6) 10%, transparent),
+                color-mix(in srgb, var(--accent-color, #3b82f6) 10%, transparent));
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image #sidebar .sidebar-active:hover {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.96) !important;
+        }
+        /* blur=0（<html data-blur="off">）：关闭模糊并把遮罩提到 0.92，
+           与本项目既有的「blur=0 提底色保可读性」处理同口径 */
+        html[data-blur="off"] body.has-bg-image #sidebar .sidebar-active {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.92) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
 
         /* ---- 侧栏分组标题吸顶（清单 / 外部日历 / 标签 / 过滤器） ---- */
         /* ① padding-bottom 取代 mb-2：下方留白也在遮罩范围内，滚过的条目不会从缝隙里露出来。
@@ -1123,11 +1158,82 @@
 
         .quest-toast {
             pointer-events: auto;
+            /* 左边框宽度写死在这里：`.border-l-4` 由 Tailwind 运行时生成，首次出现晚于首帧 */
+            border-left-width: 4px;
+            border-left-style: solid;
             clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
             animation: questPopIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
             overflow: hidden;
             position: relative;
         }
+
+        /* 精简单行撤销条（utils.js/showUndoToast）：刻意不带 .quest-toast——
+           没有切角、入场位移、扫光与进度条，只用 0.3s 透明度渐变。
+           但 #toast-container 是 pointer-events-none，必须在此单独开启，
+           否则整条卡片连同 UNDO 按钮都点不动。
+           ⚠️ 左边框宽度必须写在这里：`.border-l-4` 是 Tailwind 运行时生成的类，
+              首次出现时晚于首帧，若同时存在 transition-all，边框会从 0 动画到 4px，
+              看起来像"左侧色条慢慢长出来"。宽度进 CSS + 只过渡 opacity 可彻底避免。 */
+        .undo-toast {
+            pointer-events: auto;
+            border-left-width: 4px;
+            border-left-style: solid;
+            /* 家族高度单一出处：条高由最高的 flex 子元素决定——带 UNDO 按钮时是按钮盒
+               （.toast-btn 6px 12px + 字高 ≈ 30px，深实测条高 46px）；而结果态文字芯片
+               （showUndoToast 点击后）与无按钮状态条（showCompactToast）都没有按钮可依，
+               会塌到 35px、「矮一截」。min-height 兜底，保证简洁通知条家族同高。
+               ⚠️ 改 .toast-btn 的 padding/字号时同步复核此值。 */
+            min-height: 46px;
+            /* 只过渡 opacity 与 hover 底色；不要 all——否则迟到的工具类（如 border-l-4）会被动画 */
+            transition: opacity 0.3s ease, background-color 0.2s ease;
+        }
+
+        /* 悬停暂停：进度条与 JS 计时器一起停（只停 CSS 会「条停住、卡照走」） */
+        .toast-paused .toast-progress { animation-play-state: paused; }
+
+        /* 系统开启「减少动态效果」时，Toast 不做入场动画与扫光 */
+        @media (prefers-reduced-motion: reduce) {
+            .quest-toast,
+            .undo-toast { animation: none !important; transition: none !important; }
+            .quest-toast::after { display: none !important; }
+        }
+
+        /* 关闭模糊时 Toast 也不做毛玻璃（项目三档卡片底色的统一口径） */
+        html[data-blur="off"] .quest-toast,
+        html[data-blur="off"] .undo-toast {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
+        /* Toast 交互按钮统一 token：尺寸/圆角/字距/字重/过渡收敛到 .toast-btn，
+           语义配色分 variant：primary=cyan（主操作）、ghost=slate（次操作）、
+           success=green（完成/成功语义）、danger=red（危险语义；当前无按钮使用，仅预留）。
+           ⚠️ 用纯 CSS 而不是 Tailwind 工具类：离线版走本地 JIT，
+              关键样式不应依赖工具类是否被收录（同 .reminder-toast-body 的理由）。
+           ⚠️ 子类只带配色与 hover，尺寸一律由 .toast-btn 提供，新增按钮不要重写内边距/圆角。 */
+        .toast-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            border: 1px solid transparent;
+            white-space: nowrap;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .toast-btn-primary { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border-color: #06b6d4; }
+        .toast-btn-primary:hover { background: rgba(6, 182, 212, 0.3); }
+        .toast-btn-ghost { background: rgba(51, 65, 85, 0.5); color: #94a3b8; border-color: #475569; }
+        .toast-btn-ghost:hover { background: rgba(71, 85, 105, 0.5); }
+        .toast-btn-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border-color: #22c55e; }
+        .toast-btn-success:hover { background: rgba(34, 197, 94, 0.3); }
+        .toast-btn-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; border-color: #ef4444; }
+        .toast-btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
 
         /* 提前提醒：图标正下方（6 点钟方向）的提前量徽标。
            时机提示不进标题行（标题保持「时间 [任务名]」规整格式），改由此徽标承载。
@@ -1304,8 +1410,9 @@
            纯 enter（旧快照无面板）→ 新快照自右滑入；纯 exit（新快照无面板）→ 旧快照向右滑出。 */
         :root.fx-q-vt.q-panel-enter::view-transition-new(task-detail-panel) { animation: fxQPanelIn var(--q-vt-dur) var(--q-vt-ease) both; }
         :root.fx-q-vt.q-panel-exit::view-transition-old(task-detail-panel) { animation: fxQPanelOut var(--q-vt-dur) var(--q-vt-ease) both; }
-        @keyframes fxQPanelIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
-        @keyframes fxQPanelOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
+        /* 与 fxPanelIn/Out 同源：视图过渡内面板同样改为淡入 + 极短位移，避免整段滑入造成错位观感 */
+        @keyframes fxQPanelIn { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes fxQPanelOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(8px); } }
         /* 系统级减弱动态效果时彻底关闭 View Transitions（_qVtOn 也已门控，此处为兜底） */
         @media (prefers-reduced-motion: reduce) {
             ::view-transition-group(*),
@@ -1438,6 +1545,64 @@
 
         .shadow-theme {
             box-shadow: var(--shadow-sm);
+        }
+
+        /* ===== 设置面板控件现代化（方案 D，2026-10-11）===== */
+        /* iOS 风格开关：结构保持 sr-only peer + 相邻轨道 div，选中态由 .peer:checked + 相邻选择器驱动，JS 读写零改动 */
+        .ui-switch {
+            position: relative; width: 46px; height: 26px; border-radius: 9999px; flex-shrink: 0;
+            background: var(--bg-tertiary);
+            box-shadow: inset 0 0 0 1px var(--border-color);
+            cursor: pointer;
+            transition: background-color .22s cubic-bezier(.4,0,.2,1), box-shadow .22s cubic-bezier(.4,0,.2,1);
+        }
+        .ui-switch::after {
+            content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px;
+            border-radius: 9999px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25);
+            transition: transform .22s cubic-bezier(.4,0,.2,1);
+        }
+        .ui-switch:hover { box-shadow: inset 0 0 0 1px var(--text-muted); }
+        input.peer:checked + .ui-switch { background: var(--accent-color); box-shadow: none; }
+        input.peer:checked + .ui-switch:hover { background: var(--accent-hover); }
+        input.peer:checked + .ui-switch::after { transform: translateX(20px); }
+        /* 语义色变体：默认重要（黄）/ 默认紧急（红） */
+        input.peer:checked + .switch-on-yellow { background: #eab308; }
+        input.peer:checked + .switch-on-yellow:hover { background: #ca8a04; }
+        input.peer:checked + .switch-on-red { background: #ef4444; }
+        input.peer:checked + .switch-on-red:hover { background: #dc2626; }
+        [data-theme="dark"] .ui-switch::after { background: #e5e7eb; }
+
+        /* 分段控件（浮起式）：替代 ≤4 选项的原生 select；隐藏 input 保留原 id，load/save 仍读写 el.value */
+        .seg {
+            display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+            border-radius: 9px; background: var(--bg-tertiary); flex-shrink: 0;
+            box-shadow: inset 0 0 0 1px var(--border-color);
+        }
+        .seg button {
+            border: none; background: transparent; cursor: pointer; font-family: inherit;
+            padding: 5px 14px; font-size: 13px; line-height: 1.4; border-radius: 6px;
+            color: var(--text-secondary); white-space: nowrap;
+            transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+        }
+        .seg button:hover { color: var(--text-primary); }
+        .seg button.seg-active {
+            background: var(--bg-secondary); color: var(--text-primary); font-weight: 600;
+            box-shadow: var(--shadow-sm), 0 0 0 1px var(--border-color);
+        }
+
+        /* 大类交界分隔：仅「外观 / 任务习惯 / 番茄专注 / 通知与日历 / 数据与系统」5 组交界（4 处） */
+        #settings-content-scroll .settings-group-start {
+            border-top: 1px solid var(--border-color);
+            margin-top: 32px; padding-top: 28px;
+        }
+
+        /* 设置面板输入控件 focus 规范：accent 描边 + 3px 光环 */
+        #settings-content-scroll input[type="number"]:focus,
+        #settings-content-scroll input[type="time"]:focus,
+        #settings-content-scroll input[type="text"]:focus,
+        #settings-content-scroll select:focus {
+            outline: none; border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px var(--accent-bg);
         }
 
         /* 自定义滚动条样式 */
@@ -2559,8 +2724,12 @@
                   ⚠️ 卡片显隐由 JS 的 classList.toggle('hidden') 控制（pomodoro.js /
                      updateSidebarPomodoroTimer）。此处绝不可对 #sidebar-pomodoro 写
                      display:block !important，否则番茄未激活时会冒出一张空的深色卡。 */
-            body.detail-write-mode #sidebar > *:not(#sidebar-pomodoro) { display: none !important; }
-            body.detail-write-mode #sidebar {
+            /* 第十七轮：:not(.wm-morph-out) / :not(.wm-morph-in) 双重收口 ——
+               退出 morph-out 首帧，侧栏几何/挖空规则即失效、回到自然状态（in-flow、
+               260px、100vh、bg-theme-secondary），内容块由下方 morph-out 规则错峰淡入；
+               进入 morph-in 期间则保持固定/透明，但子元素仍需在場淡出（见 morph-in 规则）。 */
+            body.detail-write-mode:not(.wm-morph-in):not(.wm-morph-out) #sidebar > *:not(#sidebar-pomodoro) { display: none !important; }
+            body.detail-write-mode:not(.wm-morph-out) #sidebar {
                 position: fixed !important;
                 left: 0;
                 bottom: 0;
@@ -2571,6 +2740,9 @@
                 max-height: none !important;
                 background: transparent !important;
                 z-index: 45;
+                /* 进入书写态时侧栏底色同步淡出（普通模式 bg-theme-secondary → transparent）；
+                   背景图模式下书写态/自然态都是 transparent，此过渡为空操作。 */
+                transition: background-color var(--wm-fx-fade) ease;
             }
             /* 番茄卡片保持与主视图完全一致（方角，无圆角）；卡片节点本身零样式改动 */
 
@@ -2924,34 +3096,48 @@
                     #task-detail-panel），内容继承父级面板的 opacity/transform，不再单独排队。
                  6. 三档自动降级：body.fx-low（低端设备）+ prefers-reduced-motion（系统）。
 
-               做法：把切换拆成「两层 additional起来的观感」——
+               做法（第十六轮重写：把「缩放近似」换成真正的空间展开 / 收拢）——
                  · 进入：主视图**原地**（保持被 384px 面板挤压的窄布局，不让它同时变宽）
-                   淡出并轻微下沉；面板与此同时以「略小 → 落定」的缩放淡入铺满可用宽度。
-                   两者约 260ms 内交叠完成，感知就是「书写页展开覆盖主视图」。
-                 · 退出：主视图淡入归位，面板以「略大 → 落定」的收拢淡入回到右侧 384px 栏，
-                   与进入严格对称（同一个时长、同一条曲线、同一个 transform-origin）。
+                   淡出并轻微下沉；面板与此同时以 clip-path 从「只露右侧 384px」向左扫开
+                   —— 几何全程恒等于书写态终态，变化的只是可见区域，所以文字不会被拉伸。
+                 · 退出：严格逆过程。面板仍以书写态外观、保持终态几何，用 clip-path 收拢回
+                   右侧 384px；主视图同时淡入归位。收拢末帧由 JS 摘掉 detail-write-mode，
+                   收起态内容直接就位（第十八轮起不再补「自右滑入」的落地动画）。
                  · 过渡期间由 .wm-morph-in / .wm-morph-out 强制面板保持 fixed 且**等于书写态
-                   最终几何**（left = 侧边栏实际宽度，由 JS 注入 --wm-morph-left），动画结束后
-                   摘类落回文档流 —— 两种状态的几何完全一致，所以落帧无跳变。 */
+                   最终几何**（左边界恒为 0：书写态侧栏已脱离文档流），动画结束后摘类落回
+                   文档流 —— 两种状态的几何完全一致，所以落帧无跳变。
+
+               ⚠️ 侧栏补偿（2026-10-13 修）：书写态侧栏是 position:fixed，一脱离 flex 流，
+                  #main-content 左边界就从 260 掉到 0、宽度 +260px（实测 796 → 1056），
+                  正在淡出的主视图会整屏重排 —— 「展开不连贯」的主因。故过渡期间给主视图
+                  补 margin-left = 侧栏实测宽（JS 注入 --wm-morph-main-left），
+                  与收起态的几何完全对齐后它才淡出 / 淡入。 */
             :root {
                 --wm-fx-ease: cubic-bezier(0.4, 0, 0.2, 1);  /* 与四象限 --q-vt-ease 同源 */
                 --wm-fx-shift: 6px;                          /* 上行位移 */
-                --wm-fx-fade: 0.16s;                         /* 微过渡（菜单 / 气泡 / 宽度切换） */
-                --wm-morph-dur: 0.26s;                       /* 场景对切主体时长（展开 / 收起共用） */
+                --wm-fx-fade: 0.16s;                         /* 微过渡（菜单 / 气泡 / 宽度切换 / 侧栏底色） */
+                --wm-morph-dur: 0.20s;                       /* 场景对切第一段时长（展开 / 收拢共用） */
+                --wm-land-dur: 0.12s;                        /* 进入第二段：面板内容自右滑入，遮罩布局切换（仅进入用；退出已无落地段） */
                 --wm-morph-ease: cubic-bezier(0.4, 0, 0.2, 1);
                 --wm-morph-shift: 10px;                      /* 主视图淡出/淡入时的纵向让位 */
-                --wm-morph-scale-in: 0.982;                  /* 进入：面板起始略小，展开落定 */
-                --wm-morph-scale-out: 1.02;                  /* 退出：面板起始略大，收拢落定 */
+                --wm-sb-stagger: 14ms;                       /* 侧栏内容错峰淡入/淡出的步进 */
+                /* 面板展开 / 收拢的位移量 = 终态全宽 − 收起态面板宽（w-96 = 24rem，
+                   与 #main-content 的 margin-right: 24rem 同源）。
+                   ⚠️ max() 兜底：视口比 24rem 还窄时 calc() 会算出负值，inset() 不接受负值
+                      （整条 clip-path 声明失效，动画直接消失），必须夹到 0。 */
+                --wm-morph-clip: max(0px, calc(100vw - 24rem));
             }
             /* 低端设备档位：由 app.js 探测（CPU 核 ≤4 或 deviceMemory ≤4）后给 body 挂 .fx-low。
-               位移与缩放全部降为 1/0（只留 opacity），时长砍半 —— 逐帧成本再降一档。 */
+               位移归零、展开位移也归零（只留 opacity），时长砍半 —— 逐帧成本再降一档。
+               第十七轮：--wm-morph-clip 仍为 0（面板不裁剪），改由内容块的合成层退场补位。 */
             body.fx-low {
                 --wm-fx-shift: 0px;
                 --wm-fx-fade: 0.08s;
-                --wm-morph-dur: 0.14s;
+                --wm-morph-dur: 0.10s;
+                --wm-land-dur: 0.07s;
+                --wm-sb-stagger: 0ms;
                 --wm-morph-shift: 0px;
-                --wm-morph-scale-in: 1;
-                --wm-morph-scale-out: 1;
+                --wm-morph-clip: 0px;
             }
             @keyframes wmRise {
                 from { opacity: 0; transform: translateY(var(--wm-fx-shift)); }
@@ -2967,26 +3153,46 @@
                 from { opacity: 0; transform: scale(0.99) translateY(var(--wm-morph-shift)); }
                 to   { opacity: 1; transform: scale(1) translateY(0); }
             }
+            /* 面板展开 / 收拢：只裁剪可见区域，几何恒为终态（不缩放，文字不会被拉伸）。
+               起点 inset 左 = --wm-morph-clip，即「只露出右侧 384px」，与收起态面板的
+               左边界（100vw − 384px）逐像素重合 → 展开的第一帧与点击前完全接续。
+               起始 opacity 取 .55 而非 .25：面板此刻盖在正在淡出的主视图上，太透会露出
+               重排后的主视图，反而添乱。 */
             @keyframes wmPanelIn {
-                from { opacity: 0.25; transform: scale(var(--wm-morph-scale-in)); }
-                to   { opacity: 1; transform: scale(1); }
+                from { opacity: 0.55; clip-path: inset(0 0 0 var(--wm-morph-clip, 0px)); }
+                to   { opacity: 1;    clip-path: inset(0 0 0 0); }
             }
+            /* 退出是进入的严格逆过程：从全屏收拢回右侧 384px，opacity 全程为 1 ——
+               面板是「收拢」不是「重新出现」，旧版从 0.25 淡入会让右侧栏先空一下再浮现。 */
             @keyframes wmPanelOut {
-                from { opacity: 0.25; transform: scale(var(--wm-morph-scale-out)); }
-                to   { opacity: 1; transform: scale(1); }
+                from { opacity: 1; clip-path: inset(0 0 0 0); }
+                to   { opacity: 1; clip-path: inset(0 0 0 var(--wm-morph-clip, 0px)); }
             }
             /* 宽度三档切换：不改宽度，只用一段 opacity 凹陷掩盖瞬时跳变 */
             @keyframes wmWidthSwap { 0% { opacity: 1; } 45% { opacity: .55; } 100% { opacity: 1; } }
             /* 完成圈勾选：一次轻弹，不位移不改色 */
             @keyframes wmPop { 0% { transform: scale(1); } 45% { transform: scale(1.18); } 100% { transform: scale(1); } }
+            /* ---- 第十七轮：三区协同（主视图 / 面板 / 侧栏）----
+               注：退出曾有的「第二段落地」动画 wmPanelLandIn 已于第十八轮删除 */
+            /* 侧栏内容淡入（退出）：壳先到、内容组装。只动 opacity/transform（合成层） */
+            @keyframes wmSidebarIn  { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+            /* 侧栏内容淡出（进入）：严格逆过程，反向错峰 */
+            @keyframes wmSidebarOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(-10px); } }
+            /* 进入首帧：面板内容自右滑入，遮罩同帧的「收起态布局 → 书写态布局」切换 */
+            @keyframes wmPanelContentIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+            /* 低端档面板不裁剪（--wm-morph-clip:0），改由内容块做合成层退场补位 */
+            @keyframes wmContentRetreat { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(-28px); } }
 
             /* ---- 1) 进入书写态：主视图原地退场 + 面板展开落定 ----
                必须在添加 detail-write-mode 的同一帧挂上 .wm-morph-in（JS 侧 _wmMorphBegin 保证），
                否则主视图会先被 display:none 抹掉，fade-out 无处可播。
-               主视图必须锁住 margin-right:24rem —— 不然让位值归零会让它瞬间变宽、任务列表整屏重排。 */
+               主视图必须锁住 margin-right:24rem —— 不然让位值归零会让它瞬间变宽、任务列表整屏重排；
+               同理锁住 margin-left = 侧栏实测宽（--wm-morph-main-left）—— 侧栏一脱离文档流，
+               主视图左边界会掉到 0、宽度 +260px，这是「原地退场」最大的破坏源。 */
             body.fx-smooth.wm-morph-in #main-content {
                 display: flex !important;
                 margin-right: 24rem !important;
+                margin-left: var(--wm-morph-main-left, 0px) !important;
                 pointer-events: none;
                 will-change: opacity, transform;
                 animation: wmMainOut var(--wm-morph-dur) var(--wm-morph-ease) both;
@@ -3000,22 +3206,97 @@
                 width: auto !important;
                 max-width: none !important;
                 height: auto !important;
-                will-change: opacity, transform;
-                transform-origin: 100% 50%;
+                will-change: clip-path, opacity;
                 animation: wmPanelIn var(--wm-morph-dur) var(--wm-morph-ease) both;
             }
 
-            /* ---- 2) 退出书写态：布局已瞬时回到三栏，主视图淡入归位 + 面板收拢落定 ----
-               退出时 detail-write-mode 已摘除，#main-content 自动恢复 display:flex 与 24rem 让位，
-               面板也回到 fx-smooth 的 fixed 右侧栏，所以这里只需补两条 animation，不动任何几何。 */
+            /* ---- 1b) 进入：侧栏内容错峰淡出 + 面板内容滑入（第十七轮）----
+               morph-in 期间侧栏保持 fixed 但撑满视口高度（!important 压过书写态的
+               height:auto!important），子元素才能停在自然位置「原地溶解」；落定时它们
+               已不可见（opacity:0），display:none 无感。番茄卡 #sidebar-pomodoro 不参与 ——
+               书写态起它一直悬浮在左下角，位置与主视图完全一致，无需动。 */
+            body.fx-smooth.wm-morph-in #sidebar {
+                top: 0 !important;
+                bottom: auto !important;
+                height: 100vh !important;
+            }
+            body.fx-smooth.wm-morph-in #sidebar > :not(#sidebar-pomodoro) {
+                animation: wmSidebarOut var(--wm-fx-fade) var(--wm-fx-ease) both;
+            }
+            /* 反向错峰：滚动区（清单/标签/过滤器/倒计时）先溶解，头部（Logo/设置）晚一步 */
+            body.fx-smooth.wm-morph-in #sidebar > :not(#sidebar-pomodoro):nth-child(1) { animation-delay: var(--wm-sb-stagger); }
+
+            /* 进入首帧面板内容自右滑入：遮罩同帧发生的「收起态布局 → 书写态布局」切换。
+               选择器与 wm-fx-width 的内容块组同款；只动 opacity/transform，无纵向溢出。 */
+            body.fx-smooth.wm-morph-in #detail-topbar > :first-child,
+            body.fx-smooth.wm-morph-in #detail-title-row,
+            body.fx-smooth.wm-morph-in #detail-time-menu:not(.hidden),
+            body.fx-smooth.wm-morph-in #detail-body {
+                animation: wmPanelContentIn var(--wm-land-dur) var(--wm-morph-ease) both;
+            }
+
+            /* ---- 2) 退出书写态：面板保持书写态外观从全屏收拢 + 主视图淡入归位 ----
+               ⚠️ 与旧版最大的不同：detail-write-mode **在动画结束后才由 JS 摘除**
+                  （_wmMorphBegin('out', onSettle)），动画期间必须把它当作仍处在书写态来处理：
+                  ① 主视图在书写态是 display:none，这里强推 display:flex + 双侧 margin，
+                     几何与「摘类后的三栏」逐像素一致（左 260、右让位 384），落帧才无跳变；
+                  ② 面板若不强推终态几何，会被 flex 兄弟（刚强推出的主视图）挤成窄条，
+                     收拢动画就无从谈起，故同样 fixed 铺满再裁；
+                  ③ 面板盖在主视图之上，收拢过程中主视图顺势露出并淡入，两者交叠完成。 */
             body.fx-smooth.wm-morph-out #main-content {
+                display: flex !important;
+                margin-right: 24rem !important;
+                margin-left: var(--wm-morph-main-left, 0px) !important;
+                pointer-events: none;
                 will-change: opacity, transform;
                 animation: wmMainIn var(--wm-morph-dur) var(--wm-morph-ease) both;
             }
             body.fx-smooth.wm-morph-out #task-detail-panel {
-                will-change: opacity, transform;
-                transform-origin: 100% 50%;
+                position: fixed !important;
+                top: 0; right: 0; bottom: 0;
+                left: var(--wm-morph-left, 0px);
+                width: auto !important;
+                max-width: none !important;
+                height: auto !important;
+                will-change: clip-path, opacity;
                 animation: wmPanelOut var(--wm-morph-dur) var(--wm-morph-ease) both;
+            }
+
+            /* ---- 2b) 退出：侧栏「壳先到、内容组装」（第十七轮）----
+               书写态对 #sidebar 的 fixed/透明规则已被 :not(.wm-morph-out) 收口，此处侧栏就是
+               自然几何（in-flow、260px、100vh、bg-theme-secondary）；补 position:relative +
+               z-index:45 让它继续浮在收拢中的面板（z-40）之上。子元素整段不可见（书写态挖空），
+               从 opacity:0 错峰淡入即无缝接续；底色淡入避免灰色底板瞬现。 */
+            body.fx-smooth.wm-morph-out #sidebar {
+                position: relative;
+                z-index: 45;
+                transition: background-color var(--wm-fx-fade) ease;
+            }
+            body.fx-smooth.wm-morph-out #sidebar > :not(#sidebar-pomodoro) {
+                animation: wmSidebarIn var(--wm-fx-fade) var(--wm-fx-ease) both;
+            }
+            /* 顶部（Logo 区）先就位，滚动区（清单/标签/过滤器/倒计时）晚一步 */
+            body.fx-smooth.wm-morph-out #sidebar > :not(#sidebar-pomodoro):nth-child(2) { animation-delay: var(--wm-sb-stagger); }
+
+            /* ---- 3) 退出「落地」（第十八轮：整段删除，不再有落地动画）----
+               收拢段一结束（wmPanelOut 的 animationend），JS 就在同一批微任务里做完
+               「摘 detail-write-mode + 补跑重渲染 + settle 摘掉 wm-morph-out」三件事
+               （见 tasks.js _wmMorphBegin 的 land 回调 → 内部同步 settle），中间态不会被
+               渲染成帧，面板直接从「书写态内容被裁到右侧 384px」切到自然三栏的收起态。
+               ⚠️ 第十八轮删掉了落地段的 wmPanelLandIn（收起态内容自右滑入）：
+                  收拢本身就是「从左向右扫过、最后只剩右侧 384px」的过滤过程，末帧的几何与
+                  收起态逐像素重合，此时再补一次内容自右滑入，等于把刚扫到的东西又推走重来，
+                  观感是「抖一下」。现在直接展示收起态内容，退出总时长也从 0.32s 缩到 0.20s。 */
+
+            /* ---- 4) 低端档退场补位（第十七轮）----
+               --wm-morph-clip:0 时 wmPanelOut 无视觉变化（但必须照常播放，否则 animationend
+               不触发会拖到计时器兜底），改由内容块做一次合成层退场（只动 transform/opacity），
+               保证低端机也有「编辑器退场」的语言。 */
+            body.fx-low.fx-smooth.wm-morph-out #detail-topbar > :first-child,
+            body.fx-low.fx-smooth.wm-morph-out #detail-title-row,
+            body.fx-low.fx-smooth.wm-morph-out #detail-time-menu:not(.hidden),
+            body.fx-low.fx-smooth.wm-morph-out #detail-body {
+                animation: wmContentRetreat var(--wm-morph-dur) var(--wm-morph-ease) both;
             }
 
             /* ---- 3) 滚动条是「背景图缩放」的唯一来源，全程锁死 ----
@@ -3052,6 +3333,16 @@
                 body.fx-smooth.wm-morph-in #task-detail-panel,
                 body.fx-smooth.wm-morph-out #main-content,
                 body.fx-smooth.wm-morph-out #task-detail-panel,
+                body.fx-smooth.wm-morph-in #sidebar > :not(#sidebar-pomodoro),
+                body.fx-smooth.wm-morph-out #sidebar > :not(#sidebar-pomodoro),
+                body.fx-smooth.wm-morph-in #detail-topbar > :first-child,
+                body.fx-smooth.wm-morph-in #detail-title-row,
+                body.fx-smooth.wm-morph-in #detail-time-menu:not(.hidden),
+                body.fx-smooth.wm-morph-in #detail-body,
+                body.fx-smooth.wm-morph-out #detail-topbar > :first-child,
+                body.fx-smooth.wm-morph-out #detail-title-row,
+                body.fx-smooth.wm-morph-out #detail-time-menu:not(.hidden),
+                body.fx-smooth.wm-morph-out #detail-body,
                 body.fx-smooth #detail-time-menu.wm-menu-in,
                 body.fx-smooth #detail-time-menu.wm-menu-out,
                 body.fx-smooth.wm-fx-width #detail-topbar > :first-child,
@@ -3063,14 +3354,18 @@
                 body.fx-smooth #detail-task-complete-btn.wm-pop { animation: none !important; }
             }
         }
-        @keyframes fxPanelIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
-        @keyframes fxPanelOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
+        /* 入场改为「淡入 + 极短位移」而非从屏外整段滑入：避免不透明面板长距离扫过内容，
+           被误读为「先弹出面板、再收缩主视图」。面板在主区 margin 收缩让出的位置淡入，
+           二者同帧起跑、同一缓动，读起来是一次协调的「揭示」而非覆盖。 */
+        @keyframes fxPanelIn { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes fxPanelOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(8px); } }
         /* 视图切换：方向性滑动过渡（切换到右侧视图时内容整体向左流动：旧视图左移淡出，新视图自右接续滑入，反之亦然） */
         body.fx-smooth .fx-view-ghost { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; animation-duration: 0.22s; animation-timing-function: ease; animation-fill-mode: forwards; }
         body.fx-smooth .fx-ghost-out-right { animation-name: fxGhostOutRight; }
         body.fx-smooth .fx-ghost-out-left { animation-name: fxGhostOutLeft; }
         @keyframes fxGhostOutRight { 0% { transform: translateX(0); opacity: 1; } 40% { opacity: 1; } 100% { transform: translateX(100%); opacity: 0; } }
         @keyframes fxGhostOutLeft { 0% { transform: translateX(0); opacity: 1; } 40% { opacity: 1; } 100% { transform: translateX(-100%); opacity: 0; } }
+        /* 兜底（缺静态遮罩元素时）：纯 CSS 方向性入场动画 */
         body.fx-smooth .fx-enter-from-left { animation: fxEnterFromLeft 0.22s ease; }
         body.fx-smooth .fx-enter-from-right { animation: fxEnterFromRight 0.22s ease; }
         @keyframes fxEnterFromLeft { 0% { transform: translateX(-100%); opacity: 0; } 70% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
@@ -3425,7 +3720,7 @@ display: inline-flex;
 align-items: center;
 white-space: nowrap;
 }
-#today-btn, #plan-btn, #postpone-btn, #add-task-btn, #toggle-all-groups-btn { display: none !important; }
+#today-btn, #plan-btn, #postpone-btn, #add-task-btn, #toggle-all-groups-btn, #batch-select-btn { display: none !important; }
 #mobile-more-btn { display: flex !important; flex-shrink: 0; }
 #mobile-more-menu {
 position: absolute;
@@ -3510,6 +3805,9 @@ overflow: hidden;
 .task-list-item > span.text-xs { flex-shrink: 0; order: 4; font-size: 11px !important; align-self: center; }
 .task-list-item > span.flex-1 { min-width: calc(100% - 88px); }
 .task-list-item .mobile-priority-icon { margin-left: 6px; }
+/* 命令面板搜索结果行（.cmd-search-item）不带完成勾选框、不带专注按钮（行内已无任何 button）：
+   撤销上面为复选框预留的标题左内边距，让标题顶到左边 */
+.task-list-item.cmd-search-item > div.flex-1 { padding-left: 0; }
 /* 任务项侧滑：背景操作层（右滑完成 / 左滑删除，§5.3） */
 .task-list-item { position: relative; z-index: 1; }
 .task-swipe-reveal {
@@ -3849,6 +4147,16 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                         <i class="fas fa-file-text w-5" data-page-node-id="JsNGbvMTOv1g1HsfAgDOfh"></i>
                         <span class="sidebar-text flex-1" data-page-node-id="XLNwPKBJLJSVpV728sYLG0">摘要</span>
                     </button>
+
+                    <!-- 回收站（FR-02）：新增节点刻意不带 data-page-node-id，避免打乱镜像脚本的 node id 顺序映射 -->
+                    <button onclick="openTrashView()" id="sidebar-trash-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2">
+                        <i class="fas fa-trash w-5"></i>
+                        <span class="sidebar-text flex-1">回收站</span>
+                        <span class="sidebar-count text-xs text-theme-muted" id="sidebar-trash-count"></span>
+                    </button>
+
+                    <!-- 快捷键（FR-04 一期）入口已收口到「设置 → 快捷键 → 查看所有快捷键」：
+                         侧边栏不再单独占位，快捷键帮助浮层由设置面板按钮唤起。 -->
                 </div>
 
                 <!-- 清单分组 -->
@@ -3976,6 +4284,9 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     <button onclick="toggleAllTaskListGroups()" id="toggle-all-groups-btn" class="hidden w-10 h-10 rounded-full border-2 border-teal-500 text-teal-500 flex items-center justify-center hover:bg-teal-500 hover:text-white transition group relative" title="全部展开" data-page-node-id="Ut6RMPCzhkilTrzUUEuBrs">
                         <i class="fas fa-angles-down" data-page-node-id="Dc7AD1RBuLc1Xe7BPuIOXx"></i>
                     </button>
+                    <button onclick="enterBatchSelectMode()" id="batch-select-btn" class="hidden w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white transition group relative" title="批量管理">
+                        <i class="fas fa-list"></i>
+                    </button>
                     <button onclick="toggleKanbanConfig()" id="kanban-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置" data-page-node-id="GjlBGHZdbyCYU493wrcTQp">
                         <i class="fas fa-sliders-h" data-page-node-id="Gm9wPSEKmwy1G97qDK6xes"></i>
                     </button>
@@ -4006,6 +4317,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <button id="mobile-more-plan" onclick="closeMobileMoreMenu(); togglePlanPanel()" data-page-node-id="zieyDRumuqCBQHjLgS29jR"><i class="fas fa-clipboard-list w-5" data-page-node-id="dmbnnfShByXtcIHHD1fMGT"></i>计划</button>
                             <button id="mobile-more-postpone" onclick="closeMobileMoreMenu(); postponeOverdueTasks()" data-page-node-id="P5mAJyStAVxBlthbsf2bBx"><i class="fas fa-forward w-5" data-page-node-id="OjBUdNE1Ka1wbsaeBJfWJJ"></i>顺延</button>
                             <button id="mobile-more-toggle-groups" onclick="closeMobileMoreMenu(); toggleAllTaskListGroups()" data-page-node-id="D8obDPZBN0FDplTqUJCmML"><i class="fas fa-angles-down w-5" data-page-node-id="vMOhTI3A9ThI2AepovxXz8"></i>全部展开</button>
+                            <button id="mobile-more-multi-select" onclick="closeMobileMoreMenu(); enterBatchSelectMode()"><i class="fas fa-list w-5"></i>批量管理</button>
                             <button id="mobile-more-add" onclick="closeMobileMoreMenu(); openAddTaskModal()" data-page-node-id="41HDZAK9B5vsAuPBLXSE5a"><i class="fas fa-plus w-5" data-page-node-id="NZOSZ1wKHOSFEkUBo964yb"></i>添加任务</button>
                         </div>
                     </div>
@@ -4935,6 +5247,21 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
         </div>
     </div>
 
+    <!-- 快捷键帮助浮层（FR-04 一期）：新增节点刻意不带 data-page-node-id，避免打乱离线版镜像脚本的 node id 顺序映射 -->
+    <div id="shortcuts-help-modal" class="fixed inset-0 modal-overlay hidden items-center justify-center" style="z-index: 55;" onclick="closeShortcutsHelp()">
+        <div class="bg-theme-secondary rounded-2xl w-full max-w-xl mx-4 shadow-2xl flex flex-col max-h-[80vh]" onclick="event.stopPropagation()">
+            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-bold text-theme-primary"><i class="fas fa-keyboard text-theme-muted mr-2"></i>快捷键</h2>
+                <button type="button" onclick="closeShortcutsHelp()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
+                    <i class="fas fa-times text-theme-muted"></i>
+                </button>
+            </div>
+            <div id="shortcuts-help-content" class="flex-1 overflow-y-auto p-4 space-y-5">
+                <!-- 动态生成（renderShortcutsHelpContent） -->
+            </div>
+        </div>
+    </div>
+
     <div id="boring-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center" onclick="closeBoringModal()" data-page-node-id="UepAh9KDrBJh61cxlF5ZRy">
         <div class="bg-theme-secondary rounded-2xl w-full max-w-lg mx-4 fade-in shadow-2xl" onclick="event.stopPropagation()" data-page-node-id="H4kEL0yqfkkAsAmqNtxiOc">
             <div class="p-6 border-b border-theme" data-page-node-id="UnxDG5oSdBkFFXxJdnvjUQ">
@@ -5005,7 +5332,6 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 <li data-page-node-id="Me46wV8B6cik0IMpZGAN6M"><a data-target="settings-section-sidebar-items" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="yDhvmcrzJJGh85XHs9tBI2">侧边栏配置</a></li>
                                 <li data-page-node-id="H14aOZGbDt0PYc4kBB5PHa"><a data-target="settings-section-command" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="j1sdrn7sRnl2Ep1eABaStw">命令面板</a></li>
                                 <li data-page-node-id="eb3LLPVMneX6cCbfrKnW2Y"><a data-target="settings-section-shortcuts" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="dNoAthxEmJR6k1Ed8H2rFj">快捷键</a></li>
-                                <li data-page-node-id="ZEtBit3LJKGm6qjfxR25wS"><a data-target="settings-section-mindful" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="hngHaeqMf9l6Oh1lCxcdHW">正念小事</a></li>
                             </ul>
                         </div>
                         <div data-page-node-id="wEGoBiwDxdnMMGCNscmdhs">
@@ -5249,21 +5575,14 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="ub8DukvEeNbetj3225veUf">
                                 <label class="text-sm font-medium text-theme-secondary" data-page-node-id="byAlEjTWHmxVQTlUtFjuHd">周开始于</label>
-                                <select id="settings-week-start" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="4mhOxGXssCKhVN0NERKjGE">
-                                    <option value="monday" data-page-node-id="clNvdJPNOJJ1b16w5EgHCu">周一</option>
-                                    <option value="sunday" data-page-node-id="2q2mQO1NAw60CtgLbXEllO">周日</option>
-                                </select>
+                                <input type="hidden" id="settings-week-start" value="monday" data-page-node-id="4mhOxGXssCKhVN0NERKjGE"><div class="seg" data-seg-for="settings-week-start"><button type="button" data-value="monday">周一</button><button type="button" data-value="sunday">周日</button></div>
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="text-sm font-medium text-theme-primary">书写态正文宽度</label>
                                     <p class="text-xs text-theme-secondary">沉浸书写态下正文的可读宽度，顶栏图标可随时循环切换</p>
                                 </div>
-                                <select id="settings-write-mode-width" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
-                                    <option value="standard">标准</option>
-                                    <option value="wide">宽</option>
-                                    <option value="full">全屏</option>
-                                </select>
+                                <input type="hidden" id="settings-write-mode-width" value="standard"><div class="seg" data-seg-for="settings-write-mode-width"><button type="button" data-value="standard">标准</button><button type="button" data-value="wide">宽</button><button type="button" data-value="full">全屏</button></div>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="SmdbUtszLMaEVzWyNjq8pH">
                                 <div data-page-node-id="rA2oEmmir1dxgAETj2iwnv">
@@ -5272,7 +5591,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="V0zQGhpDLLzLk8jcp6r52b">
                                     <input type="checkbox" id="settings-show-holiday-countdown" class="sr-only peer" checked data-page-node-id="JpjnDEEgw8IMygeOEfRRxQ">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="UUjU5T51Kw493fDUxIDbHj"></div>
+                                    <div class="ui-switch" data-page-node-id="UUjU5T51Kw493fDUxIDbHj"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="GZnAiNes9NG1qlJJNuP56d">
@@ -5282,7 +5601,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="FxtRk0YolvNkwXxQnizTEp">
                                     <input type="checkbox" id="settings-show-sidebar-extras" class="sr-only peer" checked data-page-node-id="g5TETpgFY9s43mAdWBAYNt">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="Klbi8M6kpiqVh2o9sMj8Xn"></div>
+                                    <div class="ui-switch" data-page-node-id="Klbi8M6kpiqVh2o9sMj8Xn"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="mvPeDSQc43M87lf7HArv6z">
@@ -5292,7 +5611,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="2pYvnfFHYFfIujolg6ops8">
                                     <input type="checkbox" id="settings-easter-egg" class="sr-only peer" checked data-page-node-id="TccdemW3wJE7tswLZ5u5NA">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="uXdBScJwpmt9CVZyZtXtmF"></div>
+                                    <div class="ui-switch" data-page-node-id="uXdBScJwpmt9CVZyZtXtmF"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="8GjjxIXG7yZkBXF6PlCiwS">
@@ -5302,7 +5621,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="LnX7ZXh3y9RmCjgkCi9QiV">
                                     <input type="checkbox" id="settings-smooth-animations" class="sr-only peer" data-page-node-id="wYVEH8CnpFImSgMeSogDQh">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="5XFW2ly2AQxQcRgPMFj1Ep"></div>
+                                    <div class="ui-switch" data-page-node-id="5XFW2ly2AQxQcRgPMFj1Ep"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="yd4gJdc0wACxyWJF5yUaSB">
@@ -5312,7 +5631,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="iX76YrcpxTCthQL2OHpDUL">
                                     <input type="checkbox" id="settings-feature-animations" class="sr-only peer" data-page-node-id="rA1NNBnDLCDYHKm0jEkNF5">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="L1DRllLkU3wJGLIuAhGJJt"></div>
+                                    <div class="ui-switch" data-page-node-id="L1DRllLkU3wJGLIuAhGJJt"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="fdydBwjHxzuYGGjNKSHVtB">
@@ -5320,17 +5639,12 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="PTgBHJFhg9WlowMe5NJbQL">优先级显示方式</label>
                                     <p class="text-xs text-theme-secondary" data-page-node-id="TS1sfwpkUmQ40MHhM9nOw9">选择任务优先级在视图中的呈现方式</p>
                                 </div>
-                                <select id="settings-priority-display-mode" class="w-1/4 flex-shrink-0 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="gIuJuW0MobsurVycGupyCD">
-                                    <option value="checkbox" data-page-node-id="5jrswGGy2fOw487JgPFPem">任务完成勾选框</option>
-                                    <option value="bg" data-page-node-id="KkxIftzgCc6C1O3kKTBqoh">任务底色</option>
-                                    <option value="bar" data-page-node-id="3Es6HBFMpuQTFDwtFVKldP">左侧色条</option>
-                                    <option value="none" data-page-node-id="FARB2PwKsbhzvQvWPmEZck">不显示</option>
-                                </select>
+                                <input type="hidden" id="settings-priority-display-mode" value="checkbox" data-page-node-id="gIuJuW0MobsurVycGupyCD"><div class="seg" data-seg-for="settings-priority-display-mode"><button type="button" data-value="checkbox">勾选框</button><button type="button" data-value="bg">底色</button><button type="button" data-value="bar">色条</button><button type="button" data-value="none">不显示</button></div>
                             </div>
                         </div>
                     </div>
 
-                    <div id="settings-section-defaults" data-page-node-id="xF1fXRyLum4bQBW7ism0wi">
+                    <div id="settings-section-defaults" class="settings-group-start" data-page-node-id="xF1fXRyLum4bQBW7ism0wi">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="PsJYe1y2wVIWnfIMmw3lF9">新建任务默认值</h3>
                         <div class="space-y-4" data-page-node-id="OmiE4PVA3azfb4qoqBDPUe">
                             <div class="flex items-center justify-between" data-page-node-id="2mckd8MLQUT8ElcPXxhujk">
@@ -5342,34 +5656,29 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 <span class="text-sm text-theme-secondary" data-page-node-id="HjrCKfR0l8CTeG7Id4WIIZ">默认重要</span>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="KIkNnDp6xnBXfoBfhJrVyn">
                                     <input type="checkbox" id="settings-default-important" class="sr-only peer" data-page-node-id="usEMvBq3eBHIqIjqpwdiNf">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-yellow-500" data-page-node-id="6H15wdICNgNXq3ElEEO6Me"></div>
+                                    <div class="ui-switch switch-on-yellow" data-page-node-id="6H15wdICNgNXq3ElEEO6Me"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="CzzvOUDbQxgMqdfop1nFF4">
                                 <span class="text-sm text-theme-secondary" data-page-node-id="fnzLjy6OyeTdeX4S0HQHVP">默认紧急</span>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="lZkGnPbfHRjt8nPUOxNdao">
                                     <input type="checkbox" id="settings-default-urgent" class="sr-only peer" data-page-node-id="hyxBN5NHAJYTHNYaHQJp8R">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500" data-page-node-id="APlBQjriTpN002ELSb4BIH"></div>
+                                    <div class="ui-switch switch-on-red" data-page-node-id="APlBQjriTpN002ELSb4BIH"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="dISezT3UjUlbNj2BQtfFHq">
-                                <label class="text-sm font-medium text-theme-secondary" data-page-node-id="9VzlInVn4eg7d0fCEAv23j">默认持续时长</label>
+                                <label class="text-sm font-medium text-theme-secondary" data-page-node-id="9VzlInVn4eg7d0fCEAv23j">新建任务的默认时长</label>
                                 <div class="flex items-center gap-2" data-page-node-id="nNq2OrcVb7MwI9h2XT3V3W">
                                     <input type="number" id="settings-default-duration" min="5" max="480" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" placeholder="30" data-page-node-id="ybBn0kCLBtGsFBLrFGY3K8">
-                                    <span class="text-sm text-theme-secondary" data-page-node-id="3sc15iNdBxP1yfxkqUGV76">分钟</span>
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="3sc15iNdBxP1yfxkqUGV76">分钟</span>
                                 </div>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="6IPkQiCiMzWcp6nd06JlZB">
                                 <div class="min-w-0 pr-3" data-page-node-id="8ZyyIvbNdSQzbdC89pMWPA">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="rSPbOCHxeXP3cIlZRgHksr">默认任务日期</label>
-                                    <p class="text-xs text-theme-muted" data-page-node-id="qrvawCIHneeHdqw5GePp0V">新建任务时未指定日期的默认日期，影响命令面板及各视图的添加任务按钮</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="qrvawCIHneeHdqw5GePp0V">新建任务时设置的默认日期</p>
                                 </div>
-                                <select id="settings-default-task-date" class="w-1/4 flex-shrink-0 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="I5EpPpIPtRukp3fil1QpEV">
-                                    <option value="none" data-page-node-id="pSONy68Cz0cmb6m72yt4G3">无日期</option>
-                                    <option value="today" data-page-node-id="s7MEuhCAGhWaJ13QG44Ag6">今天</option>
-                                    <option value="tomorrow" data-page-node-id="iJPQ5ofH3hQhbBBWjuTAI4">明天</option>
-                                    <option value="nextmonday" data-page-node-id="maBJuA4YoA5vo2qx2zkASD">下周一</option>
-                                </select>
+                                <input type="hidden" id="settings-default-task-date" value="none" data-page-node-id="I5EpPpIPtRukp3fil1QpEV"><div class="seg" data-seg-for="settings-default-task-date"><button type="button" data-value="none">无日期</button><button type="button" data-value="today">今天</button></div>
                             </div>
                         </div>
                     </div>
@@ -5381,66 +5690,41 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <div class="space-y-3" data-page-node-id="fv0c0uwSrQXs5ATj8rGZ29">
                                 <div class="flex items-center justify-between" data-page-node-id="YWWlgYdfvfLDXIapjGseAn">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="nsCCA3GIFqMnhVq87FNUg3">所有任务</label>
-                                    <select id="settings-sidebar-all-tasks" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="J1388GStfopt1KpyfUmBeg">
-                                        <option value="show" data-page-node-id="AP1xJnXB76MYLo6okDwhE2">显示</option>
-                                        <option value="hide" data-page-node-id="383VlZckPnmo1r77LWpJMj">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-all-tasks" value="show" data-page-node-id="J1388GStfopt1KpyfUmBeg"><div class="seg" data-seg-for="settings-sidebar-all-tasks"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="xTfFfPe4GYfsRWIXPqvacP">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="LUg5vaaoYk5p5CODWTD2UV">今天</label>
-                                    <select id="settings-sidebar-today" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="RW93USFHNKQQjRqUpCciIP">
-                                        <option value="show" data-page-node-id="O7guNcoEoZeYTYBk1XQc9K">显示</option>
-                                        <option value="auto" data-page-node-id="J1gZuvUJrXrWfpblEx931H">有内容时显示</option>
-                                        <option value="hide" data-page-node-id="b7kJcWIXOB62MvuxBacdqR">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-today" value="show" data-page-node-id="RW93USFHNKQQjRqUpCciIP"><div class="seg" data-seg-for="settings-sidebar-today"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="2NcZyQZundJ4HwkrncTADT">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="ZJm7dJVy2VGKY7GhRjkCv3">明天</label>
-                                    <select id="settings-sidebar-tomorrow" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="yFJfJOGs0LisrCr6rGAvdy">
-                                        <option value="show" data-page-node-id="Pn76sSCzMVrzL32aH2j4fg">显示</option>
-                                        <option value="auto" data-page-node-id="Vq8X6X8uFJKSA5TBhK9Yor">有内容时显示</option>
-                                        <option value="hide" data-page-node-id="m47XvXItaRl8fZUucOTZaw">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-tomorrow" value="show" data-page-node-id="yFJfJOGs0LisrCr6rGAvdy"><div class="seg" data-seg-for="settings-sidebar-tomorrow"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="TtOXdDW6kTrHTrFTrAqlTg">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="MK7qZPGOuwaoJPUMHjbgHi">最近3天</label>
-                                    <select id="settings-sidebar-recent3days" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="QrMgiImBiHHMpYhMWPB5zI">
-                                        <option value="show" data-page-node-id="A8JczyEZJEmhFd5EHc8PAb">显示</option>
-                                        <option value="auto" data-page-node-id="XQlRXfp2lESwbebAWh9aJG">有内容时显示</option>
-                                        <option value="hide" data-page-node-id="6W05pdKe7x45YHYbM7kWPW">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-recent3days" value="show" data-page-node-id="QrMgiImBiHHMpYhMWPB5zI"><div class="seg" data-seg-for="settings-sidebar-recent3days"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="ezFxYE7P5eamjnrNDhO3Hl">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="OpMAqROY6kchZxQoHnK3A5">最近7天</label>
-                                    <select id="settings-sidebar-recent7days" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="rwrIm2xqmCrXL0qBylTUeg">
-                                        <option value="show" data-page-node-id="Q8s4OixECu9xHl5c6zuB8i">显示</option>
-                                        <option value="auto" data-page-node-id="LYw8rB636KkkMIX2UWIfat">有内容时显示</option>
-                                        <option value="hide" data-page-node-id="LTqOtcfDZ1AxB84uzIffXy">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-recent7days" value="show" data-page-node-id="rwrIm2xqmCrXL0qBylTUeg"><div class="seg" data-seg-for="settings-sidebar-recent7days"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="6nypeQSC0PRy8lfks26n7u">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="6TIKPp6U7HXsApUW0VEpHw">摘要</label>
-                                    <select id="settings-sidebar-summary" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="PXaKfvkV8zSFWZ9RYuIiKP">
-                                        <option value="show" data-page-node-id="JQeyUSt1jur6TE8ShGr1f7">显示</option>
-                                        <option value="hide" data-page-node-id="01BM8FSK7Ue2XMMfSl3web">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-summary" value="show" data-page-node-id="PXaKfvkV8zSFWZ9RYuIiKP"><div class="seg" data-seg-for="settings-sidebar-summary"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm font-medium text-theme-secondary">回收站</label>
+                                    <input type="hidden" id="settings-sidebar-trash" value="show"><div class="seg" data-seg-for="settings-sidebar-trash"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                             </div>
                             <div class="space-y-3" data-page-node-id="H2YFa9JYghhDsoXsxgJi0w">
                                 <div class="flex items-center justify-between" data-page-node-id="GyzxhqRC7f6bcIdtCwOVxR">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="6E784Hrd6ni5i52kOyoQBo">标签</label>
-                                    <select id="settings-sidebar-tags" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="rt2UZQQ6TcwPH5eh0zbLxX">
-                                        <option value="show" data-page-node-id="kJS9N3nxG4lOdfkdcBuDyI">显示</option>
-                                        <option value="auto" data-page-node-id="t4idePJDtYOYOatklUJoJA">有内容时显示</option>
-                                        <option value="hide" data-page-node-id="knTsfARqdooL4yD1vm4wPn">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-tags" value="show" data-page-node-id="rt2UZQQ6TcwPH5eh0zbLxX"><div class="seg" data-seg-for="settings-sidebar-tags"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="MuZWRxP7uxTW3LZG90BNpa">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Xx8lxiujfCxzUv4uJTUmDR">过滤器</label>
-                                    <select id="settings-sidebar-filters" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="eZjp1NnTMosmcL5DLhl3xc">
-                                        <option value="show" data-page-node-id="uny8s671hBpkugJjT2eCHs">显示</option>
-                                        <option value="hide" data-page-node-id="K9kh86e0iikLV6z6HJON9p">隐藏</option>
-                                    </select>
+                                    <input type="hidden" id="settings-sidebar-filters" value="show" data-page-node-id="eZjp1NnTMosmcL5DLhl3xc"><div class="seg" data-seg-for="settings-sidebar-filters"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                             </div>
                         </div>
@@ -5457,8 +5741,74 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="R7xbHrclTUr4TWsV6T6LTj">
                                     <input type="checkbox" id="settings-cmd-remove-time" class="sr-only peer" checked data-page-node-id="KQmPonVcfZ7fHMD04p7Dk0">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="INGS6U79WrZg6KxgzEv489"></div>
+                                    <div class="ui-switch" data-page-node-id="INGS6U79WrZg6KxgzEv489"></div>
                                 </label>
+                            </div>
+                            <!-- 模糊时间偏好：模糊时段词/相对词的偏好时间 -->
+                            <div class="pt-1 space-y-3">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">模糊时间偏好</label>
+                                    <p class="text-xs text-theme-secondary">命令面板输入"上午/中午/下午/晚上"等模糊时段词时的偏好时间，及"稍后/等等/一会儿"等相对词的默认时长</p>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs text-theme-secondary mb-1">上午</label>
+                                        <div class="relative">
+                                            <input type="time" id="settings-fuzzy-morning" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-morning-picker', 'morning')">
+                                            <div id="settings-fuzzy-morning-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-theme-secondary mb-1">中午</label>
+                                        <div class="relative">
+                                            <input type="time" id="settings-fuzzy-noon" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-noon-picker', 'noon')">
+                                            <div id="settings-fuzzy-noon-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-theme-secondary mb-1">下午</label>
+                                        <div class="relative">
+                                            <input type="time" id="settings-fuzzy-afternoon" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-afternoon-picker', 'afternoon')">
+                                            <div id="settings-fuzzy-afternoon-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-theme-secondary mb-1">晚上</label>
+                                        <div class="relative">
+                                            <input type="time" id="settings-fuzzy-evening" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-evening-picker', 'evening')">
+                                            <div id="settings-fuzzy-evening-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-theme-secondary mb-1">稍后/等等/一会儿</label>
+                                        <div class="flex items-center gap-2">
+                                            <input type="number" id="settings-fuzzy-later" min="5" max="120" step="5" value="15" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center">
+                                            <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- 智能计划时间开关 -->
+                                <div class="flex items-center justify-between">
+                                    <div class="min-w-0 pr-3">
+                                        <label class="text-sm font-medium text-theme-primary">模糊时间任务智能计划时间</label>
+                                        <p class="text-xs text-theme-secondary">开启后，模糊时段词会结合当前时间与已有任务自动排程：指定时间过时，则顺延至最近的有效时段。与已有任务冲突时，按任务时间粒度顺延到空闲时段。时段全满时，选择任务量最少的时段。关闭后仅按偏好时间寻找最近有效时间排程，不检测任务冲突情况。</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                                        <input type="checkbox" id="settings-fuzzy-smart" class="sr-only peer" checked>
+                                        <div class="ui-switch"></div>
+                                    </label>
+                                </div>
+                                <!-- 任务时间粒度（仅开关开启时显示） -->
+                                <div id="settings-fuzzy-gran-row" class="flex items-center justify-between">
+                                    <div class="min-w-0 pr-3">
+                                        <label class="text-sm font-medium text-theme-primary">任务时间粒度</label>
+                                        <p class="text-xs text-theme-secondary">自动顺延时划分时间块的粒度，可选 1-120</p>
+                                    </div>
+                                    <div class="flex items-center gap-2 flex-shrink-0">
+                                        <input type="number" id="settings-fuzzy-granularity" min="1" max="120" step="1" value="30" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center">
+                                        <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -5471,35 +5821,37 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                         </div>
                     </div>
                     
-                    <div id="settings-section-mindful" data-page-node-id="rWSQtWmU8kPWXcIY4u0PoP">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="hXhRks1R9a0z0M1OOOPSwz">正念小事</h3>
-                        <div class="flex items-center justify-between" data-page-node-id="CdXsuaR6zJmTJXKu3883D9">
-                            <span class="text-sm text-theme-secondary" data-page-node-id="M5eAoTLVQ8EKzSYOKkHojA">接受后自动创建任务</span>
-                            <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="PCPjU6aPlACtCChitBp2hy">
-                                <input type="checkbox" id="settings-auto-create" class="sr-only peer" checked data-page-node-id="0oQQCqMHC2K5CmkgzNpJnj">
-                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="3RuJlzhyGpkx7L7epZCAzy"></div>
-                            </label>
-                        </div>
-                    </div>
-                    
-                    <div id="settings-section-pomodoro" data-page-node-id="M1XVphrppFDocDtBbYNd0a">
+
+                    <div id="settings-section-pomodoro" class="settings-group-start" data-page-node-id="M1XVphrppFDocDtBbYNd0a">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="bigemVKk8lLG8cGnaEYyzz">番茄计时设置</h3>
                         <div class="grid grid-cols-2 gap-4 mb-4" data-page-node-id="BGwkcZmHYaFEporFGICRKK">
                             <div data-page-node-id="WmpwkBNQmFowAP4Cbojgye">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="J1U6l5wqlO0YXE57gPaGtY">专注时长 (分钟)</label>
-                                <input type="number" id="settings-focus-duration" min="1" max="60" value="25" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="RKoaUOrC3JN77yVs6I6bVw">
+                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="J1U6l5wqlO0YXE57gPaGtY">专注时长</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="settings-focus-duration" min="1" max="60" value="25" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="RKoaUOrC3JN77yVs6I6bVw">
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
+                                </div>
                             </div>
                             <div data-page-node-id="gAxnkDKGNbC5ZoJx31kCSA">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="XB8DbIeBlYD3bK4DmE81Bn">短休息时长 (分钟)</label>
-                                <input type="number" id="settings-short-break-duration" min="1" max="30" value="5" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="UVXsuBQZxEcLsQzHCyCtYG">
+                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="XB8DbIeBlYD3bK4DmE81Bn">短休息时长</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="settings-short-break-duration" min="1" max="30" value="5" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="UVXsuBQZxEcLsQzHCyCtYG">
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
+                                </div>
                             </div>
                             <div data-page-node-id="HkH2jIgrp0HtgswgWxZ4ew">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="Ev8HOAxzh7QozxyW5DxDOI">长休息时长 (分钟)</label>
-                                <input type="number" id="settings-long-break-duration" min="1" max="60" value="15" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="Hl7AUFIUv74SWI6r0Nt86E">
+                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="Ev8HOAxzh7QozxyW5DxDOI">长休息时长</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="settings-long-break-duration" min="1" max="60" value="15" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="Hl7AUFIUv74SWI6r0Nt86E">
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
+                                </div>
                             </div>
                             <div data-page-node-id="PKmF3wAXZreN8IBtLg9PHJ">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="ei1uvYqdEiEFxBXCtjj120">长休息间隔 (番茄数)</label>
-                                <input type="number" id="settings-long-break-interval" min="2" max="10" value="4" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="2IppzFuwv1pklQbEo3ADy1">
+                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="ei1uvYqdEiEFxBXCtjj120">长休息间隔</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="settings-long-break-interval" min="2" max="10" value="4" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="2IppzFuwv1pklQbEo3ADy1">
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">个</span>
+                                </div>
                             </div>
                         </div>
                         <div class="space-y-3" data-page-node-id="Hras0ixZBIQzJmVpCMH2Tu">
@@ -5510,7 +5862,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="FuOGYIJJ5Fv9j9DcLjoknF">
                                     <input type="checkbox" id="settings-pomodoro-state-bg" class="sr-only peer" data-page-node-id="Z6VvBrq0GEv380XDJcVfEo">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="bR8gdS5nne06cIeMoy0yFf"></div>
+                                    <div class="ui-switch" data-page-node-id="bR8gdS5nne06cIeMoy0yFf"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="6Duw6jBP1fmFok9pk9Xdsl">
@@ -5520,7 +5872,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="W5kPFWYKTtZREcagsXu2ZU">
                                     <input type="checkbox" id="settings-pomodoro-sound" class="sr-only peer" data-page-node-id="06wOiSSLnlgp7oFlBAi9IX">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="fqb5YMSMoQRxfoJDcEaoRf"></div>
+                                    <div class="ui-switch" data-page-node-id="fqb5YMSMoQRxfoJDcEaoRf"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="aPxAEKfUE9odbGFmCMxHbG">
@@ -5530,7 +5882,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="QcQ6E1oTeXirWMVkUNmjvR">
                                     <input type="checkbox" id="settings-auto-break" class="sr-only peer" data-page-node-id="fgZI4Pd8UTMU9Go4CNARwd">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="5i5zt17nOQuv6scwEAURov"></div>
+                                    <div class="ui-switch" data-page-node-id="5i5zt17nOQuv6scwEAURov"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="3WjON1AasxbIAVqo9AWxN7">
@@ -5540,7 +5892,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="C0UlHLuStQwc9shkRtqnfs">
                                     <input type="checkbox" id="settings-auto-focus" class="sr-only peer" data-page-node-id="oudHBvWd8KtRKjITKdjUYi">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="UTV5PNFAMLz2uNjdgeixmS"></div>
+                                    <div class="ui-switch" data-page-node-id="UTV5PNFAMLz2uNjdgeixmS"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="Vr4Kjs1RzIoflZ2xow0qU6">
@@ -5550,7 +5902,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="AQO55PiSBwuMTiFgPIg7vN">
                                     <input type="checkbox" id="settings-bg-flow-effect" class="sr-only peer" data-page-node-id="4MEJ0rbeTuaeFfmX8GbFsh">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="sPkbJNQR1368w5tzXqtXPF"></div>
+                                    <div class="ui-switch" data-page-node-id="sPkbJNQR1368w5tzXqtXPF"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="naxT5s1EpNU9loV3tmCLUq">
@@ -5560,25 +5912,28 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="KIc7QosaMc5JNHxyGrhFqU">
                                     <input type="checkbox" id="settings-advanced-particle" class="sr-only peer" data-page-node-id="O4dXYcX6wxETTvvIGQemwQ">
-                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent" data-page-node-id="uT2uJRlafcuCHoVX2aUnS8"></div>
+                                    <div class="ui-switch" data-page-node-id="uT2uJRlafcuCHoVX2aUnS8"></div>
                                 </label>
                             </div>
                         </div>
                     </div>
 
-                    <div id="settings-section-notification" data-page-node-id="kb7SKOGdJMAuXB31mutDEh">
+                    <div id="settings-section-notification" class="settings-group-start" data-page-node-id="kb7SKOGdJMAuXB31mutDEh">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="MbYrvHsmCOylqmxtg9C3Pb">通知设置</h3>
                         <div class="space-y-4" data-page-node-id="afNFJF0HwLTN6oTU6xObpA">
                             <div class="flex items-center justify-between" data-page-node-id="vfAI5ONiBfKTHhgUAea9oK">
-                                <label class="text-sm font-medium text-theme-secondary" data-page-node-id="cVCBHs4fq652kku4ncbkRo">消息自动消失时间 (秒)</label>
-                                <input type="number" id="settings-toast-duration" min="1" max="30" value="5" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="I3y7Ysm8YEXmpXwHnJfscI">
+                                <label class="text-sm font-medium text-theme-primary" data-page-node-id="cVCBHs4fq652kku4ncbkRo">消息显示时长</label>
+                                <input type="hidden" id="settings-toast-pace" value="normal"><div class="seg" data-seg-for="settings-toast-pace"><button type="button" data-value="fast">快</button><button type="button" data-value="normal">标准</button><button type="button" data-value="slow">慢</button></div>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="r0u15x6F5CLdMlAdzRLHC3">
                                 <div class="min-w-0 pr-3" data-page-node-id="5a4HVa8FjiNDTc8FFsBRca">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="aA5noHuBhdRNaaAIf4OXUY">稍后提醒延迟 (分钟)</label>
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="aA5noHuBhdRNaaAIf4OXUY">稍后提醒延迟</label>
                                     <p class="text-xs text-theme-muted" data-page-node-id="fjuTKaTjkcVut4uwq8YGDS">点击"稍后提醒"后，间隔多少分钟再次弹出提醒</p>
                                 </div>
-                                <input type="number" id="settings-snooze-delay" min="1" max="120" value="15" class="w-1/4 flex-shrink-0 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="kOITwSaBHB4kg0NjZRH8zX">
+                                <div class="flex items-center gap-2 flex-shrink-0">
+                                    <input type="number" id="settings-snooze-delay" min="1" max="120" value="15" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="kOITwSaBHB4kg0NjZRH8zX">
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
+                                </div>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="T2VNti1Tn2kN5gCuqwWt4z">
                                 <div data-page-node-id="X9aNHV6T6boGgENTOj2d4m">
@@ -5596,22 +5951,24 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     <div id="settings-section-holiday" data-page-node-id="g5XF0viKeH4GgA12WuNZ11">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="QFH1R6j8jTUX3urOYiFdO8">节假日与调休</h3>
                         <div class="space-y-3" data-page-node-id="ugEaHAHfOdwwQKBpbs9mLA">
-                            <p class="text-sm text-theme-secondary" data-page-node-id="1M5RjOqpAaaBlDPBXPMfOy">管理各年份的法定节假日和调休日数据，确保日程计算准确。</p>
                             <button onclick="switchToHolidayPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm" data-page-node-id="964elKSBbchuba0QCTyT7i">
                                 <i class="fas fa-calendar-alt" data-page-node-id="jxgXbHyb3DO6L0VhlxgjKn"></i>设置节假日与调休
                             </button>
                         </div>
                     </div>
 
-                    <div id="settings-section-sync" data-page-node-id="pdFlB586uwXecoNZsa8YdS">
+                    <div id="settings-section-sync" class="settings-group-start" data-page-node-id="pdFlB586uwXecoNZsa8YdS">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="SLCadYQz2EV0aiMgzngOAz">数据同步</h3>
                         <div class="space-y-4" data-page-node-id="nkkrmGmyU3K2mRiYb4qrx2">
                             <div class="flex items-center justify-between" data-page-node-id="ACmt3903B11P96L3fh9YHf">
                                 <div class="min-w-0 pr-3" data-page-node-id="TTFYPITRqTdF6pEglYCFdR">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="NKHgY7OiTNObjBpBcv6Uea">数据刷新间隔 (秒)</label>
-                                    <p class="text-xs text-theme-muted" data-page-node-id="ABMh8Uq4E9vips8Bl38JPn">多标签页或多人协作时，自动从服务器同步数据的间隔时间</p>
+                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="NKHgY7OiTNObjBpBcv6Uea">数据刷新间隔</label>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="ABMh8Uq4E9vips8Bl38JPn">从服务器同步数据的间隔时间</p>
                                 </div>
-                                <input type="number" id="settings-refresh-interval" min="5" max="300" value="30" class="w-1/4 flex-shrink-0 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="9dPwjYFcTWGMFHIU2qnNFQ">
+                                <div class="flex items-center gap-2 flex-shrink-0">
+                                    <input type="number" id="settings-refresh-interval" min="5" max="300" value="30" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="9dPwjYFcTWGMFHIU2qnNFQ">
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">秒</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -5623,20 +5980,14 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <div data-page-node-id="o8q6AkzxQx6F9lf876HaAG">
                                 <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="Q4I27FTwQhpW93OyIgJanY">网页模式</label>
                                 <div class="flex gap-2" data-page-node-id="Wd4as8m69D5saF4VBWk8JU">
-                                    <select id="settings-web-mode" onchange="onWebModeChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" data-page-node-id="JAihedng4SzNiEuFYvoIYd">
-                                        <option value="offline" data-page-node-id="T6GbTt56N314WXKIKIDn6P">离线版（本地资源，推荐内网使用）</option>
-                                        <option value="online" data-page-node-id="G3JLkl3ImLL42XVkeVzYtF">在线版（CDN 资源，需互联网）</option>
-                                    </select>
+                                    <input type="hidden" id="settings-web-mode" onchange="onWebModeChange()" value="offline" data-page-node-id="JAihedng4SzNiEuFYvoIYd"><div class="seg" data-seg-for="settings-web-mode"><button type="button" data-value="offline">离线版</button><button type="button" data-value="online">在线版</button></div>
                                 </div>
-                                <p class="text-xs text-theme-muted mt-2" data-page-node-id="AazMCQhOx7SFX5Td0ChiZm">离线版使用本地 Tailwind/FontAwesome 资源，无需互联网连接；在线版使用 CDN 资源，切换前会检测网络连通性。</p>
+                                <p class="text-xs text-theme-muted mt-2" data-page-node-id="AazMCQhOx7SFX5Td0ChiZm">离线版适合企业内网用户使用；在线版适合互联网用户使用。</p>
                             </div>
                             <div data-page-node-id="fYkT8lEhDasfqGb04ZpkIz">
                                 <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="3cZHdaWIPtqI1qZXH1iWLw">访问地址</label>
                                 <div class="flex gap-2" data-page-node-id="FHJHW7fBAHXwEWhTV0MnGe">
-                                    <select id="settings-bind-address" onchange="onBindAddressChange()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" data-page-node-id="h91nIRYK3VV2ESQkqGDXmk">
-                                        <option value="127.0.0.1" data-page-node-id="sy6jW6UK81BuTaPLUmCbjz">仅本机 (127.0.0.1)</option>
-                                        <option value="0.0.0.0" data-page-node-id="RXpFMG9GC3GF3L8KSeqsaI">局域网共享 (0.0.0.0)</option>
-                                    </select>
+                                    <input type="hidden" id="settings-bind-address" onchange="onBindAddressChange()" value="127.0.0.1" data-page-node-id="h91nIRYK3VV2ESQkqGDXmk"><div class="seg" data-seg-for="settings-bind-address"><button type="button" data-value="127.0.0.1">仅本机</button><button type="button" data-value="0.0.0.0">局域网共享</button></div>
                                 </div>
                                 <p class="text-xs text-theme-muted mt-2" data-page-node-id="8YH9CZOFAw7ad9a4XvSM2s">选择"局域网共享"后，同一网络下的其他设备可通过IP地址访问本系统。</p>
                             </div>
@@ -5686,7 +6037,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 <input type="file" id="import-data" accept=".json" class="hidden" onchange="importData(this.files[0])" data-page-node-id="8SQiYd08YzoEgGDH7mFLtC">
                             </div>
                             
-                            <div class="border-t border-theme pt-4" data-page-node-id="yk2goE6qUCVsR9ZDKhY0JN">
+                            <div class="pt-1" data-page-node-id="yk2goE6qUCVsR9ZDKhY0JN">
                                 <div class="flex items-center justify-between mb-3" data-page-node-id="b3AGtTwYO5BBHwX2UjOeHw">
                                     <label class="flex items-center gap-2 text-sm font-medium text-theme-primary" data-page-node-id="VDeZmFgJTTKmKWj8AwOYJT">
                                         <input type="checkbox" id="backup-enabled" onchange="toggleAutoBackup()" class="w-4 h-4 rounded" data-page-node-id="yvaIGorkTZi2sldpI729jR">
@@ -5706,13 +6057,21 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                         </div>
                                     </div>
                                 </div>
-                                <p class="text-xs text-theme-muted mt-2" data-page-node-id="X6bieigAvHUPeamHi4OXsI">开启后，系统将按设定周期自动备份数据到服务器 backups 目录，无需手动操作。数据保留周期到期后自动清理旧备份，设置为0天表示永久保存。</p>
                                 <p class="text-xs text-theme-muted mt-1" data-page-node-id="b3O8zptxKVh1EI233ziWOt">备份目录：<span id="backup-dir-path" data-page-node-id="uTE6xH3JPxLulSLXbCBqCV">加载中...</span></p>
+                            </div>
+
+                            <!-- 回收站（FR-02）：保留时长独立设置。新增节点刻意不带 data-page-node-id -->
+                            <div class="pt-1">
+                                <label class="block text-sm text-theme-secondary mb-1">回收站保留时长（天）</label>
+                                <div class="flex gap-3">
+                                    <input type="number" id="trash-retention-days" min="0" max="365" value="30" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" onchange="updateTrashRetentionSettings()">
+                                    <button onclick="setTrashRetentionToForever()" class="px-4 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm">永久保留</button>
+                                </div>
                             </div>
 
                             <p class="text-xs text-theme-muted" data-page-node-id="BYyQgYthNwRuSl3du7n95M">数据将导出为 JSON 格式文件，包含所有任务、清单和配置信息。导入时请选择之前导出的 JSON 文件。</p>
                             
-                            <div class="border-t border-theme pt-4 mt-4" data-page-node-id="OBXZpKQXNuF3zpxMOUHJSZ">
+                            <div class="mt-4" data-page-node-id="OBXZpKQXNuF3zpxMOUHJSZ">
                                 <div class="flex items-center justify-between" data-page-node-id="LBYEqBhF5IR70wkX2mAMuF">
                                     <label class="flex items-center gap-2 text-sm font-medium text-theme-primary" data-page-node-id="YlXRrk9IitR9MktT2WLa7l">
                                         <i class="fas fa-rocket text-theme-muted" data-page-node-id="5NVM08eS8kFuUhAlMgHlU3"></i>
@@ -5720,13 +6079,12 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                     </label>
                                     <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="ebjFFHQc20MyYC2HS4KcvQ">
                                         <input type="checkbox" id="settings-autostart" onchange="toggleAutoStart()" class="sr-only peer" data-page-node-id="qpP3fGFqr4OWEuzluDy5H6">
-                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:bg-gray-600 peer-checked:bg-accent-hover" data-page-node-id="rNcTaHvbZSe71VMBuvVR9t"></div>
+                                        <div class="ui-switch" data-page-node-id="rNcTaHvbZSe71VMBuvVR9t"></div>
                                     </label>
                                 </div>
-                                <p class="text-xs text-theme-muted mt-1" data-page-node-id="1iCQhEbRNbvOQh5aa4RsxL">开启后，系统将在登录时自动启动服务并打开浏览器</p>
                             </div>
 
-                            <div class="border-t border-theme pt-4 mt-4" data-page-node-id="HtO4iXSiG0oJbpPReaNVAe">
+                            <div class="mt-4" data-page-node-id="HtO4iXSiG0oJbpPReaNVAe">
                                 <div class="flex gap-3" data-page-node-id="en80qtUHzxDJUCvN2ZqJJ1">
                                     <button onclick="resetAllData()" id="reset-data-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30 transition text-sm" data-page-node-id="CuZaBAAhMDgo0KqMA6HVRO">
                                         <i class="fas fa-exclamation-triangle mr-1" data-page-node-id="Th4oYYUsOa14KvFYQTOR9O"></i>重置数据
@@ -5749,7 +6107,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.7.4</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.0</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>
@@ -5908,6 +6266,8 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
     <script src="quadrantView.js"></script>
     <script src="taskListView.js"></script>
     <script src="summaryView.js"></script>
+    <script src="trash.js"></script>
+    <script src="batchSelect.js"></script>
     <script src="kanbanView.js"></script>
     <script src="views.js"></script>
     <script src="tasks.js"></script>
@@ -5973,28 +6333,28 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <span id="kc-showdetails-label" class="text-sm text-theme-primary" data-page-node-id="v6AaYyKWeuXDEkgLUuPLrd">显示任务详情</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="wXH0xBiQHzxB1aJxvsa8k4">
                     <input type="checkbox" id="kc-showdetails" aria-labelledby="kc-showdetails-label" onchange="onKanbanConfigChange()" class="sr-only peer" data-page-node-id="6zC3nED4qsPFwdePR2W7GE">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="tTaBk9QdH4PrF5Nn4p9Fug"></div>
+                    <div class="ui-switch" data-page-node-id="tTaBk9QdH4PrF5Nn4p9Fug"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="ON3sfo4z2XnkZu2TliBKDW">
                 <span id="kc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="7Nbx76gEJEHi3pg2F8dioG">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="KLTZg7NeyemO6ceEdqLbBp">
                     <input type="checkbox" id="kc-showcompleted" aria-labelledby="kc-showcompleted-label" onchange="onKanbanConfigChange()" class="sr-only peer" data-page-node-id="OapV5ENKLlDRtEJDKqwXGB">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="aB7uqvDdIfOXz7PJTwt82R"></div>
+                    <div class="ui-switch" data-page-node-id="aB7uqvDdIfOXz7PJTwt82R"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="n5ZZCQHy5FkNTQEKrSEdjH">
                 <span id="kc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="Oij3CrLoFqIMn3QoHXIx95">显示"开始专注"按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="1PRcMKogZn1eq6yymVABND">
                     <input type="checkbox" id="kc-showfocus" aria-labelledby="kc-showfocus-label" onchange="onKanbanConfigChange()" class="sr-only peer" data-page-node-id="FJtM1yA26i8qIPl90ogNxn">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="v6AnqVDbZEbRSMQnLXQkE2"></div>
+                    <div class="ui-switch" data-page-node-id="v6AnqVDbZEbRSMQnLXQkE2"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="0HTSDUhUDlNompTQ67NCRP">
                 <span id="kc-countuncompleted-label" class="text-sm text-theme-primary" data-page-node-id="qMyCNc1wEk2sAvUGFdkqTs">列头仅显示未完成计数</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="yjhZzRQTBZQGxSfTt8zhA6">
                     <input type="checkbox" id="kc-countuncompleted" aria-labelledby="kc-countuncompleted-label" onchange="onKanbanConfigChange()" class="sr-only peer" data-page-node-id="dJVAEggdcXQk3gDPvWIVRh">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="EKFe3BggntFDa287jOBCgR"></div>
+                    <div class="ui-switch" data-page-node-id="EKFe3BggntFDa287jOBCgR"></div>
                 </label>
             </div>
             <div id="kc-groupconfig-entry" class="hidden border-t border-theme pt-4" data-page-node-id="KkBnqWVNtTZD9Wrxf4wpZk">
@@ -6053,7 +6413,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     <span id="tc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="Zl9wznFBv90QNO8f86GHOC">显示已完成任务</span>
                     <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="wlqIfr6A7ryelmUwi9MTfB">
                         <input type="checkbox" id="tc-showcompleted" aria-labelledby="tc-showcompleted-label" onchange="onTaskConfigChange()" class="sr-only peer" data-page-node-id="Kgn8L6vDTPQLxxRfv7i19I">
-                        <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="oO0Iaua1NcULuHCodpRdVi"></div>
+                        <div class="ui-switch" data-page-node-id="oO0Iaua1NcULuHCodpRdVi"></div>
                     </label>
                 </div>
                 <div data-page-node-id="fMCH3CbGiQKX6aAX99MSDe">
@@ -6067,14 +6427,14 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                     <span id="tc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="Bwjv9IAqicGBeEUMAipVZa">显示"开始专注"按钮</span>
                     <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="qSMKvX00jOVCLH8Yb7Endu">
                         <input type="checkbox" id="tc-showfocus" aria-labelledby="tc-showfocus-label" onchange="onTaskConfigChange()" class="sr-only peer" data-page-node-id="u8O9cT75SxYt4YIK7vONye">
-                        <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="lGa1XUUoPHyoTHZBlbRjo1"></div>
+                        <div class="ui-switch" data-page-node-id="lGa1XUUoPHyoTHZBlbRjo1"></div>
                     </label>
                 </div>
                 <div class="flex items-center justify-between" data-page-node-id="vFtPOWo2zY4I2P0L9mZlaA">
                     <span id="tc-showdetails-label" class="text-sm text-theme-primary" data-page-node-id="D0EqFpKaycqjq0Qzqpiwbc">显示任务详情</span>
                     <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="k9lO22ktcJIEuo8gI8EDmb">
                         <input type="checkbox" id="tc-showdetails" aria-labelledby="tc-showdetails-label" onchange="onTaskConfigChange()" class="sr-only peer" data-page-node-id="EkDBFKv8ZerJirbvsOAlaa">
-                        <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="afxCh6ac4KcBUaUOtgm5qT"></div>
+                        <div class="ui-switch" data-page-node-id="afxCh6ac4KcBUaUOtgm5qT"></div>
                     </label>
                 </div>
                 <div data-page-node-id="xhK7g4MYzQMbBnMzbZ0voc">
@@ -6110,28 +6470,28 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <span id="qc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="ZGhFn05wv2ZtFL39BAo3Q1">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="v9UZpoObjwY6kR5BjCKxZ2">
                     <input type="checkbox" id="qc-showcompleted" aria-labelledby="qc-showcompleted-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="k39WYR8DCht1JSvEyTfT8G">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="DQqJdvi68BgiPtnAnSfTsb"></div>
+                    <div class="ui-switch" data-page-node-id="DQqJdvi68BgiPtnAnSfTsb"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="XQEjQGGpsntPJBngPdPlbo">
                 <span id="qc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="AXf5JcyBNVAsq5G4FdtFa3">显示"开始专注"按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="jT80TpKUGZf9FOLYjAEorB">
                     <input type="checkbox" id="qc-showfocus" aria-labelledby="qc-showfocus-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="POX12ZPvhGjZuJKANAGpQj">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="ci7s3oHGlg6up0PmBCm5bw"></div>
+                    <div class="ui-switch" data-page-node-id="ci7s3oHGlg6up0PmBCm5bw"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="44sZ90dZ6hsg6ji2XJRbQD">
                 <span id="qc-showdetails-label" class="text-sm text-theme-primary" data-page-node-id="eZkhXsNvjNj5cZVCWXwIV0">显示任务详情</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="QJxudNsTqK6do6ykfaQScZ">
                     <input type="checkbox" id="qc-showdetails" aria-labelledby="qc-showdetails-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="9DRx4d48wv5HQ1pMoG9STT">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="t9OKxi5O0bpO7QMOhlB25J"></div>
+                    <div class="ui-switch" data-page-node-id="t9OKxi5O0bpO7QMOhlB25J"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="qCompactRow">
                 <span id="qc-compact-label" class="text-sm text-theme-primary" title="开启后该视图卡片改用任务视图的紧凑横向单行样式">紧凑显示</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="qCompactLbl">
                     <input type="checkbox" id="qc-compact" aria-labelledby="qc-compact-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="qCompactInput">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="qCompactDiv"></div>
+                    <div class="ui-switch" data-page-node-id="qCompactDiv"></div>
                 </label>
             </div>
             <div class="pt-4 border-t border-theme space-y-2" data-page-node-id="J96eACKliDxAdJ3J0yfYDo">
@@ -6152,14 +6512,14 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <span id="sc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="8JrUm49cr26WB7ioh42Vn6">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="59ZE7cCeBEe5SuBVR61zjW">
                     <input type="checkbox" id="sc-showcompleted" aria-labelledby="sc-showcompleted-label" onchange="onScheduleConfigChange()" class="sr-only peer" data-page-node-id="TwgUX7UoFrXzs6ik8MNyZF">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="1iFm0vE2O0mQIMmCkv7k2L"></div>
+                    <div class="ui-switch" data-page-node-id="1iFm0vE2O0mQIMmCkv7k2L"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="EPTDUEXaZ4WSwgujbZUahX">
                 <span id="sc-shownodate-label" class="text-sm text-theme-primary" data-page-node-id="X5xFtBDeOqqPbcf3XMYo1u">显示无日期任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="yyiiMx9sQc6D9IegK6DzbH">
                     <input type="checkbox" id="sc-shownodate" aria-labelledby="sc-shownodate-label" onchange="onScheduleConfigChange()" class="sr-only peer" data-page-node-id="0WSyKkf7Aggigz4e1ARamT">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="Tdbumu1G9RDe0gcghLIeYK"></div>
+                    <div class="ui-switch" data-page-node-id="Tdbumu1G9RDe0gcghLIeYK"></div>
                 </label>
             </div>
             <div id="sc-nodatepos-wrap" class="hidden" data-page-node-id="WbFba4LS0wdfqzpZsVlxEg">
@@ -6173,21 +6533,21 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <span id="sc-showlunar-label" class="text-sm text-theme-primary" data-page-node-id="Y51eG38UAceLztaYeJTRgW">显示农历</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="QKUXGYfV3oKkqnYUYiJ3R6">
                     <input type="checkbox" id="sc-showlunar" aria-labelledby="sc-showlunar-label" onchange="onScheduleConfigChange()" class="sr-only peer" data-page-node-id="WRr5i6mNwXQciqyybYpiqZ">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="g68rR5vA5AF5XBN9CynSVM"></div>
+                    <div class="ui-switch" data-page-node-id="g68rR5vA5AF5XBN9CynSVM"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="oTHBAUcSUx2lB0YpWacJio">
                 <span id="sc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="g8tRO8hP1lX8JST7JXCFFZ">显示"开始专注"按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="myv4kLcw9KxmuiKmfJu0D1">
                     <input type="checkbox" id="sc-showfocus" aria-labelledby="sc-showfocus-label" onchange="onScheduleConfigChange()" class="sr-only peer" data-page-node-id="jiCqzxArptkDvT7wDAMYCA">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="xIYyIzWzxRiTXDpE1l6sX6"></div>
+                    <div class="ui-switch" data-page-node-id="xIYyIzWzxRiTXDpE1l6sX6"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="jJK2I3JBf4pS92uyCeIjc4">
                 <span id="sc-showdetails-label" class="text-sm text-theme-primary" data-page-node-id="USXAcB5W5McRRs7zII9F7h">显示任务详情</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="UGLSFsNCc4sNKBpJ8HrJyG">
                     <input type="checkbox" id="sc-showdetails" aria-labelledby="sc-showdetails-label" onchange="onScheduleConfigChange()" class="sr-only peer" data-page-node-id="c0BDqkxnTbj01HDCQVcO1s">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="w4y2Bu0rJMADC37fReraYp"></div>
+                    <div class="ui-switch" data-page-node-id="w4y2Bu0rJMADC37fReraYp"></div>
                 </label>
             </div>
             <div class="pt-4 border-t border-theme" data-page-node-id="uhTz4Z70nrsWqR3MYtjIsw">
@@ -6217,14 +6577,14 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <span id="wc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="aFv1V8oCbCxkq3MHrBcr78">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="Wyb16WefzSskKCRyi5RrOQ">
                     <input type="checkbox" id="wc-showcompleted" aria-labelledby="wc-showcompleted-label" onchange="onWeekConfigChange()" class="sr-only peer" data-page-node-id="fMjbdCvVvmZoBHE1k6O0Xa">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="jG03YpggFwtdtD2ETkQTYT"></div>
+                    <div class="ui-switch" data-page-node-id="jG03YpggFwtdtD2ETkQTYT"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="oRqmKBTnVhcr1tNHSsVu0Q">
                 <span id="wc-showlunar-label" class="text-sm text-theme-primary" data-page-node-id="Pa9IQnGGGau0D0qnXH6aDc">显示农历</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="ZE8EDF6oBM58HPmpo9uKBv">
                     <input type="checkbox" id="wc-showlunar" aria-labelledby="wc-showlunar-label" onchange="onWeekConfigChange()" class="sr-only peer" data-page-node-id="2V6WuYzRe7MUFpkJMgI9DK">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="BxLa5JsJUE9hNDyTAqObc4"></div>
+                    <div class="ui-switch" data-page-node-id="BxLa5JsJUE9hNDyTAqObc4"></div>
                 </label>
             </div>
             <div class="pt-4 border-t border-theme" data-page-node-id="BeKgWl3Y3tW51dL6jjufPO">
@@ -6244,21 +6604,21 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                 <span id="mc-showcompleted-label" class="text-sm text-theme-primary" data-page-node-id="F9lqtrxZoW3Oz8zGq37iEv">显示已完成任务</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="mpJGpEmUGfNfKn134TbPNZ">
                     <input type="checkbox" id="mc-showcompleted" aria-labelledby="mc-showcompleted-label" onchange="onMonthConfigChange()" class="sr-only peer" data-page-node-id="9yuUzmrSSjk8qMdguOjhtc">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="hBOThny6J3wC8VtxPn7Yks"></div>
+                    <div class="ui-switch" data-page-node-id="hBOThny6J3wC8VtxPn7Yks"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="NJfL5Py2EBDIPbqA4OrLGW">
                 <span id="mc-showlunar-label" class="text-sm text-theme-primary" data-page-node-id="GYoqflDFmCNQKHJWhtWdaE">显示农历</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="oPjK8ZhmUBsZ5dyxQPcSir">
                     <input type="checkbox" id="mc-showlunar" aria-labelledby="mc-showlunar-label" onchange="onMonthConfigChange()" class="sr-only peer" data-page-node-id="pPQyzBReUyjJ9FLvZo1mcT">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="dUzgq7P5AawoWhAlSv5AIw"></div>
+                    <div class="ui-switch" data-page-node-id="dUzgq7P5AawoWhAlSv5AIw"></div>
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="kE5qEL9xyDxod4klPg4DTf">
                 <span id="mc-showswapinfo-label" class="text-sm text-theme-primary" data-page-node-id="EZi7VQyEdqHXOOxI5TIq8L">显示调休</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="wZdEYY9E7MrTdql6DBTJJq">
                     <input type="checkbox" id="mc-showswapinfo" aria-labelledby="mc-showswapinfo-label" onchange="onMonthConfigChange()" class="sr-only peer" data-page-node-id="cKBUrUMKiHgElhDxjZq1Ql">
-                    <div class="w-11 h-6 bg-theme-tertiary peer-checked:bg-accent rounded-full transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" data-page-node-id="ihUnk9oIQM8BEXZreaccNh"></div>
+                    <div class="ui-switch" data-page-node-id="ihUnk9oIQM8BEXZreaccNh"></div>
                 </label>
             </div>
             <div class="pt-4 border-t border-theme" data-page-node-id="c1gMLZ9508itQHJtMnN6Bc">

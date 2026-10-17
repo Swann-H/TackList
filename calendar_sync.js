@@ -195,7 +195,7 @@ function enterCalendarSubEditMode(id) {
     // 存在未保存的新增草稿时：有改动则先要求处理草稿，无改动则直接丢弃草稿
     if (calSyncDraft) {
         if (_editHasChanges()) {
-            showToast('请先保存或取消正在新增的订阅', 'warning');
+            showToast('正在新增订阅，请先保存或取消', 'warning');
             return;
         }
         calSyncDraft = null;
@@ -305,7 +305,7 @@ function saveCalendarSubEdit(id) {
     if (typeof renderLists === 'function') renderLists();
     if (typeof renderView === 'function') renderView();
     updateCalendarSyncBtnVisibility();
-    showToast('订阅已保存', 'success');
+    showToast('已保存订阅', 'success');
 }
 
 // 保存「新增订阅」草稿：校验通过后才真正写入 settings 并提示
@@ -332,7 +332,7 @@ function saveCalendarSubDraft() {
     if (typeof renderLists === 'function') renderLists();
     if (typeof renderView === 'function') renderView();
     updateCalendarSyncBtnVisibility();
-    showToast('已添加新订阅', 'success');
+    showToast('已添加订阅', 'success');
 }
 
 // 渲染订阅列表到视图内 #calendarsync-list
@@ -532,7 +532,7 @@ function deleteCalendarSubscription(id) {
     if (typeof renderView === 'function') renderView();
     renderCalendarSubscriptions();
     updateCalendarSyncBtnVisibility();
-    showToast(`订阅「${sub.name || '未命名'}」已删除，含 ${taskCount} 条任务与专属清单`, 'success');
+    showToast(`已删除订阅「${sub.name || '未命名'}」及其 ${taskCount} 条任务与专属清单`, 'success');
 }
 
 function toggleCalendarSubscription(id, enabled) {
@@ -580,7 +580,7 @@ function clearCalendarSubscriptionBlacklist(id) {
     sub.extDeletedUids = [];
     saveData();
     renderCalendarSubscriptions();
-    showToast('屏蔽名单已清空，下次同步将重新拉取', 'success');
+    showToast('已清空屏蔽名单，下次同步会重新拉取', 'success');
 }
 
 // 展示已屏蔽的日程条目浮层（仿番茄专注任务列表样式：左色条+标题+时间）
@@ -674,15 +674,15 @@ async function triggerCalendarSync(fromSettings) {
             const main = `同步完成：新增 ${s.added || 0}，更新 ${s.updated || 0}，移除 ${s.removed || 0}`;
             showToast(main, 'success');
             if (errResults.length) {
-                setTimeout(() => showToast(`${errResults.length} 个源失败：${errResults.map(r => r.name + '（' + r.error + '）').join('；')}`, 'warning'), 1200);
+                setTimeout(() => showToast(`${errResults.length} 个源同步失败：${errResults.map(r => r.name + '（' + r.error + '）').join('；')}`, 'warning'), 1200);
             }
             refreshDataFromServer();
             renderCalendarSubscriptions();
         } else {
-            showToast(data.error || '同步失败', 'error');
+            showToast(data.error || '无法同步', 'error');
         }
     } catch (e) {
-        showToast('同步请求失败：' + e.message, 'error');
+        showToast('无法同步：' + e.message, 'error');
     } finally {
         if (icon) icon.classList.remove('calsync-icon-pulse');
         if (viewLabel) viewLabel.textContent = '立即同步';

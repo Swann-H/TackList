@@ -721,9 +721,9 @@ function showQuadrantStagnationModal(task, days, totalCount) {
             </div>
         </div>
         <div class="flex gap-2 mt-3 relative z-10 justify-end">
-            <button class="stagnation-promote-btn px-3 py-1.5 bg-amber-500/20 text-amber-400 border border-amber-500 rounded font-bold hover:bg-amber-500/30 transition text-xs tracking-wider">设为紧急</button>
-            <button class="stagnation-focus-btn px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500 rounded font-bold hover:bg-green-500/30 transition text-xs tracking-wider">开始专注</button>
-            <button class="stagnation-dismiss-btn px-3 py-1.5 bg-slate-700/50 text-slate-400 border border-slate-600 rounded font-bold hover:bg-slate-600/50 transition text-xs tracking-wider">稍后</button>
+            <button class="stagnation-promote-btn toast-btn toast-btn-primary relative z-10">设为紧急</button>
+            <button class="stagnation-focus-btn toast-btn toast-btn-primary relative z-10">开始专注</button>
+            <button class="stagnation-dismiss-btn toast-btn toast-btn-ghost relative z-10">稍后</button>
         </div>
         <div class="absolute bottom-0 left-0 h-1 ${theme.bg} opacity-80"
              style="animation: progressShrink ${duration}ms linear forwards;">
@@ -764,9 +764,10 @@ function promoteStagnantTask(taskId) {
     const task = tasks.find(t => t.id === taskId);
     if (task) {
         task.urgent = true;
+        touchTask(task); // 问题 1：优先级变更
         saveData();
         renderView();
-        showToast(buildTaskToastMessage(task), 'success', null, '已调整为紧急');
+        showToast(buildTaskToastMessage(task), 'success');
     }
 }
 

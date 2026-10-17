@@ -20,6 +20,20 @@ let openSubtaskReminderPanelId = null;
 // 临时状态，不持久化；关闭面板 / 切换任务 / 切换任务模式 / 按 Esc 都会退出。
 let subtaskManageMode = false;
 
+// ==================== 任务修改时间戳（modifiedAt）====================
+// touchTask：任务内容变更时统一打修改时间戳（问题 1 写入点补全）。
+// 口径：① 完成状态切换不打戳（completedAt 已独立记录，且已完成恒置底，见 applyTaskCompletionToggle）；
+//       ② 外部订阅任务不打戳（本地时间戳会被下次同步覆盖，无意义）；
+//       ③ 批量管理操作（清单删除/合并级联、过期任务批量顺延）不调用本函数。
+// 存量任务无 modifiedAt 时排序走 createdAt 兜底（taskListView/kanbanView），不做数据迁移。
+// 注：任务「时长」不设独立字段，统一由结束时间推导——(endTime - startTime) 差值，
+// 无结束时间时回退 settings.defaultDuration（见 calendarViews.getTaskDurationMinutes）。
+function touchTask(task) {
+    if (!task || task.extSourceId) return task;
+    task.modifiedAt = new Date().toISOString();
+    return task;
+}
+
 // 归一化提前量数组：过滤非正整数/越界值、去重、降序、截断 5 个
 function normalizeReminderMinutes(raw) {
     const out = [];
@@ -205,13 +219,15 @@ function handleTaskDrop(e, targetId, targetQuadrant = null) {
                 newEnd.setDate(newEnd.getDate() + daysDiff);
                 task.endTime = newEnd.toISOString();
             }
+            touchTask(task); // 问题 1：拖拽改期
             saveData();
             renderView();
-            showToast('任务时间已更新', 'success');
+            showToast('已更新时间', 'success');
         }
     } else if (currentView === 'quadrant' && targetQuadrant) {
         task.important = targetQuadrant.includes('important') && !targetQuadrant.includes('not-important');
         task.urgent = targetQuadrant.includes('urgent') && !targetQuadrant.includes('not-urgent');
+        touchTask(task); // 问题 1：拖拽改优先级
         saveData();
         renderView();
         if (planPanelOpen) renderPlanPanel();
@@ -257,7 +273,8 @@ function handleWeekTimeDrop(event, dateStr) {
         newEnd.setMinutes(newEnd.getMinutes() + duration);
         task.endTime = newEnd.toISOString();
     }
-    
+
+    touchTask(task); // 问题 1：拖拽改期
     saveData();
     renderView();
     if (planPanelOpen) renderPlanPanel();
@@ -295,7 +312,8 @@ function handleWeekAllDayDrop(event, dateStr) {
     } else {
         delete task.endTime;
     }
-    
+
+    touchTask(task); // 问题 1：拖拽改期
     saveData();
     renderView();
     if (planPanelOpen) renderPlanPanel();
@@ -325,7 +343,8 @@ function handleWeekDrop(e, dateStr) {
     } else if (task.endTime && !task.isAllDay) {
         shiftEndTimeByDays(task, oldDate);
     }
-    
+
+    touchTask(task); // 问题 1：拖拽改期
     saveData();
     renderView();
     if (planPanelOpen) renderPlanPanel();
@@ -355,7 +374,8 @@ function handleMonthDrop(e, dateStr) {
     if (task.endTime && !task.isAllDay && !wasNoDate) {
         shiftEndTimeByDays(task, oldDate);
     }
-    
+
+    touchTask(task); // 问题 1：拖拽改期
     saveData();
     renderView();
     if (planPanelOpen) renderPlanPanel();
@@ -380,6 +400,7 @@ function handleQuadrantCardDrop(e, targetKey) {
         if (task) {
             task.important = targetKey.includes('important') && !targetKey.includes('not-important');
             task.urgent = targetKey.includes('urgent') && !targetKey.includes('not-urgent');
+            touchTask(task); // 问题 1：拖拽改优先级
             saveData();
             renderView();
             if (planPanelOpen) renderPlanPanel();
@@ -391,7 +412,7 @@ function handleQuadrantCardDrop(e, targetKey) {
         [quadrantOrder[fromIndex], quadrantOrder[toIndex]] = [quadrantOrder[toIndex], quadrantOrder[fromIndex]];
         saveData();
         renderView();
-        showToast('象限顺序已更新', 'success');
+        showToast('已更新象限顺序', 'success');
     }
     document.querySelectorAll('.quadrant-card').forEach(el => el.classList.remove('dragging'));
     document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
@@ -459,9 +480,10 @@ function handleScheduleDrop(event) {
         const newEnd = new Date(newDate.getTime() + duration);
         task.endTime = newEnd.toISOString();
     }
-    
+
     draggedTaskId = null;
-    
+
+    touchTask(task); // 问题 1：拖拽改期
     saveData();
     renderView();
     if (planPanelOpen) renderPlanPanel();
@@ -695,7 +717,7 @@ function toggleTimeRange() {
     if (isTimeRangeMode) {
         toggleBtn.textContent = '时间';
         endTimeContainer.classList.remove('hidden');
-        
+
         const duration = settings.defaultDuration || 30;
         const startDate = document.getElementById('detail-task-date').value;
         const startTime = document.getElementById('detail-task-time').value;
@@ -1039,6 +1061,9 @@ function pruneLeftoverEmptyTasks() {
 }
 
 function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
+    // 上一次收拢动画可能还没落地（面板被关掉时已强制落定，这里再兜一道）：
+    // 残留的 detail-write-mode 会让面板一打开就是书写态。
+    if (typeof _wmMorphFinishNow === 'function') _wmMorphFinishNow();
     // 计划面板打开时，主视图点击任务一律先收起计划面板（计划面板内任务项已不再呼出详情面板）
     if (planPanelOpen) {
         const detailPanel = document.getElementById('task-detail-panel');
@@ -1121,7 +1146,7 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
         document.getElementById('detail-task-end-date').value = '';
         document.getElementById('detail-task-end-time').value = '';
     }
-    
+
     // 设置优先级
     detailImportantState = task.important || false;
     detailUrgentState = task.urgent || false;
@@ -1368,11 +1393,13 @@ function applyDetailReadOnly(readOnly) {
     }
 }
 
-// 更新已完成任务的创建/完成时间显示
+// 更新任务的创建/完成时间显示（口径 2026-10-18：仅已完成任务展示创建/完成时间；
+// 修改时间不展示——modifiedAt 字段保留，仅供「最近修改」排序使用）
 function updateDetailTimestamps(task) {
     const container = document.getElementById('detail-timestamps-display');
     if (!container) return;
 
+    // 未完成任务不展示任何时间信息
     if (!task.completed) {
         container.classList.add('hidden');
         container.innerHTML = '';
@@ -1436,6 +1463,17 @@ function saveDetailTimeConfig() {
     // 记录修改前今日未完成任务数（用于检测是否因修改日期清空今日任务）
     const beforeTodayIncomplete = (typeof ee_countTodayIncomplete === 'function') ? ee_countTodayIncomplete() : -1;
 
+    // 变更检测快照（问题 1）：时间菜单每次收起都会走到这里，无修改时不打 modifiedAt
+    const _snap = {
+        startTime: task.startTime || null,
+        endTime: task.endTime || null,
+        isAllDay: !!task.isAllDay,
+        hasOrig: task._originalStartTime !== undefined,
+        reminders: JSON.stringify(task.reminders || []),
+        reminder: task.reminder || 0,
+        repeat: JSON.stringify(task.repeat || null),
+    };
+
     const dateValue = document.getElementById('detail-task-date').value;
     const timeValue = document.getElementById('detail-task-time').value;
     const isAllDay = !timeValue;
@@ -1460,7 +1498,7 @@ function saveDetailTimeConfig() {
     }
 
     if (newEndTime && newStartTime && new Date(newEndTime) < new Date(newStartTime)) {
-        showToast('结束时间不能早于开始时间', 'warning');
+        showToast('结束时间必须晚于开始时间', 'warning');
         return;
     }
 
@@ -1488,7 +1526,17 @@ function saveDetailTimeConfig() {
     task.reminder = remindersNow.length ? Math.max(...remindersNow) : 0;
     
     syncDetailRepeatInputToTask(task);
-    
+
+    // 变更比对（问题 1）：时长持久化（问题 2）+ 有真实变化才打修改时间戳
+    const _timeChanged = _snap.startTime !== (task.startTime || null) ||
+        _snap.endTime !== (task.endTime || null) ||
+        _snap.isAllDay !== !!task.isAllDay ||
+        _snap.hasOrig !== (task._originalStartTime !== undefined) ||
+        _snap.reminders !== JSON.stringify(task.reminders || []) ||
+        _snap.reminder !== (task.reminder || 0) ||
+        _snap.repeat !== JSON.stringify(task.repeat || null);
+    if (_timeChanged) touchTask(task);
+
     saveData();
     renderView();
 
@@ -1573,6 +1621,7 @@ function toggleTaskMode(event) {
     // 立即写入 task.mode，确保面板打开期间的中间保存（saveData）携带正确的 mode，
     // 避免版本冲突合并时被服务器旧 mode 覆盖
     task.mode = currentTaskMode;
+    touchTask(task); // 模式切换视为内容变更（问题 1）
     // 模式切换后详情文本元素变化（notes <-> description+subtasks），重算毛玻璃带纵向范围
     requestAnimationFrame(updateWriteModeGlassBounds);
 }
@@ -1617,8 +1666,15 @@ function saveSubtasksToTask() {
     if (newSubtasks.length === 0) {
         newSubtasks.push(createSubtask('', 0));
     }
+    // 快照比对（问题 1）：本函数也会在「打开子任务提醒面板」等渲染路径被调用，
+    // 只有子任务内容真正变化时才打 modifiedAt，避免误触
+    const _before = JSON.stringify(task.subtasks);
+    const _progressBefore = task.progress;
     task.subtasks = newSubtasks;
     updateTaskProgressFromSubtasks(task);
+    if (_before !== JSON.stringify(task.subtasks) || _progressBefore !== task.progress) {
+        touchTask(task);
+    }
 }
 
 // ==================== 子任务拖拽排序（长按 300ms 激活 + Pointer Events 驱动） ====================
@@ -2224,7 +2280,9 @@ function _fillSubtaskPanelOptions(panel, subtask) {
         if (!task) return;
         const st = (task.subtasks || []).find(x => x.id === subtask.id);
         if (!st) return;
+        const _prev = JSON.stringify(st.reminders || []);
         st.reminders = next;
+        if (_prev !== JSON.stringify(st.reminders || [])) touchTask(task); // 问题 1
         saveSubtasksToTask();
         saveData();
         refreshSubtaskReminderPanel(subtask.id);
@@ -2385,6 +2443,7 @@ function commitSubtaskTimeInputs(subtaskId) {
     const changed = (subtask.startTime || null) !== next;
     subtask.startTime = next;
     saveSubtasksToTask();
+    if (changed) touchTask(task); // 问题 1：子任务时间变化视为父任务被修改
     saveData();
     return changed;
 }
@@ -2402,8 +2461,10 @@ function clearSubtaskTime(subtaskId) {
     const subtask = (task.subtasks || []).find(st => st.id === subtaskId);
     if (!subtask) return;
 
+    const _hadValue = !!(subtask.startTime || (subtask.reminders && subtask.reminders.length));
     subtask.startTime = null;
     subtask.reminders = [];
+    if (_hadValue) touchTask(task); // 问题 1：确有内容被清除才打戳
 
     // 清空时一并收起面板内已展开的快速选择下拉
     closeAllTimePickers();
@@ -2461,6 +2522,7 @@ function addSubtaskCustomReminder(subtaskId) {
     subtask.reminders = normalizeReminderMinutes([...cur, val]);
     input.value = '';
     saveSubtasksToTask();
+    touchTask(task); // 问题 1：子任务提醒变化视为父任务被修改
     saveData();
     refreshSubtaskReminderPanel(subtaskId);
 }
@@ -2497,6 +2559,7 @@ function handleSubtaskReorder(draggedId, targetId, insertAfter = false) {
         st.originalOrder = i;
     });
 
+    touchTask(task); // 问题 1：子任务排序变化视为父任务被修改
     saveData();
     renderSubtasks();
 }
@@ -2530,6 +2593,7 @@ function handleSubtaskKeydown(event, subtaskId) {
         // 新子任务包含光标后的文本
         const newSubtask = createSubtask(textAfter, newOriginalOrder);
         task.subtasks.splice(subtaskIndex + 1, 0, newSubtask);
+        touchTask(task); // 问题 1：子任务增改视为父任务被修改
         saveData();
         renderSubtasks();
         setTimeout(() => {
@@ -2555,6 +2619,7 @@ function handleSubtaskKeydown(event, subtaskId) {
             const maxOrder = Math.max(...task.subtasks.map(st => st.originalOrder !== undefined ? st.originalOrder : 0));
             const newSubtask = createSubtask('', maxOrder + 1);
             task.subtasks.push(newSubtask);
+            touchTask(task); // 问题 1：新增子任务视为父任务被修改
             saveData();
             renderSubtasks();
             setTimeout(() => {
@@ -2658,6 +2723,8 @@ function toggleSubtaskComplete(subtaskId, completed, taskId, sourceEl) {
             subtask.completedAt = null;
         }
         updateTaskProgressFromSubtasks(task);
+        // 问题 1：子任务勾选/取消属于内容变更（与父任务自身完成切换的「不算」口径区分）
+        touchTask(task);
         if (isDetailTarget) {
             updateDetailCompleteButton(task.completed);
             renderSubtasks();
@@ -2713,6 +2780,7 @@ function deleteSubtask(subtaskId) {
         task.subtasks = [{ id: generateId(), text: '', completed: false, originalOrder: 0 }];
     }
     updateTaskProgressFromSubtasks(task);
+    touchTask(task); // 问题 1：删除子任务视为父任务被修改
     renderSubtasks();
     updateProgressDisplay();
     saveData();
@@ -2762,6 +2830,7 @@ function startProgressDrag(event) {
         // Final save on release
         const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
         if (taskIndex !== -1) {
+            touchTask(tasks[taskIndex]); // 问题 1：进度拖拽为内容变更
             saveData();
             renderView();
         }
@@ -2994,7 +3063,11 @@ function closeTaskDetailPanel() {
     // 面板马上要 display:none，还在排队的场景对切动画已无意义；
     // 若不取消，残留的 wm-morph-out 会给 #task-detail-panel 挂 animation，
     // 与下一次打开面板的 panel-fade-in 抢同一个属性，导致入场动画被顶掉。
-    if (typeof _wmMorphCancel === 'function') _wmMorphCancel();
+    // ⚠️ 退出动画现在是「落地时才摘 detail-write-mode」，面板一隐藏 animationend 就再也
+    //    不会来，只剩计时器兜底 —— 必须用 finishNow 把落定回调补做掉，否则书写态会残留
+    //    到下一次打开面板（表现为「一打开就是书写态」）。
+    if (typeof _wmMorphFinishNow === 'function') _wmMorphFinishNow();
+    else if (typeof _wmMorphCancel === 'function') _wmMorphCancel();
     // 模态浮层模式：关闭时恢复原样式
     if (_taskDetailModalMode) {
         const modalPanel = document.getElementById('task-detail-panel');
@@ -3214,7 +3287,7 @@ function applyDetailInputsToTask(task, options = {}) {
 
     // ── 第二段：唯一校验点（此刻 task 仍完全未被修改）──
     if (newEndTime && newStartTime && new Date(newEndTime) < new Date(newStartTime)) {
-        showToast('结束时间不能早于开始时间', 'warning');
+        showToast('结束时间必须晚于开始时间', 'warning');
         return false;
     }
 
@@ -3261,6 +3334,8 @@ function applyDetailInputsToTask(task, options = {}) {
         () => { task.reminders = newReminders; });
     const newReminderMirror = newReminders.length ? Math.max(...newReminders) : 0;
     _setIf(task.reminder !== newReminderMirror, () => { task.reminder = newReminderMirror; });
+    // 内容发生真实变化时打修改时间戳（问题 1）
+    if (_cf && _cf.changed) touchTask(task);
     return true;
 }
 
@@ -3350,6 +3425,14 @@ function renderPlanPanel() {
     const groups = (typeof buildTaskListGroups === 'function' ? buildTaskListGroups() : [])
         .filter(g => !g.isCompleted && g.tasks && g.tasks.length > 0);
 
+    // 计划面板专用排序：把「无日期」组提到最前（其后依次为 已过期 / 今天 / 明天 / …）。
+    // 面板的用途是把未排期任务拖去安排时间，无日期任务最需要被优先处理，
+    // 故不跟随「无日期任务位置」设置（默认 last 会把它排到最末）。
+    // 仅「按时间分组」模式存在 nodate 组；其他分组模式（标签/优先级/清单等）自然不受影响。
+    // 只作用于本面板，任务视图行为保持不变。
+    const noDateIdx = groups.findIndex(g => g.key === 'nodate');
+    if (noDateIdx > 0) groups.unshift(groups.splice(noDateIdx, 1)[0]);
+
     if (groups.length === 0) {
         container.innerHTML = `
             <div class="flex flex-col items-center justify-center py-12 text-theme-muted">
@@ -3433,6 +3516,7 @@ function clearTaskTime() {
     // 清除时间后提醒失去意义（无时间则不提醒），一并清空提前提醒与旧字段镜像
     task.reminders = [];
     task.reminder = 0;
+    touchTask(task); // 问题 1：清除时间属时间变更（预计时长按口径保留，仅存字段）
     saveData();
     openTaskDetailPanel(task.id);
     renderView();
@@ -4166,6 +4250,7 @@ function addDetailCustomReminder() {
     task.reminder = next.length ? Math.max(...next) : 0;
     input.value = '';
     renderDetailReminderPanel();
+    touchTask(task); // 问题 1：提醒配置变更
     saveData();
 }
 
@@ -4235,7 +4320,33 @@ function deleteTaskFromDetail() {
         const _extTask = tasks.find(t => t.id === deletedId);
         const _isExt = !!(_extTask && _extTask.extSourceId);
         if (_isExt && typeof recordExternalTaskDeletion === 'function') recordExternalTaskDeletion(_extTask);
-        tasks = tasks.filter(t => t.id !== currentDetailTaskId);
+
+        // FR-01/FR-02：与共享层 deleteTask 同口径 —— 外部任务硬删 + 黑名单（撤销时插回 + 除名），
+        // 原生任务软删除进回收站（撤销时清标记）
+        let _undoEntry = null;
+        if (_isExt) {
+            const _restoreIndex = tasks.indexOf(_extTask);
+            tasks = tasks.filter(t => t.id !== deletedId);
+            _undoEntry = pushUndoEntry({
+                label: '删除任务',
+                kind: 'delete',
+                undo: function () {
+                    tasks.splice(Math.min(_restoreIndex, tasks.length), 0, _extTask);
+                    if (typeof removeExternalTaskDeletion === 'function') removeExternalTaskDeletion(_extTask);
+                }
+            });
+        } else if (_extTask) {
+            _extTask.deletedAt = new Date().toISOString();
+            _extTask.deletedFrom = _extTask.listId || 'default';
+            _undoEntry = pushUndoEntry({
+                label: '删除任务',
+                kind: 'delete',
+                undo: function () {
+                    _extTask.deletedAt = null;
+                    _extTask.deletedFrom = null;
+                }
+            });
+        }
         saveData();
         hideDetailPanel();
         currentDetailTaskId = null;
@@ -4248,7 +4359,11 @@ function deleteTaskFromDetail() {
         if (typeof renderTags === 'function') renderTags();
         renderView();
         if (planPanelOpen) renderPlanPanel();
-        showToast(_isExt ? '已删除；该日程已加入屏蔽名单，重新同步后不会再出现' : '任务已删除', 'success');
+        showUndoToast(
+            _isExt ? '已删除「' + (_extTask.title || '任务') + '」；该日程已加入屏蔽名单，重新同步后不会再出现'
+                   : '已删除「' + (_extTask ? _extTask.title || '任务' : '任务') + '」',
+            function () { if (typeof _executeUndoEntry === 'function') return _executeUndoEntry(_undoEntry); return { ok: false, reason: 'invalid' }; }
+        );
         return;
     }
     
@@ -4299,7 +4414,7 @@ function closeDetailPickers() {
     }
 }
 
-function saveTaskDetailWithoutClose() {
+function saveTaskDetailWithoutClose(deferRenders) {
     if (!currentDetailTaskId) return;
 
     const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
@@ -4316,9 +4431,19 @@ function saveTaskDetailWithoutClose() {
     if (!changeFlag.changed) return;
 
     saveData();
-    renderView();
-    if (typeof renderTags === 'function') renderTags();
-    if (typeof renderLists === 'function') renderLists();
+    if (deferRenders) {
+        // 退出动画路径：重渲染推迟到落地帧（与摘 detail-write-mode 同批微任务）。
+        // 点击返回的响应不再被 renderView 的整板重建拖慢；主视图淡入期间内容仍为旧值，
+        // 落地帧（≈0.2s 后）一次性刷新，与面板内容滑入对齐。
+        if (!_wmDeferredRenders) _wmDeferredRenders = [];
+        _wmDeferredRenders.push(renderView);
+        if (typeof renderTags === 'function') _wmDeferredRenders.push(renderTags);
+        if (typeof renderLists === 'function') _wmDeferredRenders.push(renderLists);
+    } else {
+        renderView();
+        if (typeof renderTags === 'function') renderTags();
+        if (typeof renderLists === 'function') renderLists();
+    }
 
     // 修改日期可能导致今日任务清空，检查并触发"落日归山"彩蛋
     if (beforeTodayIncomplete > 0 && typeof ee_checkSunsetHorizon === 'function') {
@@ -4797,6 +4922,7 @@ function initFormHandlers() {
                     task.reminder = reminder;
                     task.reminders = reminder > 0 ? [reminder] : [];
                     task.repeat = repeat;
+                    touchTask(task); // 问题 1：旧版编辑弹窗保存
                 }
             } else {
                 tasks.push({
@@ -4821,7 +4947,7 @@ function initFormHandlers() {
             closeAddTaskModal();
             renderLists();
             renderView();
-            showToast(id ? '任务已更新' : '任务已添加', 'success');
+            showToast(id ? '已更新任务' : '已添加任务', 'success');
         });
     }
     
@@ -4863,8 +4989,11 @@ function updatePriorityButtonText() {
 
 function deleteTask(taskId) {
     const task = tasks.find(t => t.id === taskId);
-    const isExt = !!(task && task.extSourceId);
-    // 外部订阅任务：删除时写黑名单（3.3.3），下次同步跳过该 UID 不再重建
+    if (!task) return;
+    const isExt = !!task.extSourceId;
+    // 外部订阅任务：删除时写黑名单（3.3.3），下次同步跳过该 UID 不再重建。
+    // 回收站不覆盖外部任务（FR-02 C2-3：软删除会被下次同步重新拉入，属行为倒退），
+    // 但撤销入口仍可用（原下标插回 + 移除黑名单记录，V1-7）
     if (isExt && typeof recordExternalTaskDeletion === 'function') {
         recordExternalTaskDeletion(task);
     }
@@ -4874,7 +5003,32 @@ function deleteTask(taskId) {
                    document.querySelector(`[onclick*="openTaskDetailPanel('${taskId}'"]`);
     easterEgg_onTaskDelete(taskEl);
 
-    tasks = tasks.filter(t => t.id !== taskId);
+    let undoEntry = null;
+    if (isExt) {
+        // 外部任务保持硬删除；撤销时按原下标插回（扁平数组顺序即下标，见 §0.1 约定）
+        const restoreIndex = tasks.indexOf(task);
+        tasks = tasks.filter(t => t.id !== taskId);
+        undoEntry = pushUndoEntry({
+            label: '删除任务',
+            kind: 'delete',
+            undo: function () {
+                tasks.splice(Math.min(restoreIndex, tasks.length), 0, task);
+                if (typeof removeExternalTaskDeletion === 'function') removeExternalTaskDeletion(task);
+            }
+        });
+    } else {
+        // FR-02：原生任务软删除进回收站（保留在 tasks 数组内，原下标天然不变，导出天然包含）
+        task.deletedAt = new Date().toISOString();
+        task.deletedFrom = task.listId || 'default';
+        undoEntry = pushUndoEntry({
+            label: '删除任务',
+            kind: 'delete',
+            undo: function () {
+                task.deletedAt = null;
+                task.deletedFrom = null;
+            }
+        });
+    }
     saveData();
     if (currentDetailTaskId === taskId) {
         hideDetailPanel();
@@ -4887,7 +5041,12 @@ function deleteTask(taskId) {
     renderLists();
     if (typeof renderTags === 'function') renderTags();
     renderView();
-    showToast(isExt ? '已删除；该日程已加入屏蔽名单，重新同步后不会再出现' : '任务已删除', 'success');
+    // FR-01：Toast 撤销入口（撤销本条操作专属的栈记录）
+    showUndoToast(
+        isExt ? '已删除「' + (task.title || '任务') + '」；该日程已加入屏蔽名单，重新同步后不会再出现'
+              : '已删除「' + (task.title || '任务') + '」',
+        function () { if (typeof _executeUndoEntry === 'function') return _executeUndoEntry(undoEntry); return { ok: false, reason: 'invalid' }; }
+    );
 }
 
 /**
@@ -5224,6 +5383,7 @@ function skipDetailRepeatCycle() {
     }
 
     // 保存 + 重渲染
+    touchTask(task); // 问题 1：跳过周期属时间变更
     saveData();
     renderLists();
     if (typeof renderTags === 'function') renderTags();
@@ -5247,7 +5407,7 @@ function skipDetailRepeatCycle() {
     const targetDisplay = isAllDay
         ? formatDate(newStartTimeDate) + ' (全天)'
         : formatDateTime(newStartTimeDate);
-    showToast(`已跳过此周期，时间调整至 ${targetDisplay}`, 'info', 10);
+    showToast(`已跳过此周期，时间调整至 ${targetDisplay}`, 'success');
 }
 
 /**
@@ -5288,6 +5448,7 @@ function undoDetailSkipRepeatCycle() {
         delete task._originalStartTime;
     }
 
+    touchTask(task); // 问题 1：撤销跳过也属时间变更
     saveData();
     renderLists();
     if (typeof renderTags === 'function') renderTags();
@@ -5303,7 +5464,8 @@ function undoDetailSkipRepeatCycle() {
         refreshDetailSkipCycleButton();
     }
 
-    showToast('已撤销跳过周期，恢复原时间', 'success');
+    // 撤销类通知统一走简洁通知条（单行、绿边、short 档）
+    showCompactToast('已撤销跳过周期，恢复原时间', { tone: 'success' });
 }
 
 /**
@@ -5315,14 +5477,17 @@ function undoDetailSkipRepeatCycle() {
  */
 function applyTaskCompletionToggle(task, sourceEl) {
     const wasCompleted = task.completed;
+    const preState = { completed: task.completed, completedAt: task.completedAt, progress: task.progress };
     task.completed = !task.completed;
     task.completedAt = task.completed ? new Date().toISOString() : null;
 
     let structuralChange = false;
+    let derivedId = null;
     if (task.completed && task.repeat && task.repeat.type) {
         const nextTask = createNextRepeatTask(task);
         if (nextTask) {
             tasks.push(nextTask);
+            derivedId = nextTask.id;
         }
         // 新增了重复任务，需全量保存
         saveData();
@@ -5330,6 +5495,29 @@ function applyTaskCompletionToggle(task, sourceEl) {
     } else {
         // 仅本任务状态变更，增量保存
         saveTaskPatch(task.id);
+    }
+
+    // FR-01：完成/取消完成入撤销栈。V1-2 关键细节：撤销「完成」必须同时移除派生出的
+    // 下一条重复实例，否则撤销后再次完成会生成重复的下一条
+    const undoEntry = pushUndoEntry({
+        label: (task.completed ? '已完成「' : '已取消完成「') + (task.title || '任务') + '」',
+        kind: 'complete',
+        undo: function () {
+            task.completed = preState.completed;
+            task.completedAt = preState.completedAt;
+            task.progress = preState.progress;
+            if (derivedId) {
+                const di = tasks.findIndex(function (t) { return t.id === derivedId; });
+                if (di !== -1) tasks.splice(di, 1);
+            }
+        }
+    });
+    // FR-01：Toast 撤销入口（主视图勾选与详情面板完成按钮共用本函数，两处均生效）
+    if (typeof showUndoToast === 'function') {
+        showUndoToast(
+            (task.completed ? '已完成「' : '已取消完成「') + (task.title || '任务') + '」',
+            function () { if (typeof _executeUndoEntry === 'function') return _executeUndoEntry(undoEntry); return { ok: false, reason: 'invalid' }; }
+        );
     }
 
     // 触发彩蛋效果 + 通知番茄专注（任务完成时）：锚点取用户实际点击源
@@ -5476,6 +5664,8 @@ function postponeOverdueTasks() {
     
     const overdueTasks = tasks.filter(task => {
         if (!task.startTime || task.completed) return false;
+        // FR-02：回收站任务不参与过期顺延
+        if (task.deletedAt) return false;
         const taskDate = new Date(task.startTime);
         taskDate.setHours(0, 0, 0, 0);
         return taskDate.getTime() < now.getTime();
@@ -5519,6 +5709,8 @@ function updatePostponeButton() {
     
     const hasOverdue = tasks.some(task => {
         if (!task.startTime || task.completed) return false;
+        // FR-02：回收站任务不计入过期顺延按钮（旁路 filterTasks，需单独排除）
+        if (task.deletedAt) return false;
         const taskDate = new Date(task.startTime);
         taskDate.setHours(0, 0, 0, 0);
         return taskDate.getTime() < now.getTime();
@@ -5556,14 +5748,14 @@ function saveListInput() {
     const editId = document.getElementById('edit-list-id').value;
     
     if (!name) {
-        showToast('请输入清单名称', 'error');
+        showToast('请输入清单名称', 'warning');
         return;
     }
     
     // 清单名称唯一性校验
     const existingList = lists.find(l => l.name === name && l.id !== editId);
     if (existingList) {
-        showToast('清单名称已存在', 'error');
+        showToast('清单名称已存在', 'warning');
         return;
     }
     
@@ -5598,12 +5790,14 @@ function saveListInput() {
         saveData();
         editingListId = null;
         renderLists();
-        showToast('清单添加成功！', 'success');
+        showToast('已新建清单', 'success');
     }
 }
 
 // 点击"所有任务"按钮 - 清除筛选和清单
 function filterAllTasks() {
+    // FR-01-4：筛选上下文变化后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     currentListId = null;
     currentFilter = null;
     currentTagIds = [];
@@ -5727,12 +5921,13 @@ function toggleTaskTag(tagId) {
         task.tags = task.tags.filter(id => id !== tagId);
     } else {
         if (task.tags.length >= 5) {
-            showToast('每个任务最多5个标签', 'warning');
+            showToast('每个任务最多 5 个标签', 'warning');
             return;
         }
         task.tags.push(tagId);
     }
-    
+
+    touchTask(task); // 问题 1：标签增删
     saveData();
     renderDetailTags(task);
     renderDetailTagPills();
@@ -5746,6 +5941,7 @@ function removeTagFromTask(tagId) {
 
     if (task.tags) {
         task.tags = task.tags.filter(id => id !== tagId);
+        touchTask(task); // 问题 1：标签增删
         saveData();
         renderDetailTags(task);
         renderDetailTagPills();
@@ -5761,12 +5957,12 @@ function createTagFromDetail() {
     const color = colorInput.value;
     
     if (!name) {
-        showToast('请输入标签名称', 'error');
+        showToast('请输入标签名称', 'warning');
         return;
     }
     
     if (name.length > 20) {
-        showToast('标签名称最多20个字符', 'error');
+        showToast('标签名称最多 20 个字符', 'warning');
         return;
     }
     
@@ -5774,12 +5970,12 @@ function createTagFromDetail() {
     
     // 标签名称唯一性校验
     if (settings.tags.find(t => t.name === name)) {
-        showToast('标签名称已存在', 'error');
+        showToast('标签名称已存在', 'warning');
         return;
     }
     
     if (settings.tags.length >= 20) {
-        showToast('标签数量已达上限（20个）', 'error');
+        showToast('标签数量已达上限（20 个）', 'warning');
         return;
     }
     
@@ -5799,8 +5995,9 @@ function createTagFromDetail() {
         if (task.tags.length < 5) {
             task.tags.push(newTag.id);
         }
+        touchTask(task); // 问题 1：标签增删
     }
-    
+
     saveData();
     nameInput.value = '';
     // 创建成功后收起新建表单
@@ -5810,7 +6007,7 @@ function createTagFromDetail() {
     renderDetailTagPills();
     if (typeof renderTags === 'function') renderTags();
     renderView();
-    showToast('标签创建成功', 'success');
+    showToast('已新建标签', 'success');
 }
 
 // ==================== 标签CRUD ====================
@@ -5839,13 +6036,13 @@ function saveTagInput() {
     const editId = document.getElementById('edit-tag-id').value;
     
     if (!name) {
-        showToast('请输入标签名称', 'error');
+        showToast('请输入标签名称', 'warning');
         return;
     }
     
     // 标签名称长度限制
     if (name.length > 20) {
-        showToast('标签名称最多20个字符', 'error');
+        showToast('标签名称最多 20 个字符', 'warning');
         return;
     }
     
@@ -5854,7 +6051,7 @@ function saveTagInput() {
     // 标签名称唯一性校验
     const existingTag = settings.tags.find(t => t.name === name && t.id !== editId);
     if (existingTag) {
-        showToast('标签名称已存在', 'error');
+        showToast('标签名称已存在', 'warning');
         return;
     }
     
@@ -5873,7 +6070,7 @@ function saveTagInput() {
     } else {
         // 检查标签数量上限
         if (settings.tags.length >= 20) {
-            showToast('标签数量已达上限（20个）', 'warning');
+            showToast('标签数量已达上限（20 个）', 'warning');
             return;
         }
         
@@ -5888,7 +6085,7 @@ function saveTagInput() {
         saveData();
         if (typeof renderTags === 'function') renderTags();
         hideAddTagInput();
-        showToast('标签添加成功！', 'success');
+        showToast('已新建标签', 'success');
     }
 }
 
@@ -5979,13 +6176,28 @@ function scheduleWriteModeAutoSave() {
 }
 
 // 退出 / 切任务 / 切番茄页前调用：把待落盘的编辑立即写回
-function flushWriteModeAutoSave() {
+// deferRenders=true 时只做「数据落盘」，重渲染（renderView/renderTags/renderLists）推迟到
+// 退出动画的落地帧执行（见 _wmRunDeferredRenders），避免点击返回的响应被整板重建拖慢。
+function flushWriteModeAutoSave(deferRenders) {
     if (_writeModeSaveTimer) {
         clearTimeout(_writeModeSaveTimer);
         _writeModeSaveTimer = null;
     }
     if (isDetailAutoSaveActive() && typeof saveTaskDetailWithoutClose === 'function') {
-        saveTaskDetailWithoutClose();
+        saveTaskDetailWithoutClose(deferRenders === true);
+    }
+}
+
+// 落地帧统一补跑被推迟的重渲染。与摘 detail-write-mode 在同一批微任务里执行，
+// Tailwind JIT 只多一次合并扫描；若动画被中断（关闭面板 / 二次切换），_wmMorphCancel
+// 会先补做 land 回调，队列同样在这里被排空，不会丢渲染。
+let _wmDeferredRenders = null;
+function _wmRunDeferredRenders() {
+    if (!_wmDeferredRenders) return;
+    const fns = _wmDeferredRenders;
+    _wmDeferredRenders = null;
+    for (let i = 0; i < fns.length; i++) {
+        try { fns[i](); } catch (e) { /* 渲染失败不应卡住落定 */ }
     }
 }
 
@@ -6286,12 +6498,27 @@ function _wmBodyFx(cls) {
         Math.max(60, _wmFxSeconds('--wm-fx-fade', 0.16) * 1000 + 80));
 }
 
-/* ---------- 场景对切控制器（第十五轮） ----------
+/* ---------- 场景对切控制器（第十五轮 → 第十七轮「三区协同」→ 第十八轮「退出单段化」） ----------
  * 取代旧的 wm-fx-enter / wm-fx-exit：
  *   · 旧版动的是九个内容块的 translateY(+6px)，向下溢出 6px → 文档多出滚动条 →
  *     视口窄 10px → #background-image（fixed + cover）被重算 → 背景图先缩小再放大。
  *   · 新版只动两个元素（#main-content / #task-detail-panel），且全部是 opacity + transform，
  *     同时用 overflow:hidden 彻底断掉滚动条这条路（CSS 侧 body.wm-morph-* / .detail-write-mode）。
+ *
+ * 第十七轮（三区协同）：
+ *   · 侧栏在退出首帧即恢复自然几何（CSS 侧 :not(.wm-morph-out) 收口），内容块错峰淡入；
+ *     进入时对称错峰淡出。侧栏补偿 --wm-morph-main-left 仅「进入」需要注入。
+ *
+ * 第十八轮（退出单段化，2026-10-16）：
+ *   · 退出不再有第二段「落地」—— 收拢（wmPanelOut：clip-path 全屏 → 右 384px，
+ *     detail-write-mode 仍在）一结束就同步做「摘 detail-write-mode + 补跑重渲染 + settle」，
+ *     收起态内容直接就位。退出总时长 = --wm-morph-dur = 0.20s（原 0.32s）。
+ *   · 删掉落地动画 wmPanelLandIn 的理由：收拢本身就是「从左向右扫过、只剩右侧 384px」的
+ *     过滤过程，末帧几何已与收起态逐像素重合；再补一次「收起态内容自右滑入」等于把刚扫到的
+ *     东西又推走重来，观感是「抖一下」。对应 CSS 的 .wm-morph-land 规则一并删除。
+ *   · land 回调仍是必需的中间态（摘 detail-write-mode / 换几何 / 补跑重渲染）：
+ *     连点 / 关闭面板 / 二次切换等中断路径必须补做（_wmMorphCancel），
+ *     否则 detail-write-mode 残留（下次打开面板直接是书写态）。
  *
  * 调用时机必须在「骨架切换的同一帧」：
  *   dir='in' 时要赶在 #main-content 被 display:none 之前把 wm-morph-in 挂上，
@@ -6301,6 +6528,19 @@ function _wmBodyFx(cls) {
 let _wmMorphTimer = null;
 let _wmMorphEndEl = null;
 let _wmMorphEndHandler = null;
+// 动画全部结束后的回调（进入/退出共用）
+let _wmMorphPending = null;
+// 退出专用「落地」回调（摘 detail-write-mode / 换几何 / 补跑重渲染）+ 在途退出的 land 闭包（中断路径补做用）
+let _wmMorphLandFn = null;
+let _wmMorphLandRunner = null;
+let _wmMorphLanded = false;
+
+function _wmRunPending() {
+    if (!_wmMorphPending) return;
+    const fn = _wmMorphPending;
+    _wmMorphPending = null;
+    try { fn(); } catch (e) { /* 落定回调不得打断收尾 */ }
+}
 
 // 中途放弃（面板被关闭 / 二次切换）时立即收尾，避免残留类与别的入场动画抢同一个元素
 function _wmMorphCancel() {
@@ -6312,15 +6552,48 @@ function _wmMorphCancel() {
         _wmMorphEndEl.removeEventListener('animationend', _wmMorphEndHandler);
         _wmMorphEndEl = _wmMorphEndHandler = null;
     }
+    // 退出动画若还没走到结尾，先把 land 补做掉（内部会同步 settle）：
+    // 摘 detail-write-mode、补跑被推迟的重渲染，再统一收尾。
+    if (_wmMorphLandRunner) {
+        const l = _wmMorphLandRunner;
+        _wmMorphLandRunner = null;
+        l();
+        if (_wmMorphTimer) {
+            clearTimeout(_wmMorphTimer);
+            _wmMorphTimer = null;
+        }
+    }
+    _wmMorphLanded = false;
+    _wmMorphLandFn = null;
+    _wmRunPending();
     document.body.classList.remove('wm-morph-in', 'wm-morph-out');
     document.body.style.removeProperty('--wm-morph-left');
+    document.body.style.removeProperty('--wm-morph-main-left');
 }
 
-function _wmMorphBegin(dir) {
+// 强制把还没落地的场景对切立即收尾（关闭面板 / 重新打开面板前调用）。
+// ⚠️ 会被 openTaskDetailPanel 每次都调到，常态下必须空转早退：
+//    classList.remove 对不存在的类不会写 class 属性，本身很便宜，但 removeProperty 与
+//    后续两个 classList 操作叠加起来没必要，先判一次有没有活儿干。
+function _wmMorphFinishNow() {
+    if (!_wmMorphPending && !_wmMorphLandFn && !_wmMorphLandRunner && !_wmMorphTimer && !_wmMorphEndEl
+        && !document.body.classList.contains('wm-morph-in')
+        && !document.body.classList.contains('wm-morph-out')) return;
+    _wmRunPending();
+    _wmMorphCancel();
+}
+
+function _wmMorphBegin(dir, onSettle, onLand) {
     const cls = 'wm-morph-' + dir;
     const other = dir === 'in' ? 'wm-morph-out' : 'wm-morph-in';
     _wmMorphCancel();
-    if (!_wmFxOn()) return 0;
+    if (!_wmFxOn()) {
+        // 动效关闭 / 系统减弱动态：CSS 侧也是瞬切，land 与 settle 回调必须同步补做
+        // （land 里摘 detail-write-mode、换终态几何、补跑推迟的重渲染）
+        if (onLand) { try { onLand(); } catch (e) { /* 同上 */ } }
+        if (onSettle) { try { onSettle(); } catch (e) { /* 同上 */ } }
+        return 0;
+    }
     const b = document.body;
     const panel = document.getElementById('task-detail-panel');
     // 面板上若残留打开时的 panel-fade-in / 关闭时的 panel-fade-out：
@@ -6329,15 +6602,26 @@ function _wmMorphBegin(dir) {
     // 叠加，观感就是「滑进来又滑回去」）。入场/出场早已播完，这里直接清干净。
     if (panel) panel.classList.remove('panel-fade-in', 'panel-fade-out');
     b.classList.remove(other);
-    // 进入要让 fixed 面板先等于「书写态最终几何」。
-    // ⚠️ 书写态侧栏已完全脱离文档流（CSS 里 position:fixed 贴视口左下角），面板左边界恒为 0
-    //    → 这里**不再**注入 --wm-morph-left，交给 CSS 的 var(--wm-morph-left, 0px) 兜底。
-    //    旧实现取的是「进入书写态之前」的侧栏实测宽（恒 260px），侧栏改为悬浮后必然错位、
-    //    会让面板在动画收尾时横向跳变。若日后把侧栏改回占布局位，必须恢复这里的取值。
+    // ⚠️ 书写态侧栏完全脱离文档流（CSS 里 position:fixed 贴视口左下角），面板左边界恒为 0，
+    //    --wm-morph-left 已停用（旧口径取侧栏宽，侧栏悬浮后必然错位）。
+    //    **主视图反过来需要这份补偿**（仅进入）：侧栏一脱离 flex 流，#main-content 的左边界就从
+    //    260 掉到 0、宽度 +260px（实测 796 → 1056），正在淡出的主视图会整屏重排 ——
+    //    这正是「展开不连贯」的主因。故进入时给主视图注入 margin-left 补偿。
+    //    退出时侧栏已由 CSS 的 :not(.wm-morph-out) 收口回到自然几何（in-flow 占位 260px），
+    //    再注入会与自然流叠加成双重偏移，必须置 0。
+    const sb = document.getElementById('sidebar');
+    if (dir === 'in' && sb && sb.offsetWidth > 0) {
+        b.style.setProperty('--wm-morph-main-left', Math.round(sb.offsetWidth) + 'px');
+    } else {
+        b.style.removeProperty('--wm-morph-main-left');
+    }
     b.classList.remove(cls);
     void b.offsetWidth;  // 连点时强制重播
     b.classList.add(cls);
-    const seconds = _wmFxSeconds('--wm-morph-dur', 0.26);
+    _wmMorphPending = onSettle || null;
+    _wmMorphLandFn = onLand || null;
+    _wmMorphLanded = false;
+    const seconds = _wmFxSeconds('--wm-morph-dur', 0.2);
     // 收尾优先听 animationend —— 低端机上主线程会被这次布局切换拖住，纯计时器可能在动画
     // 还没跑完（甚至还没起步）时就摘类，落帧出现跳变；计时器仅作兜底。
     if (panel) {
@@ -6345,7 +6629,7 @@ function _wmMorphBegin(dir) {
             if (!e || e.target !== panel) return;   // 子元素的动画会冒泡上来
             const name = e.animationName || '';
             if (dir === 'in' ? name !== 'wmPanelIn' : name !== 'wmPanelOut') return;
-            settle();
+            if (dir === 'out') land(); else settle();
         };
         _wmMorphEndEl = panel;
         panel.addEventListener('animationend', _wmMorphEndHandler);
@@ -6356,12 +6640,45 @@ function _wmMorphBegin(dir) {
             _wmMorphEndEl.removeEventListener('animationend', _wmMorphEndHandler);
             _wmMorphEndEl = _wmMorphEndHandler = null;
         }
+        // 先补做落定回调，再摘 morph 类。二者必须同一帧同步完成，否则中间态会被渲染成一帧闪跳。
+        _wmRunPending();
         b.classList.remove(cls);
         b.style.removeProperty('--wm-morph-left');
+        b.style.removeProperty('--wm-morph-main-left');
         // 落帧后按真实几何（无 transform 偏移）重算背景图模式的毛玻璃带
         if (typeof updateWriteModeGlassBounds === 'function') updateWriteModeGlassBounds();
     }
-    _wmMorphTimer = setTimeout(settle, Math.max(200, seconds * 2000 + 600));
+    // 落地（仅退出）：收拢结束 → 摘 detail-write-mode + 补跑被推迟的重渲染 → 同步 settle
+    // 摘掉 wm-morph-out 类。幂等。
+    // ⚠️ 第十八轮起这里不再挂 wm-morph-land、也不再 setTimeout 等 --wm-land-dur：
+    //    收拢末帧的几何已与收起态重合，落地就是「换内容 + 摘类」，没有任何需要播的动画。
+    //    land 回调与 settle 必须在同一批同步代码里完成 —— 中间态（已摘书写态、还挂着
+    //    morph-out）一旦被渲染成帧，面板会闪一帧全宽 + 收起态内容的错版布局。
+    function land() {
+        if (_wmMorphLanded) return;
+        _wmMorphLanded = true;
+        if (_wmMorphTimer) { clearTimeout(_wmMorphTimer); _wmMorphTimer = null; }
+        if (_wmMorphLandFn) {
+            const fn = _wmMorphLandFn;
+            _wmMorphLandFn = null;
+            try { fn(); } catch (e) { /* 落定回调不得打断收尾 */ }
+        }
+        settle();
+    }
+    _wmMorphLandRunner = dir === 'out' ? land : null;
+    // CSS 侧把动画关掉时（系统减弱动态 / 别的规则压掉了 animation），animationend 永远不会来，
+    // 只剩计时器兜底 —— 退出动画会因此把「摘 detail-write-mode」推迟一秒多。这里直接探测一次：
+    // 面板上没跑我们的动画就立刻落定 / 落地。
+    if (panel) {
+        try {
+            const cs = getComputedStyle(panel);
+            if (!cs.animationName || cs.animationName === 'none') {
+                if (dir === 'out') land(); else settle();
+                return seconds;
+            }
+        } catch (e) { /* 取不到就按正常流程走计时器兜底 */ }
+    }
+    _wmMorphTimer = setTimeout(dir === 'out' ? land : settle, Math.max(200, seconds * 2000 + 600));
     return seconds;
 }
 
@@ -6373,6 +6690,8 @@ function enterDetailWriteMode() {
     // 场景对切：必须先于（或同帧于）detail-write-mode —— 挂晚了主视图已被 display:none 抹掉，
     // 「原地退场」的 fade-out 就无处可播了。返回值用于落帧后精算毛玻璃带。
     const morphSec = _wmMorphBegin('in');
+    // 同帧挂 detail-write-mode：CSS 侧 wm-morph-in 规则会让面板内容块以
+    // wmPanelContentIn 滑入，遮罩这一帧发生的「收起态布局 → 书写态布局」切换。
     document.body.classList.add('detail-write-mode');
     applyWriteModeWidth((typeof settings !== 'undefined' && settings.writeModeWidth) || 'standard');
     updateWriteModeCrumb();
@@ -6394,12 +6713,28 @@ function enterDetailWriteMode() {
 
 function exitDetailWriteMode() {
     if (!isDetailWriteMode()) return;
-    flushWriteModeAutoSave();
-    document.body.classList.remove('detail-write-mode');
+    // 数据落盘同步做；重渲染（renderView/renderTags/renderLists）推迟到落地帧执行 ——
+    // 与摘 detail-write-mode 同批微任务，JIT 只多一次合并扫描，点击响应不被整板重建拖慢。
+    flushWriteModeAutoSave(true);
+    // 已在收拢途中（连按 Esc / 连点返回）：不重开一段动画，让它自然落地
+    if (document.body.classList.contains('wm-morph-out')) return;
     const dismiss = document.getElementById('detail-dismiss-btn');
     if (dismiss) dismiss.title = '关闭';
-    // 场景对切（进入的严格逆过程）：布局已瞬时回到三栏，主视图淡入归位 + 面板收拢落定
-    _wmMorphBegin('out');
+    // 场景对切（进入的严格逆过程），第十八轮起退出只有一段：
+    //   收拢（--wm-morph-dur）：detail-write-mode **保留**，面板才能以书写态外观从全屏
+    //   收拢回右侧 384px（CSS 把面板临时固定为终态几何 + clip-path 收拢）；侧栏在此
+    //   首帧即恢复自然几何、内容错峰淡入，主视图同步淡入归位。
+    //   收拢末帧（wmPanelOut 的 animationend）走 land 回调 —— 摘 detail-write-mode +
+    //   补跑重渲染，随后同批同步 settle 摘掉 wm-morph-out；收起态内容直接就位，不再补
+    //   「自右滑入」（第十八轮删除，理由见上方控制器注释）。
+    // ⚠️ 旧实现是「先摘 detail-write-mode 再播动画」，播的其实是**收起态**内容从 opacity
+    //    0.25 淡入 —— 既没有收拢过程，右侧栏还会「先空一下再浮现」，与进入不对称。
+    _wmMorphBegin('out', null, function () {
+        // 摘类与补跑重渲染必须与随后的 settle 同一批同步完成（中间态不会被渲染），
+        // 否则会出现一帧「全宽面板 + 收起态内容」的错误布局。
+        document.body.classList.remove('detail-write-mode');
+        _wmRunDeferredRenders();
+    });
 }
 
 function toggleDetailWriteMode() {

@@ -1809,7 +1809,8 @@ def check_task_reminders():
             if sub_id == '_task':
                 sub_id = None
             task = next((t for t in tasks if t.get('id') == task_id), None)
-            if not task or task.get('completed'):
+            # deletedAt：软删除进回收站的任务（FR-02），不再触发提醒
+            if not task or task.get('completed') or task.get('deletedAt'):
                 continue
             if sub_id:
                 st = next((s for s in (task.get('subtasks') or []) if s.get('id') == sub_id), None)
@@ -1825,8 +1826,9 @@ def check_task_reminders():
 
         # —— 主任务：准点无条件触发 + 用户配置的提前量 ——
         for task in tasks:
-            # 无时间 / 已完成 / 全天 一律跳过（全天任务无具体时刻可作"准点"）
-            if not task.get('startTime') or task.get('completed') or task.get('isAllDay'):
+            # 无时间 / 已完成 / 全天 一律跳过（全天任务无具体时刻可作"准点"）；
+            # deletedAt：软删除进回收站的任务（FR-02）不触发提醒
+            if not task.get('startTime') or task.get('completed') or task.get('isAllDay') or task.get('deletedAt'):
                 continue
             task_id = task.get('id', '')
             try:
@@ -1840,7 +1842,8 @@ def check_task_reminders():
 
         # —— 子任务：与主任务同规则（准点恒触发 + 最多 5 个提前量）——
         for task in tasks:
-            if task.get('completed'):
+            # deletedAt：软删除进回收站的任务（FR-02）不触发提醒
+            if task.get('completed') or task.get('deletedAt'):
                 continue
             task_id = task.get('id', '')
             for st in (task.get('subtasks') or []):

@@ -370,7 +370,7 @@ function toggleCountdownPin(key) {
         pinned.splice(idx, 1);
     } else {
         if (pinned.length >= COUNTDOWN_MAX_PIN) {
-            showToast('最多只能在侧边栏展示2个倒计时信息', 'warning');
+            showToast('侧边栏最多展示 2 个倒计时', 'warning');
             return;
         }
         pinned.push(key);
@@ -761,11 +761,11 @@ function saveCountdown(isAdd, id) {
     const date = dateInput.value;
     const repeat = repeatInput.value;
 
-    if (!name) { showToast('请输入名称', 'error'); return; }
-    if (name.length > 20) { showToast('名称最多 20 字', 'error'); return; }
-    if (!date) { showToast('请选择目标日期', 'error'); return; }
+    if (!name) { showToast('请输入名称', 'warning'); return; }
+    if (name.length > 20) { showToast('名称最多 20 字', 'warning'); return; }
+    if (!date) { showToast('请选择目标日期', 'warning'); return; }
     const dt = parseYmd(date);
-    if (!dt) { showToast('日期不存在，请重新选择', 'error'); return; }
+    if (!dt) { showToast('该日期不存在，请重新选择', 'warning'); return; }
 
     if (!settings.countdowns) settings.countdowns = [];
     if (!isAdd) {
@@ -779,7 +779,7 @@ function saveCountdown(isAdd, id) {
     saveData();
     renderCountdownView(document.getElementById('view-container'));
     renderSidebarCountdown();
-    showToast(isAdd ? '添加成功' : '保存成功', 'success');
+    showToast(isAdd ? '已添加倒计时' : '已保存倒计时', 'success');
 }
 
 function deleteCountdown(id) {
@@ -803,5 +803,5 @@ function deleteCountdown(id) {
     saveData();
     renderCountdownView(document.getElementById('view-container'));
     renderSidebarCountdown();
-    showToast('删除成功', 'success');
+    showToast('已删除倒计时', 'success');
 }

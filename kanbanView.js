@@ -573,9 +573,9 @@ function commitKanbanColumnRename(leaf, name) {
         if (isNew) {
             _kanbanNewGroupIds.delete(leaf.groupId);
             removeKanbanGroup(list, leaf.groupId, true);
-            showToast('分组名称已存在，已取消新增', 'error');
+            showToast('分组名称已存在，已取消新增', 'warning');
         } else {
-            showToast('分组名称已存在', 'error');
+            showToast('分组名称已存在', 'warning');
             renderView(); // 回退原名
         }
         return;
@@ -786,14 +786,14 @@ function handleKanbanDrop(e, colKey) {
         case 'tagSubCreated':
             // 创建时间不可修改，仅添加/清除标签；任务无变化时提示用户
             changed = setTaskTags(task, leaf.tagId);
-            if (!changed) showToast('任务已有该标签，创建时间不可修改', 'info');
+            if (!changed) showToast('任务已有该标签', 'warning');
             break;
         default:
             changed = false;
     }
 
     if (changed) {
-        task.modifiedAt = new Date().toISOString();
+        touchTask(task); // 问题 1：统一走 touchTask（含外部任务拦截）
         saveData();
         renderView();
         if (typeof renderLists === 'function') renderLists();
@@ -1142,13 +1142,13 @@ function confirmKanbanGroupModal() {
     } else if (mode === 'rename') {
         const g = (list.groups || []).find(x => x.id === groupId);
         if (g) {
-            if (kanbanGroupExists(list, name, groupId)) { showToast('分组名称已存在', 'error'); return; } // 保持弹窗打开，便于重新输入
+            if (kanbanGroupExists(list, name, groupId)) { showToast('分组名称已存在', 'warning'); return; } // 保持弹窗打开，便于重新输入
             g.name = name; saveData(); renderView();
             if (_kanbanGroupConfigOpen) renderKanbanGroupConfigPanel();
             // 改进6：分组命名更新不再弹 toast
         }
     } else {
-        if (kind !== 'list' && kanbanGroupExists(list, name, null)) { showToast('分组名称已存在', 'error'); return; } // 保持弹窗打开，便于重新输入
+        if (kind !== 'list' && kanbanGroupExists(list, name, null)) { showToast('分组名称已存在', 'warning'); return; } // 保持弹窗打开，便于重新输入
         const ng = { id: generateId(), name };
         list.groups = list.groups || [];
         if (pos === 'left' && refGroupId) {
@@ -1313,7 +1313,7 @@ function moveKanbanList(srcId, tgtId) {
 }
 
 function deleteKanbanList(listId) {
-    if (lists.length <= 1) { showToast('至少需保留一个清单', 'error'); return; }
+    if (lists.length <= 1) { showToast('至少需保留一个清单', 'warning'); return; }
     const list = getList(listId);
     if (!list) return;
     if (list.isFolder) { showToast('请到侧边栏删除清单集', 'warning'); return; }
@@ -1366,7 +1366,7 @@ function doDeleteList(listId, listName, moveToDefault) {
     saveData();
     renderView();
     if (typeof renderLists === 'function') renderLists();
-    showToast(`清单"${listName}"已删除${moveToDefault ? '，任务已移至默认清单' : ''}`, 'success');
+    showToast(`已删除清单「${listName}」${moveToDefault ? '，任务已移至默认清单' : ''}`, 'success');
 }
 
 // ---------- 视图配置面板（统一框架：utils.js _registerViewConfig） ----------
@@ -1643,9 +1643,9 @@ function kanbanGroupCfgRename(token, name) {
         if (isNew) {
             _kanbanNewGroupIds.delete(token);
             removeKanbanGroup(list, token, true);
-            showToast('分组名称已存在，已取消新增', 'error');
+            showToast('分组名称已存在，已取消新增', 'warning');
         } else {
-            showToast('分组名称已存在', 'error');
+            showToast('分组名称已存在', 'warning');
             renderKanbanGroupConfigPanel(); // 回退输入框显示
         }
         return;

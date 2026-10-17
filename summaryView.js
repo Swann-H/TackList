@@ -6,9 +6,11 @@ let summaryPriority = 'all';
 let summaryList = 'all';
 let summaryStatus = 'all';
 
-// 摘要视图任务源：离线版「显示外部日历」关闭时排除外部订阅任务（与 filterTasks 数据管线口径一致）
+// 摘要视图任务源：离线版「显示外部日历」关闭时排除外部订阅任务（与 filterTasks 数据管线口径一致）；
+// FR-02：回收站任务不参与摘要统计
 function getSummaryTaskSource() {
-    return shouldHideExternalTasks() ? tasks.filter(t => !t.extSourceId) : tasks;
+    const src = shouldHideExternalTasks() ? tasks.filter(t => !t.extSourceId) : tasks;
+    return src.filter(t => !t.deletedAt);
 }
 
 function renderSummaryView(container) {
@@ -1123,8 +1125,8 @@ function copySummaryText() {
     }
 
     navigator.clipboard.writeText(text.trim()).then(() => {
-        showToast('已复制', 'success');
+        showToast('已复制汇总', 'success');
     }).catch(() => {
-        showToast('复制失败', 'error');
+        showToast('无法复制', 'error');
     });
 }

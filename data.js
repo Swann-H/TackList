@@ -124,6 +124,8 @@ async function refreshDataFromServer() {
         }
         lists = data.taskLists || lists;
         tasks = data.tasks || tasks;
+        // FR-01-4：服务端刷新覆盖了本地 tasks（多标签页同步），撤销上下文失效
+        if (typeof clearUndoStack === 'function') clearUndoStack();
         applySettings(data.settings);
         quadrantOrder = data.quadrantOrder || quadrantOrder;
         pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || pomodoroHistory);
@@ -190,11 +192,14 @@ async function loadHolidayData() {
 // 保存节假日数据到 localStorage 并同步到服务端
 function saveHolidayData(data) {
     holidayData = data;
+    // 周视图「工作周」的日期集合由 isWorkday() 推导，调休/放假一改，窗口列就可能变；
+    // 立即失效周视图聚合缓存，避免用户改完设置后当前周仍显示旧列。
+    if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
     try {
         localStorage.setItem('holidayData', JSON.stringify(data));
     } catch (e) {
         console.error('Save holiday data to localStorage error:', e);
-        showToast('数据保存失败，请检查存储空间', 'error');
+        showToast('无法保存数据：请检查存储空间', 'error');
         return false;
     }
     // 同步到服务端文件（离线模式下静默失败）
@@ -409,7 +414,7 @@ function checkHolidayDataUpdate() {
     const yearData = holidayData[currentYear];
     console.log('Check holiday data for year', currentYear, ':', yearData ? 'found' : 'not found');
     if (!yearData || !yearData.holidays || Object.keys(yearData.holidays).length === 0) {
-        showToast('调休日数据未更新，请更新 holiday_data.json 中 ' + currentYear + ' 年的数据', 'warning', 10000);
+        showToast('缺少 ' + currentYear + ' 年调休数据，请补充 holiday_data.json', 'warning', 'long');
     }
 }
 
@@ -438,6 +443,9 @@ function saveData() {
     if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
     // 本地 tasks 已变更，番茄任务推荐列表缓存同样需要失效，下次打开面板时重新排序
     if (typeof invalidatePomodoroTaskCache === 'function') invalidatePomodoroTaskCache();
+    // FR-08（C8-1/C8-4）：命令面板搜索索引统一在此置脏（撤销/还原/增删改均经 saveData），
+    // 面板打开或搜索时「脏则重建」，撤销删除后任务恢复可被搜到（V8-7）
+    if (typeof markSearchIndexDirty === 'function') markSearchIndexDirty();
     // 节流：getAutoSaveDelay() 毫秒内只发送一次，避免高频写入冲突
     _saveInFlight = true; // 标记保存正在进行（含节流等待期），防止 refreshDataFromServer 覆盖本地数据
     if (_saveDataTimerId) {
@@ -625,6 +633,8 @@ function importData(file) {
                 // 应用导入的数据（使用 DEFAULT_SETTINGS 确保所有字段都有默认值）
                 lists = data.taskLists || data.lists;
                 tasks = data.tasks;
+                // FR-01-4：数据导入后撤销栈整体失效
+                if (typeof clearUndoStack === 'function') clearUndoStack();
                 settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
 
                 quadrantOrder = data.quadrantOrder || quadrantOrder;
@@ -666,12 +676,12 @@ function importData(file) {
                     closeSettingsModal();
                 }
 
-                showToast('数据导入成功', 'success');
+                showToast('已导入数据', 'success');
             } else {
-                showToast('无效的数据格式', 'error');
+                showToast('数据格式无效', 'error');
             }
         } catch (error) {
-            showToast('数据解析失败', 'error');
+            showToast('无法解析数据', 'error');
         }
     };
     reader.readAsText(file);
@@ -757,7 +767,7 @@ function toggleAutoBackup() {
         settings._backupEnabledDate = new Date().toISOString();
         showToast('自动备份已启用', 'success');
     } else {
-        showToast('自动备份已关闭', 'info');
+        showToast('自动备份已关闭', 'success');
     }
     saveData();
 }
@@ -775,7 +785,27 @@ function setRetentionToForever() {
     document.getElementById('retention-period').value = 0;
     settings.retentionPeriod = 0;
     saveData();
-    showToast('已设置为永久保存', 'success');
+    showToast('已设为永久保存', 'success');
+}
+
+// FR-02：回收站保留天数（独立设置项，与备份保留期语义解耦，见 C2-4）
+function updateTrashRetentionSettings() {
+    const el = document.getElementById('trash-retention-days');
+    if (!el) return;
+    let v = parseInt(el.value, 10);
+    if (isNaN(v) || v < 0) v = 30;
+    el.value = v;
+    settings.trashRetentionDays = v;
+    saveData();
+    showToast(v > 0 ? '回收站保留期已更新为 ' + v + ' 天' : '回收站已设为永久保留', 'success');
+}
+
+function setTrashRetentionToForever() {
+    const el = document.getElementById('trash-retention-days');
+    if (el) el.value = 0;
+    settings.trashRetentionDays = 0;
+    saveData();
+    showToast('回收站已设为永久保留', 'success');
 }
 
 function cleanupOldBackups() {
@@ -805,14 +835,14 @@ function serverBackup() {
                 settings._lastBackupDate = new Date().toISOString();
                 saveData();
                 cleanupOldBackups();
-                showToast('自动备份已完成', 'success');
+                showToast('已完成自动备份', 'success');
             } else {
-                showToast('备份失败：' + (result.error || '未知错误'), 'error');
+                showToast('无法备份：' + (result.error || '未知错误'), 'error');
             }
         })
         .catch(err => {
             console.error('备份失败:', err);
-            showToast('备份失败：' + (err.message || '网络错误'), 'error');
+            showToast('无法备份：' + (err.message || '网络错误'), 'error');
         });
 }
 
@@ -824,7 +854,7 @@ function exportData() {
     a.click();
     document.body.removeChild(a);
     
-    showToast('数据导出成功！', 'success');
+    showToast('已导出数据', 'success');
 }
 
 const DEFAULT_SETTINGS = {
@@ -858,12 +888,28 @@ const DEFAULT_SETTINGS = {
     longBreakInterval: 4,
     autoBreak: false,
     autoFocus: false,
-    autoCreateTask: true,
-    toastDuration: 5,
+    toastPace: 'normal',
     snoozeDelay: 15,
     refreshInterval: 30,
     cmdRemoveTimeText: true,
     defaultTaskDate: 'today',
+    // 命令面板模糊时间偏好：输入「上午/中午/下午/晚上」等模糊时段词时的偏好时间（分钟数），
+    // 以及「稍后/等等/一会儿」等相对词的默认时长（分钟）。时段词带可调区间（硬约束截断）。
+    // 已过则同日区间内取下一个 30 分钟槽点，区间全过则次日；再按 30 分钟步长检测任务冲突，
+    // 到区间上限仍冲突则回偏好起点允许冲突（预览标注「时间冲突」）。
+    commandTimePrefs: {
+        morning: 540,      // 上午  9:00   区间 360–720  (6:00–12:00)
+        noon: 720,         // 中午 12:00   区间 690–810  (11:30–13:30)
+        afternoon: 900,    // 下午 15:00   区间 720–1080 (12:00–18:00)
+        evening: 1140,     // 晚上 19:00   区间 1080–1440(18:00–24:00)
+        laterMinutes: 15,   // 稍后/等等/一会儿  区间 5–120 步长 5
+        // 模糊时间任务智能计划时间：开启后模糊时段词结合当前时间与已有任务自动排程
+        // （已过顺延至最近有效时段 / 冲突按粒度顺延 / 全满时选任务量最少的时段）；
+        // 关闭后仅按偏好时间排程（当天已过则顺延至次日），不检测任务冲突。
+        smartSchedule: true,
+        // 任务时间粒度（分钟）：自动顺延时划分时间块的粒度，1–120，默认 30。仅 smartSchedule 开启时生效
+        timeGranularity: 30
+    },
     easterEggEnabled: true,
     // 首次使用引导：0=未看过（首次启动且无任务时自动弹出），>0=已看过/已跳过的引导版本号
     onboardingVersion: 0,
@@ -884,8 +930,11 @@ const DEFAULT_SETTINGS = {
         recent7days: 'show',   // 最近7天
         summary: 'show',       // 摘要
         tags: 'show',          // 标签分组
-        filters: 'show'        // 过滤器分组
+        filters: 'show',       // 过滤器分组
+        trash: 'show'          // 回收站（FR-02）
     },
+    // 回收站保留天数（FR-02，C2-4：与备份保留期 retentionPeriod 语义解耦）：0 = 永久保留
+    trashRetentionDays: 30,
     bgFlowEffect: false,
     advancedParticleAnimation: true,
     // 平滑过渡动画：开启后任务加载、详情呼出、标记完成等交互播放过渡动画（性能消耗较大）
@@ -893,6 +942,10 @@ const DEFAULT_SETTINGS = {
     // 场景过渡动效：番茄专注/正念小事/答案之书/设置弹窗的进入与返回播放主题化过渡（景深推近骨架）
     featureAnimations: false,
     theme: 'light',
+    // 轮播背景图「图片级手动主题」登记：{ '<目录>/<文件名>': 'light' | 'dark' }
+    // 用户手动切换主题时登记到当前图片；自动检测（换图/重开）命中该键时不再覆盖。
+    // 未登记的图片一律走明暗自动判定，彼此互不影响。
+    bgThemeOverrides: {},
     bgImage: '',
     bgOpacity: 100,
     bgBlur: 10,
@@ -940,6 +993,8 @@ const DEFAULT_SETTINGS = {
     scheduleConfig: {},
     // 周视图配置：showCompleted/showLunar 迁移自全局的可分离项（不设默认值=未显式设置）；
     // displayDays = 显示天数，'1' | '3' | '5' | 'workweek' | '7'（默认 7 天，等价于原行为）
+    //   'workweek' = 当周全部工作日（按「周开始于」定周、经 isWorkday 逐日判定，联动节假日与调休），
+    //   天数与是否连续均不固定，整周放假时为 0 天（周视图走居中空态）
     weekConfig: {
         displayDays: '7'
     },
@@ -980,11 +1035,27 @@ function applySettings(parsed) {
         settings.defaultTaskDate = settings.cmdDefaultDate;
         delete settings.cmdDefaultDate;
     }
+    // 迁移：「接受后自动创建任务」设置项已移除，接受任务固定自动创建，清理残留配置
+    if (settings.autoCreateTask !== undefined) {
+        delete settings.autoCreateTask;
+    }
+    // 迁移：toastDuration（1–30 秒数字）→ toastPace（快/标准/慢）
+    // 旧值只对未传时长的调用生效，因此按区间粗映射；映射后删除旧字段
+    if (settings.toastDuration !== undefined) {
+        var _td = Number(settings.toastDuration) || 5;
+        settings.toastPace = _td <= 4 ? 'fast' : (_td >= 9 ? 'slow' : 'normal');
+        delete settings.toastDuration;
+    }
+    if (['fast', 'normal', 'slow'].indexOf(settings.toastPace) < 0) settings.toastPace = 'normal';
+    // 迁移：默认任务日期仅保留「无日期/今天」，历史遗留值（明天/下周一）归一为今天
+    if (settings.defaultTaskDate !== undefined && !['none', 'today'].includes(settings.defaultTaskDate)) {
+        settings.defaultTaskDate = 'today';
+    }
     // 迁移：侧边栏清单配置 sidebarItems（旧数据无此字段时补齐默认值；非法值回退默认）
     (function migrateSidebarItems() {
         const def = (typeof SIDEBAR_ITEM_DEFAULTS === 'object' && SIDEBAR_ITEM_DEFAULTS)
             ? SIDEBAR_ITEM_DEFAULTS
-            : { allTasks: 'show', today: 'hide', tomorrow: 'hide', recent3days: 'hide', recent7days: 'show', summary: 'show', tags: 'show', filters: 'show' };
+            : { allTasks: 'show', today: 'hide', tomorrow: 'hide', recent3days: 'hide', recent7days: 'show', summary: 'show', tags: 'show', filters: 'show', trash: 'show' };
         const src = (settings.sidebarItems && typeof settings.sidebarItems === 'object') ? settings.sidebarItems : {};
         const out = {};
         Object.keys(def).forEach(function (k) {
@@ -1181,7 +1252,7 @@ async function loadData() {
             applySettings(data.settings);
             quadrantOrder = data.quadrantOrder || ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
             pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || []);
-            showToast('服务端不可用，已从本地缓存恢复数据', 'warning', 5000);
+            showToast('服务端不可用，已从本地缓存恢复数据', 'warning');
         } else {
             // 降级：尝试从 LocalStorage 迁移
             const migrated = await migrateFromLocalStorage();
@@ -1244,11 +1315,71 @@ async function loadData() {
 }
 
 // 主题系统
+// 手动入口（设置面板「浅色/深色」按钮）：写入 settings.theme 并持久化；
+// 轮播模式下同时把该选择登记为「当前图片的手动主题」，后续自动检测不再覆盖它。
 function setTheme(theme) {
+    theme = _registerManualThemeForCurrentImage(theme);
     settings.theme = theme;
     applyTheme();
     updateThemeButtons();
     saveData();
+}
+
+// 自动检测专用入口（轮播换图/启动、上传背景图、切回单张模式）：
+// 仅按图片明暗结果应用主题，不产生手动登记，避免污染其他图片的自动判定。
+function _applyAutoTheme(theme) {
+    if (settings.theme === theme) return;
+    settings.theme = theme;
+    applyTheme();
+    updateThemeButtons();
+    saveData();
+}
+
+// 当前轮播图片的稳定身份（目录 + 文件名）；非轮播 / 无当前图时返回空串。
+// 换图后 key 随之变化，使手动覆盖天然只作用于「那一张图」。
+function _currentBgImageKey() {
+    if (!bgCarouselState || !bgCarouselState.enabled) return '';
+    const file = bgCarouselState.currentFile;
+    if (!file) return '';
+    const dir = String(bgCarouselState.directory || '').replace(/[\\/]+$/, '');
+    return dir ? (dir + '/' + file) : file;
+}
+
+// 手动切换主题时登记到当前图片（幂等）：
+// 同一张图点同一主题 → 保持登记不变（绝不静默清除，否则误触会毁掉用户刚设好的覆盖）。
+// 非轮播模式（单张背景图）不登记，维持原有全局主题行为。
+function _registerManualThemeForCurrentImage(theme) {
+    const key = _currentBgImageKey();
+    if (!key) return theme;
+    const map = (settings.bgThemeOverrides && typeof settings.bgThemeOverrides === 'object')
+        ? settings.bgThemeOverrides
+        : (settings.bgThemeOverrides = {});
+    if (map[key] !== theme) {
+        map[key] = theme;
+    }
+    return theme;
+}
+
+// 当前图片的自动判定结果：复用已取色的亮度，避免再次读像素
+function _autoThemeForCurrentImage() {
+    const pal = settings.themePaletteColors;
+    const b = (pal && typeof pal._brightness === 'number') ? pal._brightness : bgImageBrightness;
+    return b < 0.45 ? 'dark' : 'light';
+}
+
+// 显式撤销当前图片的手动主题，回到明暗自动判定（供设置面板入口调用）。
+// 刻意不挂在主题按钮上：点「已生效」的主题按钮应当是无副作用的幂等操作。
+// ⚠️ 这里必须走 _applyAutoTheme：若走 setTheme 会被 _registerManualThemeForCurrentImage
+// 立刻重新登记回去，等于撤销失效。
+function resetBgThemeOverrideForCurrentImage() {
+    const key = _currentBgImageKey();
+    if (!key || !settings.bgThemeOverrides || !Object.prototype.hasOwnProperty.call(settings.bgThemeOverrides, key)) {
+        return false;
+    }
+    delete settings.bgThemeOverrides[key];
+    _applyAutoTheme(_autoThemeForCurrentImage());
+    saveData(); // _applyAutoTheme 在主题未变时会早退，需补一次落盘
+    return true;
 }
 
 function applyTheme() {
@@ -1428,7 +1559,7 @@ function handleBgImageUpload(event) {
             previewImg.src = imageDataUrl;
             previewContainer.classList.remove('hidden');
 
-            showToast('背景图片已设置', 'success');
+            showToast('已设置背景图', 'success');
 
             // 自动触发调色板提取（仅在设置面板已渲染该 UI 时执行）
             // 传入 true：根据背景图明暗自动切换深色/浅色模式
@@ -1517,7 +1648,7 @@ function _doClearBgImage() {
     if (paletteContainer) paletteContainer.classList.add('hidden');
     if (paletteHint) paletteHint.classList.add('hidden');
 
-    showToast('背景图片已清除', 'info');
+    showToast('已清除背景图', 'success');
 }
 
 // 清除轮播目录并停留「轮换图片」模式（二次确认，交互与单张图片「删除背景图片」一致）
@@ -1534,7 +1665,7 @@ function clearBgCarousel() {
         _resetBgCarouselDeleteBtn(btn);
         bgCarouselUpdateConfig({ directory: '' }).then(state => {
             if (state && state.success !== false) {
-                showToast('背景图目录已清除', 'info');
+                showToast('背景图目录已清除', 'success');
             }
         });
         return;
@@ -1632,7 +1763,7 @@ function _applyBgCarouselState(state) {
         if ((state.errorId || 0) > _bgCarouselToastedErrorId) {
             _bgCarouselToastedErrorId = state.errorId;
             if (state.error === 'empty_directory') {
-                showToast('自动轮播失败，指定目录下无有效图片', 'error', 6000);
+                showToast('无法自动轮播：目录下没有有效图片', 'error', 'long');
             }
         }
         if (state.enabled && state.currentFile) {
@@ -1669,7 +1800,7 @@ function _bgCarouselSwapImage() {
 function _handleBgCarouselImageError() {
     _bgCarouselLoadFailures++;
     if (_bgCarouselLoadFailures >= 3) {
-        showToast('背景图加载失败，已暂停自动轮播', 'error', 6000);
+        showToast('无法加载背景图，已暂停自动轮播', 'error', 'long');
         return;
     }
     fetch('/api/bg-carousel/next', { method: 'POST' }).then(r => r.json()).then(state => {
@@ -1684,14 +1815,20 @@ function _handleBgCarouselImageError() {
 function _onBgCarouselImageApplied() {
     const src = _bgCarouselImageUrl();
     if (!src) return;
+    // 取色是异步的：发起前就锁定图片身份。否则回调里再取 key 可能已是「下一张」，
+    // 造成用旧图亮度去查新图覆盖、并把旧图取色写到新图上（手动连点「下一张」/定时换图时必现）。
+    const imgKey = _currentBgImageKey();
     extractThemePalettes(src, function (palettes) {
         if (!palettes) return;
+        // 回调期间已换图：本轮结果属于旧图，直接丢弃，由新图那一轮重算
+        if (_currentBgImageKey() !== imgKey) return;
         settings.themePaletteColors = palettes;
         const brightness = (typeof palettes._brightness === 'number') ? palettes._brightness : bgImageBrightness;
         const detectedTheme = brightness < 0.45 ? 'dark' : 'light';
-        if (settings.theme !== detectedTheme) {
-            setTheme(detectedTheme);
-        }
+        // 图片级手动覆盖优先：命中则沿用用户为该图选定的主题。
+        // 换到其他图片后 key 变化、自动检测照常生效，各图互不影响。
+        const overrideTheme = (imgKey && settings.bgThemeOverrides) ? settings.bgThemeOverrides[imgKey] : null;
+        _applyAutoTheme(overrideTheme || detectedTheme);
         const paletteKey = settings.themePalette;
         // 与单张上传一致：取色后展示取色方案供用户选择（设置面板已渲染该 UI 时）
         //（周期性换图不弹 Toast，避免打扰；设置面板内可见方案列表刷新即足够）
@@ -1715,10 +1852,10 @@ function bgCarouselNext() {
         if (state && state.success) {
             _applyBgCarouselState(state);
         } else if (state && state.reason === 'not_enabled') {
-            showToast('请先切换到「轮换图片」模式', 'warning', 3000);
+            showToast('请先切换到「轮换图片」模式', 'warning');
         }
     }).catch(() => {
-        showToast('服务端不可用，无法切换背景图', 'error', 3000);
+        showToast('无法切换背景图：服务端不可用', 'error');
     });
 }
 
@@ -1731,7 +1868,7 @@ function bgCarouselUpdateConfig(config, onError) {
     }).then(r => r.json()).then(state => {
         if (!state || state.success === false) {
             if (state && state.reason === 'directory_not_found') {
-                showToast('目录不存在，请检查路径', 'error', 4000);
+                showToast('目录不存在，请检查路径', 'error');
             }
             if (typeof onError === 'function') onError(state);
             if (state) _applyBgCarouselState(state);
@@ -1740,7 +1877,7 @@ function bgCarouselUpdateConfig(config, onError) {
         _applyBgCarouselState(state);
         return state;
     }).catch(() => {
-        showToast('服务端不可用，轮播设置未保存', 'error', 4000);
+        showToast('无法保存轮播设置：服务端不可用', 'error');
         return null;
     });
 }

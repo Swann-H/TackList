@@ -1079,13 +1079,13 @@ function saveSection(groupKey, originalType, originalFestival, isAdd) {
 
     // 校验日期范围
     if (!dateRangeText) {
-        showToast('请输入日期范围', 'error');
+        showToast('请输入日期范围', 'warning');
         return;
     }
 
     const newDates = parseDateRangeInput(dateRangeText, holidayCurrentYear);
     if (newDates.length === 0) {
-        showToast('日期格式应为 MMDD - MMDD，请重新输入', 'error');
+        showToast('日期格式应为 MMDD - MMDD，请重新输入', 'warning');
         return;
     }
 
@@ -1094,14 +1094,14 @@ function saveSection(groupKey, originalType, originalFestival, isAdd) {
         const [m, d] = md.split('-').map(Number);
         const testDate = new Date(holidayCurrentYear, m - 1, d);
         if (testDate.getMonth() + 1 !== m || testDate.getDate() !== d) {
-            showToast(`请输入合法的日期（${md} 不存在）`, 'error');
+            showToast(`请输入合法的日期（${md} 不存在）`, 'warning');
             return;
         }
     }
 
     // 校验名称
     if (!name) {
-        showToast('请输入名称', 'error');
+        showToast('请输入名称', 'warning');
         return;
     }
 
@@ -1176,7 +1176,7 @@ function saveSection(groupKey, originalType, originalFestival, isAdd) {
     if (saveHolidayData(holidayData)) {
         holidayEditing = null;
         renderHolidayGroups();
-        showToast('保存成功', 'success');
+        showToast('已保存节假日', 'success');
     }
 }
 
@@ -1233,7 +1233,7 @@ function deleteSection(groupKey, type, festival) {
             holidayDeleteTimer = null;
         }
         renderHolidayGroups();
-        showToast('删除成功', 'success');
+        showToast('已删除节假日', 'success');
     }
 }
 
@@ -1251,7 +1251,7 @@ function exportHolidayJSON() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('导出成功', 'success');
+    showToast('已导出节假日', 'success');
 }
 
 // 导入 JSON
@@ -1279,7 +1279,7 @@ function handleHolidayImport(file) {
                 }
             }
             if (!valid) {
-                showToast('文件格式不正确，请检查 JSON 结构是否包含年份、holidays、workdays', 'error');
+                showToast('文件格式不正确：需要包含年份、节假日与调休日', 'warning');
                 return;
             }
 
@@ -1302,7 +1302,7 @@ function handleHolidayImport(file) {
                     }
                     saveHolidayData(holidayData);
                     renderHolidayGroups();
-                    showToast('导入成功（合并模式）', 'success');
+                    showToast('已导入节假日（合并）', 'success');
                 },
                 () => {
                     showConfirmToast(
@@ -1319,7 +1319,7 @@ function handleHolidayImport(file) {
                             holidayData = newData;
                             saveHolidayData(holidayData);
                             renderHolidayGroups();
-                            showToast('导入成功（覆盖模式）', 'success');
+                            showToast('已导入节假日（覆盖）', 'success');
                         },
                         () => {
                             showToast('已取消导入', 'info');
@@ -1328,7 +1328,7 @@ function handleHolidayImport(file) {
                 }
             );
         } catch (error) {
-            showToast('文件格式不正确，请检查 JSON 结构是否包含年份、holidays、workdays', 'error');
+            showToast('文件格式不正确：需要包含年份、节假日与调休日', 'warning');
         }
     };
     reader.readAsText(file);

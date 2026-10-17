@@ -42,6 +42,8 @@ function selectExtSourceView(subId) {
     if (_supported.indexOf(currentView) === -1 && typeof userSwitchView === 'function') {
         userSwitchView('task');
     }
+    // FR-01-4：筛选上下文变化后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     currentListId = '__extsrc__:' + subId;
     currentTagIds = [];
     currentFilter = '';
@@ -114,7 +116,8 @@ function renderLists(force) {
 
     // 未完成任务按清单预聚合，避免递归计数时重复遍历 tasks
     const uncompletedMap = {};
-    tasks.forEach(t => { if (!t.completed) uncompletedMap[t.listId] = (uncompletedMap[t.listId] || 0) + 1; });
+    // FR-02：回收站任务不计入清单未完成数（此处直读 tasks，绕过 filterTasks，需单独排除）
+    tasks.forEach(t => { if (!t.completed && !t.deletedAt) uncompletedMap[t.listId] = (uncompletedMap[t.listId] || 0) + 1; });
 
     const topLevel = lists.filter(l => !l.archived && (!l.parentId || !getList(l.parentId)) && !shouldHideExternalList(l));
     for (let i = 0; i < topLevel.length; i++) {
@@ -577,7 +580,7 @@ function deleteListInput() {
             renderFilters();
             renderView();
             updateSidebarHighlight();
-            showToast(`清单集"${listName}"已删除，子清单已移回顶层`, 'success');
+            showToast(`已删除清单集「${listName}」，子清单已移回顶层`, 'success');
             return;
         }
 
@@ -644,6 +647,8 @@ let archivedViewListId = null; // 当前查看的归档清单ID
 
 function viewArchivedLists() {
     // 切换到归档清单视图
+    // FR-01-4：筛选上下文变化后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     currentListId = '__archived__';
     currentFilter = null;
     currentTagIds = [];
@@ -821,7 +826,7 @@ function archiveList(listId) {
     renderTags();
     renderFilters();
     renderView();
-    showToast(`清单"${list.name}"已归档`, 'success');
+    showToast(`已归档清单「${list.name}」`, 'success');
 }
 
 function restoreList(listId) {
@@ -840,7 +845,7 @@ function restoreList(listId) {
     renderFilters();
     renderView();
     updateSidebarHighlight();
-    showToast(`清单"${list.name}"已恢复`, 'success');
+    showToast(`已恢复清单「${list.name}」`, 'success');
 }
 
 function deleteArchivedList(listId) {
@@ -866,16 +871,16 @@ function deleteArchivedList(listId) {
         renderFilters();
         renderView();
         updateSidebarHighlight();
-        showToast(`已彻底删除清单"${listName}"及其所有任务`, 'success');
+        showToast(`已永久删除清单「${listName}」及其所有任务`, 'success');
         return;
     }
 
-    // 第一次点击：进入确认状态
+    // 第一次点击：进入确认状态（只换色+改文案，不换图标 —— 与回收站工具栏/批量管理即时钮同口径）
     archivedDeleteConfirming = listId;
     const btn = document.getElementById(`archived-delete-btn-${listId}`);
     if (btn) {
         btn.style.cssText = 'padding: 0.375rem 0.75rem; font-size: 0.875rem; color: #ffffff; background-color: #dc2626; border: 1px solid #dc2626; border-radius: 0.5rem; cursor: pointer; transition: all 0.2s;';
-        btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>确认彻底删除';
+        btn.innerHTML = '<i class="fas fa-trash mr-1"></i>确认彻底删除';
     }
 
     setTimeout(() => {
@@ -890,6 +895,8 @@ function deleteArchivedList(listId) {
 }
 
 function selectList(listId) {
+    // FR-01-4：清单切换后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     // 看板内切换清单时，先提交/清理行内改名和未命名分组
     if (currentView === 'kanban' && typeof leaveKanbanView === 'function') {
         leaveKanbanView();
@@ -953,6 +960,8 @@ function updateSettingsListSelect() {
 
 // 统一的固定时间筛选入口：切换筛选上下文 + 按该项的偏好视图渲染
 function _applySpecialTimeFilter(filter) {
+    // FR-01-4：时间筛选切换后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     currentListId = null;
     currentFilter = filter;
     currentTagIds = [];
@@ -990,7 +999,8 @@ const SIDEBAR_ITEM_BTN_IDS = {
     tomorrow: 'sidebar-tomorrow-btn',
     recent3days: 'sidebar-recent3days-btn',
     recent7days: 'sidebar-next7days-btn',
-    summary: 'sidebar-summary-btn'
+    summary: 'sidebar-summary-btn',
+    trash: 'sidebar-trash-btn'
 };
 
 // 「有内容时显示」的内容量：time 项取对应筛选的任务数，标签取标签个数，其余恒为有内容
@@ -998,6 +1008,7 @@ function _sidebarItemContentCount(key, counts) {
     if (key === 'tags') return (settings.tags || []).length;
     if (key === 'filters' || key === 'summary') return 1;
     const c = counts || _computeSidebarSpecialCounts();
+    if (key === 'trash') return c.trash || 0; // 回收站按已删除任务数判断「有内容」
     return (c[key] === undefined) ? 1 : c[key];
 }
 
@@ -1029,6 +1040,7 @@ function _getActiveSidebarItemKey() {
     if (currentFilterId) return 'filters';
     if (currentTagIds && currentTagIds.length) return 'tags';
     if (isSpecialTimeFilter()) return currentFilter;
+    if (currentView === 'trash') return 'trash';
     if (currentView === 'summary') return 'summary';
     if (!currentListId && !currentFilter) return 'allTasks';
     return null;
@@ -1090,7 +1102,7 @@ function updateSidebarHighlight() {
 
     // 清除所有侧边栏按钮的高亮
     const sidebarBtns = ['sidebar-all-tasks-btn', 'sidebar-today-btn', 'sidebar-tomorrow-btn',
-        'sidebar-recent3days-btn', 'sidebar-next7days-btn', 'sidebar-summary-btn'];
+        'sidebar-recent3days-btn', 'sidebar-next7days-btn', 'sidebar-summary-btn', 'sidebar-trash-btn'];
     sidebarBtns.forEach(id => {
         const btn = document.getElementById(id);
         if (btn) {
@@ -1135,6 +1147,9 @@ function updateSidebarHighlight() {
     } else if (currentView === 'summary') {
         const btn = document.getElementById('sidebar-summary-btn');
         if (btn) btn.classList.add('sidebar-active');
+    } else if (currentView === 'trash') {
+        const btn = document.getElementById('sidebar-trash-btn');
+        if (btn) btn.classList.add('sidebar-active');
     } else if (currentView === 'countdown') {
         if (cdBox) cdBox.classList.add('cd-active');
     } else if (currentView === 'holiday') {
@@ -1166,9 +1181,14 @@ function _computeSidebarSpecialCounts() {
     const dayAfterStart = b.dayAfterTomorrowStart.getTime();
     const recent3End = b.threeDaysLaterStart.getTime();
     const recent7End = b.sevenDaysLaterEnd.getTime();
-    const counts = { allTasks: 0, today: 0, tomorrow: 0, recent3days: 0, recent7days: 0 };
+    const counts = { allTasks: 0, today: 0, tomorrow: 0, recent3days: 0, recent7days: 0, trash: 0 };
     for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i];
+        // FR-02：软删除任务只计入回收站徽标，不计入各时间窗统计
+        if (t.deletedAt) {
+            counts.trash++;
+            continue;
+        }
         if (t.completed || archivedSet.has(t.listId)) continue;
         counts.allTasks++;
         if (!t.startTime) continue;
@@ -1202,6 +1222,7 @@ function updateSidebarCounts() {
     setCount('sidebar-tomorrow-count', counts.tomorrow);
     setCount('sidebar-recent3days-count', counts.recent3days);
     setCount('sidebar-next7days-count', counts.recent7days);
+    setCount('sidebar-trash-count', counts.trash);
     // 「有内容时显示」随任务数量变化实时生效
     applySidebarItemsConfig(counts);
 }
@@ -1352,6 +1373,8 @@ function createTagEditForm(existingTag) {
 
 // 标签筛选切换（单选模式：点击已选标签取消，点击新标签替换）
 function toggleTagFilter(tagId) {
+    // FR-01-4：标签筛选切换后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     if (currentTagIds && currentTagIds.includes(tagId)) {
         // 再次点击取消选中
         currentTagIds = [];
@@ -1379,6 +1402,8 @@ function toggleTagFilter(tagId) {
 
 // 清除标签筛选
 function clearTagFilter() {
+    // FR-01-4：筛选上下文变化后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     currentTagIds = [];
     currentFilterId = null;
     _saveFilterState();
@@ -1686,6 +1711,8 @@ function toggleCustomDateRange() {
 }
 
 function applyFilter(filterId) {
+    // FR-01-4：自定义过滤器切换后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     if (currentFilterId === filterId) {
         // 再次点击取消过滤器
         currentFilterId = null;
@@ -1750,7 +1777,7 @@ function saveFilterInput() {
             return;
         }
         if (customStart > customEnd) {
-            showToast('开始日期不能晚于结束日期', 'warning');
+            showToast('开始日期必须早于结束日期', 'warning');
             return;
         }
     }
@@ -1800,7 +1827,7 @@ function saveFilterInput() {
         showToast('过滤器已更新', 'success');
     } else {
         if (settings.filters.length >= 10) {
-            showToast('过滤器数量已达上限（10个）', 'warning');
+            showToast('过滤器数量已达上限（10 个）', 'warning');
             return;
         }
         const newFilter = {
@@ -1816,7 +1843,7 @@ function saveFilterInput() {
         renderFilters();
         renderView();
         updateSidebarHighlight();
-        showToast('过滤器添加成功', 'success');
+        showToast('已新建过滤器', 'success');
     }
 }
 

@@ -47,6 +47,8 @@ function _playViewSwitchTransition(fxCtx, prevView, newView) {
 
 function switchView(view) {
     const prevView = currentView;
+    // FR-01-4：视图切换后撤销栈失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
     if (currentDetailTaskId) {
         closeTaskDetailPanel();
     }
@@ -66,7 +68,7 @@ function switchView(view) {
     currentView = view;
     const mainHeader = document.querySelector('#main-content > header');
     if (mainHeader) {
-        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync') {
+        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync' || view === 'trash') {
             mainHeader.classList.add('hidden');
         } else {
             mainHeader.classList.remove('hidden');
@@ -228,6 +230,13 @@ function updateViewButtons() {
         else taskCfgBtn.classList.add('hidden');
     }
 
+    // FR-03 批量管理入口：仅任务视图（非归档）显示；多选态下由 body.batch-select-mode CSS 整体隐藏头部按钮
+    const batchBtn = document.getElementById('batch-select-btn');
+    if (batchBtn) {
+        if (currentView === 'task' && currentListId !== '__archived__') batchBtn.classList.remove('hidden');
+        else batchBtn.classList.add('hidden');
+    }
+
     // 象限/日程/周/月 视图配置按钮：仅各自视图显示
     [
         { id: 'quadrant-config-btn', view: 'quadrant' },
@@ -301,6 +310,14 @@ function renderView() {
         case 'calendarsync':
             if (typeof renderCalendarSyncView === 'function') {
                 renderCalendarSyncView(container);
+            } else {
+                renderTaskListView(container);
+            }
+            break;
+        case 'trash':
+            // FR-02：回收站视图（自带工具栏与返回按钮，主头部已隐藏）
+            if (typeof renderTrashView === 'function') {
+                renderTrashView(container);
             } else {
                 renderTaskListView(container);
             }

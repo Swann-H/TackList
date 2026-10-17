@@ -47,27 +47,78 @@ function getWeekDisplayDays() {
     return (v === '1' || v === '3' || v === '5' || v === 'workweek') ? v : '7';
 }
 
-// 计算周视图窗口：{ start, days, step }
-//   start —— 窗口首日 00:00（渲染 N 列即以此为第一天）
-//   days  —— 窗口天数
-//   step  —— 翻页步长（navigateWeek 每次移动的天数）
+// 连续 N 天（自 start 起）的日期数组，均为 00:00
+function _buildDateRange(start, n) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i);
+        d.setHours(0, 0, 0, 0);
+        out.push(d);
+    }
+    return out;
+}
+
+// 某周（以 weekStart 为第一天）内的全部工作日，按时间先后顺序。
+// 判定一律走 data.js:isWorkday()（节假日与调休数据优先，其次周末），禁止 getDay() 判周末。
+// 因此结果可能是 0~7 天且不连续：调休补班的周六/周日会进来，法定放假的工作日会剔除。
+// 当年节假日数据缺失时 isWorkday 退化为「非周六日」，结果即常规周一~周五（自然降级，不报错）。
+function getWeekWorkdays(weekStart) {
+    const out = [];
+    if (typeof isWorkday !== 'function') return out;
+    const start = new Date(weekStart);
+    start.setHours(0, 0, 0, 0);
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        if (isWorkday(d)) out.push(d);
+    }
+    return out;
+}
+
+// 计算周视图窗口：{ start, dates, days, step, mode, monday }
+//   start  —— 窗口锚点：周类模式为「周起始日」，滚动模式为窗口首日（= 锚定日）
+//   dates  —— 实际渲染的日期数组（00:00）。'workweek' 下可能非连续、天数不固定（0~7）；
+//             其余模式即 start 起的连续 N 天
+//   days   —— dates.length
+//   step   —— 翻页步长（navigateWeek 每次移动的天数）
+//   mode   —— 归一化后的显示天数模式（进缓存键，区分同为 N 天的不同窗口语义）
+//   monday —— 本次使用的周起始日标志（预热相邻窗口时复用，避免重复读设置）
 //
 // start 与 step 刻意分离，因为两类模式的锚点语义不同：
 //   · '7' / 'workweek'：currentDate 只是「落在本周的任意一天」，窗口起点由周起始日推导，
 //     翻页按整周走（step=7）。
 //   · '1' / '3' / '5'：滚动窗口，currentDate 本身就是窗口起点，翻页走 N 天（step=N）。
 //     故 5 天模式 =「今天起未来 5 天」。
-// 工作周恒为周一~周五：第二个参数强制 true，不受「周起始日」设置影响。
+// 'workweek' 随「周开始于」设置走（不再强制周一起），并按当周实际工作日展开。
 function getWeekViewRange(anchorDate, mode, weekStartsOnMonday) {
     const d0 = new Date(anchorDate);
     d0.setHours(0, 0, 0, 0);
+    const monday = !!weekStartsOnMonday;
     switch (mode) {
-        case '1': return { start: d0, days: 1, step: 1 };
-        case '3': return { start: d0, days: 3, step: 3 };
-        case '5': return { start: d0, days: 5, step: 5 };
-        case 'workweek': return { start: getWeekStartDate(d0, true), days: 5, step: 7 };
-        default: return { start: getWeekStartDate(d0, weekStartsOnMonday), days: 7, step: 7 };
+        case '1': return { start: d0, dates: [new Date(d0)], days: 1, step: 1, mode: '1', monday };
+        case '3': return { start: d0, dates: _buildDateRange(d0, 3), days: 3, step: 3, mode: '3', monday };
+        case '5': return { start: d0, dates: _buildDateRange(d0, 5), days: 5, step: 5, mode: '5', monday };
+        case 'workweek': {
+            const ws = getWeekStartDate(d0, monday);
+            const dates = getWeekWorkdays(ws);
+            return { start: ws, dates, days: dates.length, step: 7, mode: 'workweek', monday };
+        }
+        default: {
+            const ws = getWeekStartDate(d0, monday);
+            return { start: ws, dates: _buildDateRange(ws, 7), days: 7, step: 7, mode: '7', monday };
+        }
     }
+}
+
+// 周窗口的「中间日」（用于底部导航栏年月）：
+// 优先取实际渲染日期的中位 —— 工作周可能只有 3 天且非连续，按「起点 + days/2」会把标题算到上一周
+// （例：10/8–10/10 三天工作周，起点是 10/5 周一，中点 10/7 会让标题显示错误月份）。
+// 连续窗口下 dates[mid] 与旧口径 start + floor((n-1)/2) 完全等价，无回归。
+function getWeekRangeAnchorDate(range) {
+    const dates = range && range.dates;
+    if (Array.isArray(dates) && dates.length > 0) return dates[Math.floor((dates.length - 1) / 2)];
+    return getWeekAnchorDate(range ? range.start : new Date(), range ? range.days : 7);
 }
 
 // 周视图配置面板（右侧滑出）
@@ -241,8 +292,10 @@ function buildWeekAllDayTaskItemHtml(task) {
 //    直接丢弃整周网格，导致周视图一片空白。
 // 2. 缓存签名覆盖所有影响 getTasksForDate 结果的筛选/设置状态（清单、标签、
 //    过滤器、周起始日、显示已完成、隐藏外部日历、当天日期）；签名变化即整体丢弃。
-//    显示天数（displayDays）**不**进签名：它已体现在缓存键里，不同模式各自独立缓存，
+//    显示天数（displayDays）**不**进签名：它已体现在缓存键里（mode 入键），不同模式各自独立缓存，
 //    切换模式反而能命中旧缓存，无需清空。
+//    ⚠️ 节假日/调休数据**必须**进签名：'workweek' 的日期集合由 isWorkday() 推导，
+//    用户在「节假日与调休」里增删调休日后，若签名不变会继续命中旧窗口（列数/列日期不刷新）。
 // 3. 任务数据的结构性变更（增删/改期/导入/多标签页同步/服务端刷新/版本冲突合并）
 //    由 invalidateWeekViewCache() 主动失效，与 invalidateScheduleFilterCache、
 //    invalidateTaskListGroupsCache 同一约定（见 data.js 各写入漏斗）。
@@ -250,7 +303,7 @@ function buildWeekAllDayTaskItemHtml(task) {
 //    若用户在预热前就翻页，目标窗口按需计算，行为与预热前一致（无功能回退）。
 // 5. 缓存值只持有任务对象引用（不复制），单条开销极小；仍设上限并按插入顺序淘汰，
 //    避免长会话下跨窗口浏览导致 Map 无限增长。
-let _weekAggCache = new Map();   // "rangeStartStr#days" -> 窗口聚合结果
+let _weekAggCache = new Map();   // "mode:rangeStart#days" -> 窗口聚合结果
 let _weekAggSig = null;          // 当前缓存对应的筛选签名
 let _weekPrewarmTimer = null;    // 相邻周预热定时器（重渲染前清除，避免定时器堆积）
 const WEEK_AGG_CACHE_MAX = 15;   // 缓存条目上限（约 ±7 周）
@@ -258,6 +311,23 @@ const WEEK_AGG_CACHE_MAX = 15;   // 缓存条目上限（约 ±7 周）
 // 周起始日：直接复用 data.js 的全局 getWeekStartDate(date, weekStartsOnMonday)
 // （pomodoro.js / tasks.js 亦共用），不在此另建同名函数，避免覆盖既有实现。
 // 签名与语义：周一起始时，周日归属「上一个周一」开始的周，与原内联算法一致。
+
+// 节假日/调休数据指纹：按「年份 + 该年 holidays/workdays 的日期键」拼接。
+// 只要任何一天的类型（放假↔调休上班）发生变化，键集合随之变化 → 指纹变化 → 缓存整体丢弃。
+// 只改节日名称不改日期键时指纹不变（名称不影响 isWorkday 判定），属预期。
+function _getHolidayFingerprint() {
+    try {
+        const data = (typeof holidayData === 'object' && holidayData) ? holidayData : {};
+        return Object.keys(data).sort().map(y => {
+            const yd = data[y] || {};
+            const hk = Object.keys(yd.holidays || {}).sort().join(',');
+            const wk = Object.keys(yd.workdays || {}).sort().join(',');
+            return y + ':' + hk + '|' + wk;
+        }).join(';');
+    } catch (e) {
+        return '';
+    }
+}
 
 // 缓存签名：任一影响取数结果的状态变化都会改变签名，从而整体丢弃旧缓存
 function _getWeekAggSig() {
@@ -269,7 +339,8 @@ function _getWeekAggSig() {
         settings.weekStart === 'monday' ? 'mon' : 'sun',
         getWeekConfig().showCompleted !== false ? '1' : '0',
         (typeof shouldHideExternalTasks === 'function' && shouldHideExternalTasks()) ? '1' : '0',
-        new Date().toDateString() // 跨零点后「今天」基准与特殊时间筛选边界变化
+        new Date().toDateString(), // 跨零点后「今天」基准与特殊时间筛选边界变化
+        _getHolidayFingerprint()   // 调休/放假数据变化 → 工作周的日期集合随之变化
     ].join('|');
 }
 
@@ -279,27 +350,27 @@ function invalidateWeekViewCache() {
     _weekAggSig = null;
 }
 
-// 取某个窗口的聚合结果：days 天 × { 全天任务、定时任务、时间块布局 } + hasAnyTasks。
-// 命中缓存直接返回；未命中才做 days 次 getTasksForDate（O(days × 任务数)，大数据量下
+// 取某个窗口的聚合结果：dates 中的每一天 × { 全天任务、定时任务、时间块布局 } + hasAnyTasks。
+// 命中缓存直接返回；未命中才做 N 次 getTasksForDate（O(N × 任务数)，大数据量下
 // 是周视图渲染的主要开销）与 layoutDayTasks，并把结果（含空窗口）写入缓存。
+// 入参改为窗口对象（getWeekViewRange 的返回值）：'workweek' 的日期集合非连续、天数不固定，
+// 无法再用「起点 + 天数」推导，必须显式传 dates。
 // 注意：时间块布局依赖 weekViewHourStart / hourHeight，二者为常量（6 / 60，全项目无赋值点），
 // 因此无需纳入签名；若将来做成可配置，必须一并加入 _getWeekAggSig。
-function getWeekAggregate(rangeStart, days) {
-    const dayCount = (typeof days === 'number' && days > 0) ? days : 7;
+function getWeekAggregate(range) {
+    const weekDays = (range && Array.isArray(range.dates)) ? range.dates : [];
+    const dayCount = weekDays.length;
     const sig = _getWeekAggSig();
     if (sig !== _weekAggSig) {
         _weekAggCache.clear();
         _weekAggSig = sig;
     }
 
-    const weekDays = [];
-    for (let i = 0; i < dayCount; i++) {
-        const d = new Date(rangeStart);
-        d.setDate(d.getDate() + i);
-        weekDays.push(d);
-    }
-    // 缓存键 = 窗口起点 + 天数（见文件头「设计要点 1」为何必须带天数）
-    const cacheKey = formatDate(weekDays[0]) + '#' + dayCount;
+    // 缓存键 = 模式 + 窗口锚点 + 天数（见文件头「设计要点 1」为何必须带天数）
+    // 模式入键：同为「某起点 + N 天」时，工作周与滚动窗口的日期集合可能不同（非连续），
+    // 仅靠起点与天数不足以区分。
+    const anchor = (range && range.start) ? range.start : weekDays[0];
+    const cacheKey = (range && range.mode ? range.mode : '7') + ':' + formatDate(anchor) + '#' + dayCount;
     const cached = _weekAggCache.get(cacheKey);
     if (cached) return cached;
 
@@ -332,16 +403,20 @@ function getWeekAggregate(rangeStart, days) {
 
 // 预热相邻窗口（±1 个窗口步长）：延迟到本次渲染结束后执行，只填缓存不动 DOM。
 // 步长随模式变化（7 天/工作周 = 7 天；1/3/5 天 = 对应天数），故不能写死 7。
-function _prewarmAdjacentWeeks(rangeStart, days, stepDays) {
+// 相邻窗口一律经 getWeekViewRange 重算：工作周在相邻周的工作日集合可能不同
+// （例如下周有调休补班，列数与列日期都变），直接沿用本窗口的 dates 会预热出错误结果。
+function _prewarmAdjacentWeeks(range) {
     if (_weekPrewarmTimer) { clearTimeout(_weekPrewarmTimer); _weekPrewarmTimer = null; }
-    const d = (typeof days === 'number' && days > 0) ? days : 7;
-    const s = (typeof stepDays === 'number' && stepDays > 0) ? stepDays : d;
+    if (!range || !range.start) return;
+    const s = (typeof range.step === 'number' && range.step > 0) ? range.step : (range.days || 7);
+    const mode = range.mode || '7';
+    const monday = !!range.monday;
     _weekPrewarmTimer = setTimeout(() => {
         _weekPrewarmTimer = null;
         [-1, 1].forEach(k => {
-            const ws = new Date(rangeStart);
-            ws.setDate(ws.getDate() + k * s);
-            getWeekAggregate(ws, d); // 命中缓存则为空操作
+            const anchor = new Date(range.start);
+            anchor.setDate(anchor.getDate() + k * s);
+            getWeekAggregate(getWeekViewRange(anchor, mode, monday)); // 命中缓存则为空操作
         });
     }, 120);
 }
@@ -450,9 +525,17 @@ function renderWeekView(container) {
     const mobile = typeof isMobileView === 'function' && isMobileView();
     const mode = mobile ? '7' : getWeekDisplayDays();
     const range = getWeekViewRange(currentDate, mode, settings.weekStart === 'monday');
+    const weekDays = range.dates;
+
+    // 整周没有工作日（如整周放假 + 工作周模式）：没有可渲染的列，
+    // 直接落到居中空态（见 _renderWeekNoWorkday），不再画一堆空列。
+    if (weekDays.length === 0) {
+        _renderWeekNoWorkday(container, range);
+        return;
+    }
+
     // 窗口聚合（含空窗口）统一走缓存：命中则零开销复用，未命中才计算并落缓存
-    const agg = getWeekAggregate(range.start, range.days);
-    const weekDays = agg.weekDays;
+    const agg = getWeekAggregate(range);
     const allDayTasks = agg.allDayTasks;
     const layouts = agg.layouts;
     const hasAnyTasks = agg.hasAnyTasks;
@@ -462,16 +545,18 @@ function renderWeekView(container) {
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     
-    // 左上角标签：周类模式（7 天 / 工作周）显示周序号；滚动模式（1/3/5 天）显示窗口首日 M/D
-    // —— 「第 N 周」对滚动窗口没有意义，首日日期更便于定位。
-    const isWeekLike = (mode === '7' || mode === 'workweek');
-    const cornerLabel = isWeekLike
-        ? `${getWeekNumber(weekDays[0], settings.weekStart === 'monday')}周`
-        : `${range.start.getMonth() + 1}/${range.start.getDate()}`;
+    // 左上角标签：所有模式统一显示周序号（与 7 天 / 工作周一一致），取自窗口最左侧日期所在周。
+    // 滚动模式（1/3/5 天）的 start 即窗口首日，故「最左侧日期」= range.start，无需另取 dates[0]。
+    // 周类模式按「周起始日」算而非首个工作日：同一周内周序号恒定，不随假期推移漂移。
+    const cornerLabel = `${getWeekNumber(range.start, settings.weekStart === 'monday')}周`;
     
     const hourHeight = 60;
     const totalHours = weekViewHourEnd - weekViewHourStart;
-    
+
+    // 周末底纹：工作周模式下恒不画 —— 该模式里每一列都是工作日（含调休补班的周六/周日），
+    // 若按 getDay() 打灰底，补班日会被画成休息日，与模式语义冲突。其余模式保持原样。
+    const weekendBg = (mode !== 'workweek');
+
     let allDayHtml = '';
     allDayHtml += '<div class="flex-shrink-0 flex week-header-sticky" style="position: sticky; top: 0; z-index: 15;">';
     allDayHtml += `<div class="flex-shrink-0" style="width: 52px;"><div class="text-xs text-theme-muted text-right pr-2 pt-1">${cornerLabel}</div></div>`;
@@ -479,7 +564,7 @@ function renderWeekView(container) {
     weekDays.forEach(date => {
         const dateStr = formatDate(date);
         const isToday = dateStr === todayStr;
-        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        const isWeekend = weekendBg && (date.getDay() === 0 || date.getDay() === 6);
         const dayAllDay = allDayTasks[dateStr] || [];
         const collapsed = weekAllDayCollapsed[dateStr] !== false;
         const visibleTasks = collapsed ? dayAllDay.slice(0, 2) : dayAllDay;
@@ -523,22 +608,26 @@ function renderWeekView(container) {
         timeGridHtml += `<div class="absolute left-0 right-0 border-t border-dashed border-theme" style="top: ${(h - weekViewHourStart) * hourHeight + 30}px; opacity: 0.4;"></div>`;
     }
     
-    if (isCurrentWeek(weekDays)) {
-        const topPx = (currentHour - weekViewHourStart) * hourHeight + (currentMinute / 60) * hourHeight;
-        if (currentHour >= weekViewHourStart && currentHour < weekViewHourEnd) {
-            timeGridHtml += `<div class="absolute left-0 right-0 z-10 pointer-events-none" style="top: ${topPx}px;">
+    // 当前时刻红线：节点恒定输出（不可见时 display:none），位置与显隐之后由
+    // _updateWeekNowLine() 单独维护 —— 只改 style.top / display，不重渲染网格，
+    // 因此日程块、滚动位置、全天区都不会闪动。
+    // 窗口日期写进 data-week-dates：定时刷新时要判断「今天是否仍在窗口内」（跨天/翻页）。
+    const nowTopPx = (currentHour - weekViewHourStart) * hourHeight + (currentMinute / 60) * hourHeight;
+    const nowVisible = isCurrentWeek(weekDays) && currentHour >= weekViewHourStart && currentHour < weekViewHourEnd;
+    timeGridHtml += `<div id="week-now-line" class="absolute left-0 right-0 z-10 pointer-events-none"
+                          data-week-dates="${weekDays.map(formatDate).join(',')}"
+                          data-hour-height="${hourHeight}"
+                          style="top: ${nowTopPx}px; display: ${nowVisible ? 'block' : 'none'};">
                 <div class="flex items-center">
                     <div class="w-2 h-2 rounded-full bg-red-500 -ml-1"></div>
                     <div class="flex-1 border-t-2 border-red-500" style="border-style: dashed;"></div>
                 </div>
             </div>`;
-        }
-    }
     
     weekDays.forEach(date => {
         const dateStr = formatDate(date);
         const isToday = dateStr === todayStr;
-        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        const isWeekend = weekendBg && (date.getDay() === 0 || date.getDay() === 6);
         // 时间块布局已在聚合层算好并随周缓存复用（见 getWeekAggregate）
         const columnTasks = layouts[dateStr] || [];
         
@@ -610,9 +699,9 @@ function renderWeekView(container) {
         </div>`;
     
     // 底部导航栏标题：与其他视图统一为「年 + 月」表达，取窗口「中间日」所在月。
-    // range.start 即窗口首日（周类模式为周起始日，滚动模式为锚定日）。
+    // 取实际渲染日期的中位（getWeekRangeAnchorDate），连续窗口下与旧的「起点 + days/2」等价。
     // 不再显示「8月 - 9月」跨月形式：标题宽度恒定，_placeWeekEmptyHint() 的落位不再随标题长度抖动。
-    const navAnchor = getWeekAnchorDate(range.start, range.days);
+    const navAnchor = getWeekRangeAnchorDate(range);
     const navYear = navAnchor.getFullYear();
     const navMonth = navAnchor.getMonth();
 
@@ -644,7 +733,99 @@ function renderWeekView(container) {
     }
 
     // 相邻窗口预热：延迟填充 ±1 个窗口步长缓存，翻页时直接命中（只填缓存，不触碰 DOM）
-    _prewarmAdjacentWeeks(range.start, range.days, range.step);
+    _prewarmAdjacentWeeks(range);
+
+    // 当前时刻红线自刷新（重渲染换掉了红线节点，定时器随之重建）
+    startWeekNowLineTimer();
+}
+
+// ==================== 当前时刻红线（轻量自刷新） ====================
+// 背景：红线位置原本只在渲染那一刻算一次，页面开几小时后它仍停在原处 —— 没有数据变更就不会
+// 触发 renderView，红线与真实时间逐渐脱节。
+// 方案：独立定时器只改红线的 style.top / display，不触碰网格其它节点 ——
+// 日程块、全天区、滚动位置全部保持原样（用户明确要求：除红线外不得发生闪动）。
+// 频率 5 分钟（要求「至少半小时一次」）：60px/小时下最大偏差 5px，肉眼无感。
+const WEEK_NOW_LINE_INTERVAL_MS = 5 * 60 * 1000;
+let _weekNowLineTimer = null;
+
+// 重算红线位置与显隐。返回 false 表示红线节点已不存在（切走视图 / 渲染为空态），调用方应停表。
+function _updateWeekNowLine() {
+    const line = document.getElementById('week-now-line');
+    if (!line) return false;
+    const dates = (line.dataset.weekDates || '').split(',');
+    const hourHeight = parseFloat(line.dataset.hourHeight) || 60;
+    const now = new Date();
+    // 「今天是否还在窗口内」：跨天或翻页后窗口可能不再包含今天 → 隐藏，而不是停在错误位置
+    const inWindow = dates.indexOf(formatDate(now)) >= 0;
+    const h = now.getHours();
+    const m = now.getMinutes();
+    if (!inWindow || h < weekViewHourStart || h >= weekViewHourEnd) {
+        line.style.display = 'none';
+        return true;
+    }
+    line.style.top = ((h - weekViewHourStart) * hourHeight + (m / 60) * hourHeight) + 'px';
+    line.style.display = 'block';
+    return true;
+}
+
+function stopWeekNowLineTimer() {
+    if (_weekNowLineTimer) { clearInterval(_weekNowLineTimer); _weekNowLineTimer = null; }
+}
+
+// 每次渲染完周视图网格调用：先清旧表再起新表，避免重渲染叠加出多个定时器。
+function startWeekNowLineTimer() {
+    stopWeekNowLineTimer();
+    _weekNowLineTimer = setInterval(() => {
+        if (!_updateWeekNowLine()) stopWeekNowLineTimer();
+    }, WEEK_NOW_LINE_INTERVAL_MS);
+    _bindWeekNowLineVisibility();
+}
+
+// 后台标签页的 setInterval 会被浏览器节流（与 countdown.js 的跨天检查同口径），
+// 故回到前台时立即补算一次。用 flag 守卫：init() 会被导入重复调用。
+let _weekNowLineVisibilityBound = false;
+function _bindWeekNowLineVisibility() {
+    if (_weekNowLineVisibilityBound) return;
+    _weekNowLineVisibilityBound = true;
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) _updateWeekNowLine();
+    });
+}
+
+// 工作周模式的「整周没有工作日」空态（如整周法定假期，或全部调休为休息日）。
+// 与「有工作日但没任务」区分开：后者保留完整网格并可点击空白新建（见上方 emptyHintHtml），
+// 前者没有任何可渲染的列，画一堆空列没有意义，故整屏居中说明 + 一键切回 7 天。
+// 底部导航栏照常渲染：用户仍可翻到下一周或跳转月份。
+function _renderWeekNoWorkday(container, range) {
+    // 没有网格就没有红线：停掉自刷新（否则定时器会一直空转）
+    stopWeekNowLineTimer();
+    // 年月锚点：本窗口无日期可取，退回「周起始日 + 3 天」（与 7 天窗口的中间日同口径）
+    const navAnchor = getWeekAnchorDate(range.start, 7);
+    container.innerHTML = `
+        <div class="h-full flex items-center justify-center">
+            <!-- 背景走 .bg-theme-secondary（项目自定义类，绑定 --bg-secondary 变量）：
+                 bg-theme-secondary/80 这类透明度修饰符对自定义类不生成样式（实测导航条同此），
+                 空态卡片位于页面正中、没有实底会显得像浮字，故用不带修饰符的版本。 -->
+            <div class="flex flex-col items-center gap-3 px-6 py-8 rounded-xl bg-theme-secondary backdrop-blur-md shadow-lg text-center max-w-[92%]">
+                <i class="fas fa-umbrella-beach text-2xl text-theme-secondary"></i>
+                <div class="text-base font-medium text-theme-primary">本周没有工作日</div>
+                <div class="text-sm text-theme-secondary">当前为「工作周」模式，本整周均为休息日（含节假日与调休）。</div>
+                <button type="button" onclick="switchWeekDisplayDays('7')"
+                        class="mt-1 px-4 py-2 rounded-lg border border-theme text-sm text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition">
+                    切换到 7 天视图
+                </button>
+            </div>
+        </div>`;
+    renderNavTimeBar({ year: navAnchor.getFullYear(), month: navAnchor.getMonth(), prev: 'navigateWeek(-1)', next: 'navigateWeek(1)' });
+}
+
+// 切换到指定「显示天数」并立即渲染（空态内的一键切回入口）。
+// 写入目标与 onWeekConfigChange 一致：有 per-list 偏好时写偏好，否则写全局配置。
+function switchWeekDisplayDays(value) {
+    const target = _ensureListViewPrefs('week') || settings.weekConfig;
+    target.displayDays = value;
+    saveData();
+    renderView();
 }
 
 function layoutDayTasks(dayTasks, hourHeight) {
@@ -731,6 +912,7 @@ function layoutDayTasks(dayTasks, hourHeight) {
 }
 
 function getTaskDurationMinutes(task) {
+    // 任务时长统一由结束时间推导：有 endTime 用起止差值，否则回退设置默认值
     if (task.endTime) {
         const start = new Date(task.startTime);
         const end = new Date(task.endTime);
@@ -1585,7 +1767,7 @@ function _qtpCurrentContext() {
     if (typeof currentView !== 'undefined' && currentView === 'week') {
         const mode = (typeof isMobileView === 'function' && isMobileView()) ? '7' : getWeekDisplayDays();
         const r = getWeekViewRange(currentDate, mode, _qtpWeekStartsOnMonday());
-        d = getWeekAnchorDate(r.start, r.days);
+        d = getWeekRangeAnchorDate(r);
     }
     return { year: d.getFullYear(), month: d.getMonth() };
 }
@@ -1664,7 +1846,7 @@ function jumpToMonth(year, month) {
             && typeof showToast === 'function') {
             showToast(`${year}年${month + 1}月暂无任务，已定位到 `
                 + `${_scheduleNavMonthLabel.substring(0, 4)}年${parseInt(_scheduleNavMonthLabel.substring(5), 10)}月`,
-                'info', 3000);
+                'info');
         }
         return;
     }

@@ -9,6 +9,24 @@ let _cpDelToken = null;   // 已武装的识别块（双退格整删用）：{ s
 let _cpDraft = null;      // 未完成草稿：误触遮罩空白关闭面板时保留（文本+光标），下次呼出恢复；
                           // Esc 关闭 / Enter 创建成功后清空（主动放弃 / 已消费）
 
+// ==================== 模糊时间偏好配置 ====================
+// 时段词：word=触发词, key=settings.commandTimePrefs 字段名, min/max=可调区间(分钟,硬约束),
+//         defaultMin=旧数据缺失该字段时的兜底默认值。
+// 已过处理：当天该偏好时间已过 → 同日区间内取当前时刻之后下一个 30 分钟槽点；区间全过 → 次日偏好值。
+// 冲突检测：按 30 分钟步长检测同日同时分任务，区间上限仍冲突 → 回偏好起点允许冲突(标记 conflict)。
+// ⚠️ max=1440 表示「24:00」——它是区间右端点的文案边界，不是可放置时刻：
+//    时刻 1440 会回绕到次日 00:00，故实际可放置/可选的最大分钟数取 min(max, 1439)（见 resolveFuzzyTimeConflict / openFuzzyTimePicker）。
+const FUZZY_TIME_WORDS = [
+    { word: '上午', key: 'morning',   min: 360,  max: 720,  defaultMin: 540  },  // 6:00–12:00
+    { word: '中午', key: 'noon',      min: 690,  max: 810,  defaultMin: 720  },  // 11:30–13:30
+    { word: '下午', key: 'afternoon', min: 720,  max: 1080, defaultMin: 900  }, // 12:00–18:00
+    { word: '晚上', key: 'evening',   min: 1080, max: 1440, defaultMin: 1140 }  // 18:00–24:00
+];
+// 相对时间词：now + settings.commandTimePrefs.laterMinutes（仅当未识别到任何日期/时间时生效）
+const FUZZY_RELATIVE_WORDS = ['稍后', '等等', '一会儿'];
+// 顺延/冲突步长（分钟）
+const FUZZY_TIME_STEP = 30;
+
 // ==================== 命令面板 UI ====================
 
 function openCommandPalette() {
@@ -46,9 +64,23 @@ function openCommandPalette() {
         </div>
         <div id="command-palette-results" class="max-h-72 overflow-y-auto"></div>
         <div id="command-palette-hint" class="px-5 py-3 text-xs text-theme-secondary border-t border-theme flex items-center gap-4">
-            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Enter</kbd> 新建任务</span>
-            <span><kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Esc</kbd> 关闭面板</span>
-            <span class="ml-auto">支持自动识别日期时间 / ~清单 / #标签 / !优先级 / |详情</span>
+            <div class="flex items-start gap-4 flex-shrink-0">
+                <span class="flex flex-col items-center gap-1">
+                    <kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Enter</kbd>
+                    <span id="cmd-hint-enter">新建任务</span>
+                </span>
+                <span class="flex flex-col items-center gap-1">
+                    <kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">Esc</kbd>
+                    <span>关闭面板</span>
+                </span>
+            </div>
+            <div class="ml-auto min-w-0 flex flex-col items-end gap-1 text-right">
+                <span id="cmd-hint-default">${_cmdHintChip('select', '/select 批量管理')} · ${_cmdHintChip('s', '/s 搜索任务')} · ~清单 · #标签 · !优先级 · |详情</span>
+                <span id="cmd-hint-search" class="hidden"><span class="flex flex-col items-end gap-1">
+                    <span>搜索筛选：~清单 · #标签 · is:已完成/未完成/今天/逾期/无日期</span>
+                    <span>${_cmdHintChip('select', '/select 批量管理')}</span>
+                </span></span>
+            </div>
         </div>
     `;
 
@@ -62,8 +94,8 @@ function openCommandPalette() {
     const input = document.getElementById('command-palette-input');
     input.focus();
 
-    // 打开时重建搜索索引，保证数据新鲜（一次 O(n)，后续按键直接查表）
-    if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
+    // 脏则重建（C8-1）：数据变更经 saveData 统一置脏，不脏直接复用，避免每次打开全量重建
+    if (typeof ensureSearchIndex === 'function') ensureSearchIndex();
 
     input.addEventListener('keydown', handleCommandPaletteKeydown);
     input.addEventListener('input', handleCommandPaletteInput);
@@ -118,6 +150,16 @@ function handleCommandPaletteKeydown(e) {
 
     if (e.key === 'Escape') {
         e.preventDefault();
+        // FR-08-3：/s 搜索模式已有查询词时，第一次 Esc 仅清空查询词回到 /s 提示态
+        // （注意必须匹配 '/s ' 前缀而非 startsWith('/s')，否则 /settings 之类输入会被误判）
+        const v = input.value;
+        if (v.startsWith('/s ') && v.slice(3).trim() !== '') {
+            input.value = '/s ';
+            input.focus();
+            _resetSearchLazyState();
+            handleCommandPaletteInput({});
+            return;
+        }
         closeCommandPalette();
         return;
     }
@@ -149,6 +191,19 @@ function handleCommandPaletteKeydown(e) {
             }
             return;
         }
+    }
+
+    // FR-08-3 键盘全导航：/s 搜索模式下 ↑↓ 在结果间移动高亮（候选面板激活时上方分支已 return）
+    const _vRaw = input.value;
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && (_vRaw.startsWith('/s ') || _vRaw.trim() === '/s')) {
+        if (_lastSearchResults.length > 0) {
+            e.preventDefault();
+            const n = _lastSearchResults.length;
+            if (_searchActiveIndex === -1) _searchActiveIndex = e.key === 'ArrowDown' ? 0 : n - 1;
+            else _searchActiveIndex = (_searchActiveIndex + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+            _updateSearchActiveHighlight();
+        }
+        return;
     }
 
     // 双退格整删：针对已识别信息（!优先级 / ~清单 / #标签 / 日期时间文字）。
@@ -201,6 +256,9 @@ function handleCommandPaletteInput(e) {
 
     const value = input.value.trim();
 
+    // 右下角语法提示两态切换（默认创建语法 ↔ 搜索筛选语法）
+    _updateCommandPaletteHint(value);
+
     // 候选面板实时刷新（不走防抖，保证导航与输入的即时反馈）
     updateCommandPaletteCandidates();
 
@@ -212,14 +270,18 @@ function handleCommandPaletteInput(e) {
     const resultsContainer = document.getElementById('command-palette-results');
 
     if (!value) {
-        resultsContainer.innerHTML = '';
+        // FR-08-6：空输入展示搜索历史（无历史维持空白）
+        _resetSearchLazyState();
+        resultsContainer.innerHTML = renderSearchHistory();
         return;
     }
 
     // /s 搜索模式：防抖 150ms，避免连续按键全量扫描
     if (value.startsWith('/s ') || value === '/s') {
         const query = value.slice(3).trim();
+        _searchActiveIndex = -1; // 输入变更即复位键盘高亮，Enter 不会取到过期下标
         if (!query) {
+            _resetSearchLazyState();
             resultsContainer.innerHTML = renderSearchHint();
             return;
         }
@@ -227,9 +289,37 @@ function handleCommandPaletteInput(e) {
             const curInput = document.getElementById('command-palette-input');
             // 防抖期间用户可能已清空或切换输入，校验当前值仍为搜索模式
             if (!curInput || !curInput.value.trim().startsWith('/s')) return;
-            const results = searchTasks(query);
-            resultsContainer.innerHTML = renderSearchResults(results, query);
+            const r = searchTasks(query);
+            _setSearchLazyState(query, r);
+            resultsContainer.innerHTML = renderSearchResults(r.results, query, r.total);
         }, 150);
+        return;
+    }
+
+    // FR-03 /select 多选模式：搜索结果批量选中（与 /s 共用 searchTasks 索引与渲染）
+    if (value.startsWith('/select ') || value === '/select') {
+        const query = value.slice(8).trim();
+        _searchActiveIndex = -1;
+        if (!query) {
+            _resetSearchLazyState();
+            resultsContainer.innerHTML = '<div class="px-5 py-6 text-center text-theme-muted text-sm">' +
+                '<i class="fas fa-list mr-2"></i>输入关键词，按 Enter 将匹配任务全部选中并进入批量管理' +
+                '</div>';
+            return;
+        }
+        _commandPaletteDebounceTimer = setTimeout(() => {
+            const curInput = document.getElementById('command-palette-input');
+            if (!curInput || !curInput.value.trim().startsWith('/select')) return;
+            const r = searchTasks(query);
+            _setSearchLazyState(query, r);
+            resultsContainer.innerHTML = renderSearchResults(r.results, query, r.total);
+        }, 150);
+        return;
+    }
+
+    // FR-01/FR-02 斜杠指令（/undo /撤销 /trash /回收站）：仅显示指令提示，不做 NLP 预览
+    if (_isSlashDirectiveInput(value)) {
+        resultsContainer.innerHTML = renderSlashDirectiveHint(_matchSlashDirective(value));
         return;
     }
 
@@ -237,8 +327,38 @@ function handleCommandPaletteInput(e) {
     _commandPaletteDebounceTimer = setTimeout(() => {
         const curInput = document.getElementById('command-palette-input');
         if (!curInput || curInput.value.trim().startsWith('/s')) return;
+        if (_isSlashDirectiveInput(curInput.value)) return; // FR-01/FR-02 斜杠指令：提示已渲染，跳过 NLP 预览
         renderCommandPalettePreview();
     }, 120);
+}
+
+// FR-01/FR-02 斜杠指令工具：完整输入命中返回指令名，否则 null
+function _matchSlashDirective(value) {
+    const v = (value || '').trim().toLowerCase();
+    if (v === '/undo' || v === '/撤销') return 'undo';
+    if (v === '/trash' || v === '/回收站') return 'trash';
+    return null;
+}
+
+// 输入过程是否命中斜杠指令前缀（用于拦截 NLP 预览与候选面板）
+function _isSlashDirectiveInput(value) {
+    const v = (value || '').trim().toLowerCase();
+    return v.startsWith('/undo') || v.startsWith('/撤销')
+        || v.startsWith('/trash') || v.startsWith('/回收站');
+}
+
+function renderSlashDirectiveHint(directive) {
+    if (directive === 'undo') {
+        return `<div class="px-5 py-6 text-center text-theme-secondary text-sm">
+            <i class="fas fa-rotate-left mr-2"></i>按 Enter 撤销最近一次操作（也可用 Ctrl+Z）
+        </div>`;
+    }
+    if (directive === 'trash') {
+        return `<div class="px-5 py-6 text-center text-theme-secondary text-sm">
+            <i class="fas fa-trash mr-2"></i>按 Enter 打开回收站
+        </div>`;
+    }
+    return renderSearchHint();
 }
 
 function executeCommandPalette() {
@@ -246,17 +366,51 @@ function executeCommandPalette() {
     const value = input.value.trim();
     if (!value) return;
 
-    // /s 搜索模式 - 打开第一个搜索结果（不关闭命令面板，方便快速切换查看多个任务）
+    // /s 搜索模式 - 打开当前高亮项（无高亮开第一条；不关闭命令面板，方便快速切换查看多个任务）
     if (value.startsWith('/s ')) {
         const query = value.slice(3).trim();
         if (query) {
-            const results = searchTasks(query);
-            if (results.length > 0) {
-                openTaskDetailModal(results[0].id);
+            _addSearchHistory(query); // FR-08-6：Enter 提交即记录搜索历史
+            const r = searchTasks(query);
+            // 取值池优先用「已展开的结果集」：点过「+N 更多」后键盘高亮可能落在首屏 50 条之外，
+            // 直接用重新搜索的 results（固定 50 条）会取到 undefined
+            const pool = (_lastSearchQuery === query && _lastSearchResults.length > r.results.length)
+                ? _lastSearchResults : r.results;
+            if (pool.length > 0) {
+                const idx = (_searchActiveIndex >= 0 && _searchActiveIndex < pool.length) ? _searchActiveIndex : 0;
+                openTaskDetailModal(pool[idx].id);
                 return;
             }
         }
-        showToast('未找到匹配任务', 'info');
+        showToast('没有匹配的任务', 'info');
+        return;
+    }
+
+    // FR-03 /select 多选模式 - 匹配任务全部选中并进入多选态（上限 50，含余量提示）
+    if (value.startsWith('/select ')) {
+        const query = value.slice(8).trim();
+        const r = query ? searchTasks(query) : { results: [], total: 0 };
+        closeCommandPalette();
+        if (r.results.length === 0) { showToast('没有匹配的任务', 'info'); return; }
+        enterBatchSelectMode(r.results.map(function (t) { return t.id; }));
+        showToast('已选中 ' + r.results.length + ' 项' +
+            (r.total > r.results.length ? '（共 ' + r.total + ' 条匹配，仅选中前 ' + r.results.length + ' 条）' : ''), 'success');
+        return;
+    }
+
+    // FR-01/FR-02 斜杠指令：/undo /撤销 /trash /回收站
+    const directive = _matchSlashDirective(value);
+    if (directive === 'undo') {
+        closeCommandPalette();
+        if (typeof performUndo === 'function') {
+            // 撤销类通知统一走简洁通知条（单行、青边、short 档）
+            if (!performUndo()) showCompactToast('没有可撤销的操作', { tone: 'info' });
+        }
+        return;
+    }
+    if (directive === 'trash') {
+        closeCommandPalette();
+        if (typeof openTrashView === 'function') openTrashView();
         return;
     }
 
@@ -322,6 +476,7 @@ function updateCommandPaletteCandidates() {
     const hidePanel = () => { _cpCandidates = null; box.classList.add('hidden'); box.innerHTML = ''; };
     const value = input.value;
     if (value.trim().startsWith('/s')) { hidePanel(); return; } // /s 搜索模式不出候选
+    if (_isSlashDirectiveInput(value)) { hidePanel(); return; } // FR-01/FR-02 斜杠指令不出候选
 
     // 标签多选「虚拟面板」仍锚定在光标处（光标未动、无选区）：保持展开，不重建
     if (_cpCandidates && _cpCandidates.virtual
@@ -540,9 +695,13 @@ function renderCommandPalettePreview() {
     const resultsContainer = document.getElementById('command-palette-results');
     if (!curInput || !resultsContainer) return;
     const v = curInput.value.trim();
-    if (!v) { resultsContainer.innerHTML = ''; return; }
-    // /s 搜索模式的结果由其自身防抖分支负责渲染，此处不得用 NLP 预览覆盖
+    // 空输入与 handleCommandPaletteInput 的空分支保持一致：展示搜索历史（FR-08-6），
+    // 避免退格清空文本后历史视图被这里意外抹掉
+    if (!v) { resultsContainer.innerHTML = renderSearchHistory(); return; }
+    // /s 搜索模式的结果由其自身防抖分支负责渲染，此处不得用 NLP 预览覆盖；
+    // FR-01/FR-02 斜杠指令同理（提示由输入分支渲染）
     if (v.startsWith('/s')) return;
+    if (_isSlashDirectiveInput(v)) return;
     const parsed = parseNLPInput(v);
     resultsContainer.innerHTML = renderNLPPreview(parsed);
 }
@@ -563,38 +722,360 @@ function handleCommandPaletteCompositionEnd() {
     renderCommandPalettePreview();
 }
 
-// ==================== 任务搜索 ====================
+// ==================== 任务搜索（FR-08 增强） ====================
 
 // 预计算的小写搜索索引，避免每次按键对 5510 条任务做 toLowerCase() + includes()。
-// 在命令面板打开时重建（保证数据新鲜），数据刷新时也会重建。
+// 脏标记（C8-1）：数据变更经 saveData() 统一置脏（data.js 钩子），面板打开 / 搜索时
+// 「脏则重建、不脏直接复用」，避免每次打开面板都付一次全量重建的卡顿成本。
 let _searchIndex = [];
 let _searchIndexReady = false;
+let _searchIndexDirty = false;
+
+function markSearchIndexDirty() {
+    _searchIndexDirty = true;
+}
+
+// 确保索引就绪且未脏（面板打开 / 搜索入口调用）
+function ensureSearchIndex() {
+    if (!_searchIndexReady || _searchIndexDirty) rebuildSearchIndex();
+}
 
 function rebuildSearchIndex() {
     _searchIndex = [];
-    if (!tasks || tasks.length === 0) { _searchIndexReady = true; return; }
+    // 标签 / 清单建 Map 查找，避免每条任务线性扫描（C8-1）
+    const listMap = new Map();
+    (lists || []).forEach(l => listMap.set(l.id, (l.name || '').toLowerCase()));
+    const tagMap = new Map();
+    ((settings && settings.tags) || []).forEach(t => tagMap.set(t.id, (t.name || '').toLowerCase()));
+    if (!tasks || tasks.length === 0) { _searchIndexReady = true; _searchIndexDirty = false; return; }
     for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i];
+        // FR-02（V2-6 / C8-3）：回收站任务不进入命令面板搜索索引
+        if (t.deletedAt) continue;
         _searchIndex.push({
             task: t,
             title: (t.title || '').toLowerCase(),
-            notes: ((t.notes || '') + ' ' + (t.description || '')).toLowerCase()
+            notes: ((t.notes || '') + ' ' + (t.description || '')).toLowerCase(),
+            // FR-08-1 索引扩容：子任务标题 / 标签名 / 清单名
+            // 标签字段兼容 tagIds（与 filterTasks 的 task.tags || task.tagIds 口径一致）
+            subtasks: (t.subtasks || []).map(s => (s.text || '')).join(' ').toLowerCase(),
+            tags: ((t.tags || t.tagIds) || []).map(id => tagMap.get(id) || '').join(' ').toLowerCase(),
+            listName: listMap.get(t.listId) || ''
         });
     }
     _searchIndexReady = true;
+    _searchIndexDirty = false;
 }
 
-function searchTasks(query) {
-    const q = query.toLowerCase();
-    if (!_searchIndexReady) rebuildSearchIndex();
-    const results = [];
-    for (let i = 0; i < _searchIndex.length && results.length < 8; i++) {
-        const s = _searchIndex[i];
-        if (s.title.indexOf(q) !== -1 || s.notes.indexOf(q) !== -1) {
-            results.push(s.task);
+// ---- 筛选语法解析（FR-08-5，R2 修订：清单筛选语法改为 ~清单名）----
+// 关键词后可追加条件 token（空格分隔，多条件 AND）：
+//   ~清单名（包含匹配，主语法，与快速创建的 ~清单 语法对齐）、#标签名（包含匹配）、
+//   is:已完成/未完成/今天/逾期/无日期
+// 兼容旧写法「清单:名称」；全角符号 ～ ＃ ： 自动归一化（中文输入法直出的字符不失效）。
+// 注：is:有附件 依赖 FR-06 附件功能，暂不支持
+const SEARCH_IS_FILTERS = ['已完成', '未完成', '今天', '逾期', '无日期'];
+
+// 全角符号归一化：～＃： → ~ # :（仅影响筛选 token 识别；关键词主体含全角标点的场景极少，可接受）
+function _normalizeSearchToken(tok) {
+    return tok.replace(/～/g, '~').replace(/＃/g, '#').replace(/：/g, ':');
+}
+
+// 右下角语法提示两态：默认（快速创建语法）↔ 搜索态（搜索筛选语法）。
+// startsWith('/s') 同时覆盖 '/s ' 与 '/select'（二者同属搜索模式）。
+// 顺手切换左侧 Enter 提示：搜索态下 Enter 是「打开选中项」而非「新建任务」。
+function _updateCommandPaletteHint(value) {
+    const d = document.getElementById('cmd-hint-default');
+    const s = document.getElementById('cmd-hint-search');
+    const en = document.getElementById('cmd-hint-enter');
+    if (!d || !s) return;
+    const searchMode = typeof value === 'string' && value.trim().startsWith('/s');
+    d.classList.toggle('hidden', searchMode);
+    s.classList.toggle('hidden', !searchMode);
+    if (en) en.textContent = searchMode ? '打开选中项' : '新建任务';
+}
+
+// 提示条里的可点击命令 chip：点击把命令前缀补进输入框（默认提示的 /s、/select，
+// 以及 /s 搜索态第 2 行的 /select）
+function _cmdHintChip(cmd, text) {
+    return '<span class="cursor-pointer text-accent-dark dark:text-accent-light hover:underline transition"'
+        + ' onclick="event.stopPropagation(); _insertCommandPrefix(\'' + cmd + '\')">' + text + '</span>';
+}
+
+// 点击提示补全命令前缀（cmd: 's' | 'select'）：
+// ① 已有该前缀 → 只聚焦，不重复插入；
+// ② /s 态下点 /select → 前缀升级为 /select，保留已输入的查询词；
+// ③ 其余情况 → 前缀插到已有文本之前（保留草稿，不清空输入）。
+function _insertCommandPrefix(cmd) {
+    const input = document.getElementById('command-palette-input');
+    if (!input) return;
+    const prefix = '/' + cmd;
+    const v = input.value;
+    const t = v.trim();
+    const low = t.toLowerCase();
+    const isS = low === '/s' || low.indexOf('/s ') === 0;
+    const isSelect = low === '/select' || low.indexOf('/select ') === 0;
+
+    let next = null;
+    if (cmd === 'select') {
+        if (isSelect) next = null;                                   // 已在该模式：仅聚焦
+        else if (isS) next = '/select ' + t.slice(2).replace(/^\s+/, ''); // /s → /select，保留查询词
+        else next = prefix + ' ' + v.replace(/^\s+/, '');
+    } else {
+        if (isS) next = null;                                        // 已在搜索态：仅聚焦
+        else next = prefix + ' ' + v.replace(/^\s+/, '');
+    }
+
+    if (next !== null) input.value = next;
+    input.focus();
+    const pos = input.value.length;
+    input.setSelectionRange(pos, pos);
+    if (next !== null) handleCommandPaletteInput({});
+}
+
+function _parseSearchQuery(query) {
+    const tokens = (query || '').split(/\s+/).filter(Boolean);
+    const parsed = { keywords: [], listFilter: null, tagFilter: null, isFilters: [] };
+    for (const raw of tokens) {
+        const tok = _normalizeSearchToken(raw);
+        const lt = tok.toLowerCase();
+        if (tok.charAt(0) === '~') {
+            const v = tok.slice(1).trim().toLowerCase();
+            if (v) parsed.listFilter = v; // 同类多 token 后者覆盖
+        } else if (lt.startsWith('清单:')) {
+            const v = tok.slice(3).trim().toLowerCase();
+            if (v) parsed.listFilter = v; // 旧语法「清单:名称」兼容
+        } else if (tok.charAt(0) === '#') {
+            const v = tok.slice(1).trim().toLowerCase();
+            if (v) parsed.tagFilter = v;
+        } else if (lt.startsWith('is:')) {
+            const v = tok.slice(3);
+            if (SEARCH_IS_FILTERS.indexOf(v) !== -1 && parsed.isFilters.indexOf(v) === -1) parsed.isFilters.push(v);
+        } else {
+            parsed.keywords.push(lt);
         }
     }
-    return results;
+    return parsed;
+}
+
+// is:xxx 条件过滤（完成态 / 时间态），全部条件 AND
+function _searchTaskPassIsFilters(task, isFilters) {
+    for (let i = 0; i < isFilters.length; i++) {
+        const f = isFilters[i];
+        if (f === '已完成' && !task.completed) return false;
+        if (f === '未完成' && task.completed) return false;
+        if (f === '今天') {
+            if (!task.startTime) return false;
+            const d = new Date(task.startTime);
+            const now = new Date();
+            if (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth() || d.getDate() !== now.getDate()) return false;
+        }
+        if (f === '逾期') {
+            if (typeof isTaskOverdue === 'function' ? !isTaskOverdue(task) : !task.startTime) return false;
+        }
+        if (f === '无日期' && task.startTime) return false;
+    }
+    return true;
+}
+
+// 单词命中权重（FR-08-2 相关度）：标题 3 > 子任务/标签 2 > notes/清单名 1；0 = 未命中
+function _searchHitScore(entry, kw) {
+    if (entry.title.indexOf(kw) !== -1) return 3;
+    if (entry.subtasks.indexOf(kw) !== -1 || entry.tags.indexOf(kw) !== -1) return 2;
+    if (entry.notes.indexOf(kw) !== -1 || entry.listName.indexOf(kw) !== -1) return 1;
+    return 0;
+}
+
+const SEARCH_MAX_RESULTS = 50; // FR-08-2：上限 8 → 50，超出由渲染层给余量提示
+const SEARCH_PAGE_SIZE = 50;   // 「+N 更多」每次追加条数（与首屏等量，懒加载分批渲染）
+const SEARCH_SORT_MODES = [
+    { key: 'relevance', label: '相关度' },
+    { key: 'time', label: '时间' },
+    { key: 'created', label: '创建时间' }
+];
+let _searchSortMode = 'relevance';
+let _searchActiveIndex = -1;  // 键盘导航高亮（FR-08-3）
+let _lastSearchResults = [];  // 当前渲染的结果集（Enter 取高亮项用）
+let _lastSearchTotal = 0;
+let _searchMatchedAll = [];   // 当前查询的完整匹配任务（「+N 更多」懒加载展开的数据源）
+let _searchLoadedCount = 0;   // 已渲染条数（首屏 SEARCH_MAX_RESULTS，展开按 SEARCH_PAGE_SIZE 递增）
+let _lastSearchQuery = '';    // 当前查询词（展开时复用，不必重新解析输入）
+
+// 搜索态状态复位（切模式 / 清空输入时用）
+function _resetSearchLazyState() {
+    _searchActiveIndex = -1;
+    _lastSearchResults = [];
+    _lastSearchTotal = 0;
+    _searchMatchedAll = [];
+    _searchLoadedCount = 0;
+    _lastSearchQuery = '';
+}
+
+// 搜索态状态写入（searchTasks 结果落库，供懒加载展开复用）
+function _setSearchLazyState(query, r) {
+    _searchActiveIndex = -1;
+    _lastSearchResults = r.results;
+    _lastSearchTotal = r.total;
+    _searchMatchedAll = r.matched || r.results;
+    _searchLoadedCount = r.results.length;
+    _lastSearchQuery = query;
+}
+
+function setSearchSortMode(mode) {
+    _searchSortMode = mode;
+    // 排序切换后重算并重渲染当前查询（保持查询词与高亮复位）
+    const input = document.getElementById('command-palette-input');
+    const resultsContainer = document.getElementById('command-palette-results');
+    if (!input || !resultsContainer) return;
+    const value = input.value.trim();
+    if (!value.startsWith('/s ')) return;
+    const query = value.slice(3).trim();
+    if (!query) return;
+    const r = searchTasks(query);
+    _setSearchLazyState(query, r);
+    resultsContainer.innerHTML = renderSearchResults(r.results, query, r.total);
+}
+
+// 搜索主入口：解析筛选 token → 过滤 → 多关键词 AND 匹配 → 排序 → 截断 50
+// 返回 { results: <task[]>, total: <number> }
+function searchTasks(query) {
+    if (!_searchIndexReady || _searchIndexDirty) rebuildSearchIndex();
+    const parsed = _parseSearchQuery(query);
+    const matched = [];
+    for (let i = 0; i < _searchIndex.length; i++) {
+        const s = _searchIndex[i];
+        if (parsed.listFilter && s.listName.indexOf(parsed.listFilter) === -1) continue;
+        if (parsed.tagFilter && s.tags.indexOf(parsed.tagFilter) === -1) continue;
+        if (parsed.isFilters.length && !_searchTaskPassIsFilters(s.task, parsed.isFilters)) continue;
+        if (parsed.keywords.length) {
+            let score = 0, allHit = true;
+            for (let j = 0; j < parsed.keywords.length; j++) {
+                const sc = _searchHitScore(s, parsed.keywords[j]);
+                if (!sc) { allHit = false; break; }
+                score += sc;
+            }
+            if (!allHit) continue;
+            s._score = score; // 瞬态评分，随下次搜索重算
+        } else {
+            s._score = 0;
+        }
+        matched.push(s);
+    }
+    const startTimeOf = t => t.startTime ? new Date(t.startTime).getTime() : Infinity;
+    if (_searchSortMode === 'time') {
+        matched.sort((a, b) => startTimeOf(a.task) - startTimeOf(b.task)); // startTime 近 → 远，无日期排尾
+    } else if (_searchSortMode === 'created') {
+        matched.sort((a, b) => new Date(b.task.createdAt || 0).getTime() - new Date(a.task.createdAt || 0).getTime()); // 新 → 旧
+    } else {
+        // 相关度（默认）：权重降序 → 同权重 startTime 近者优先（无日期排尾）
+        matched.sort((a, b) => (b._score - a._score) || (startTimeOf(a.task) - startTimeOf(b.task)));
+    }
+    const total = matched.length;
+    return {
+        results: matched.slice(0, SEARCH_MAX_RESULTS).map(s => s.task), // 首屏
+        total,
+        matched: matched.map(s => s.task)                               // 完整匹配（「+N 更多」展开用）
+    };
+}
+
+// ---- 命中高亮（FR-08-4 / C8-2）----
+// 安全序：在原始文本上定位命中区间 → 切片 → escapeHtml 各段 → 拼 <mark>；禁止反向操作
+function _highlightText(text, keywords) {
+    const raw = text || '';
+    if (!raw || !keywords || !keywords.length) return escapeHtml(raw);
+    const lower = raw.toLowerCase();
+    let hit = -1, kwLen = 0;
+    for (const kw of keywords) {
+        const i = lower.indexOf(kw);
+        if (i !== -1) { hit = i; kwLen = kw.length; break; }
+    }
+    if (hit === -1) return escapeHtml(raw);
+    const MARK_CLS = 'bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded px-0.5';
+    return escapeHtml(raw.slice(0, hit))
+        + '<mark class="' + MARK_CLS + '">' + escapeHtml(raw.slice(hit, hit + kwLen)) + '</mark>'
+        + escapeHtml(raw.slice(hit + kwLen));
+}
+
+// notes 命中片段：命中位置前后约 40 字符的 snippet，片段内高亮；未命中返回 ''
+function _notesSnippet(text, keywords) {
+    const raw = (text || '').trim();
+    if (!raw || !keywords || !keywords.length) return '';
+    const lower = raw.toLowerCase();
+    let hit = -1;
+    for (const kw of keywords) {
+        const i = lower.indexOf(kw);
+        if (i !== -1) { hit = i; break; }
+    }
+    if (hit === -1) return '';
+    const start = Math.max(0, hit - 40);
+    const end = Math.min(raw.length, hit + 40);
+    return (start > 0 ? '…' : '') + _highlightText(raw.slice(start, end), keywords) + (end < raw.length ? '…' : '');
+}
+
+// ---- 搜索历史（FR-08-6）：localStorage 最近 10 条，不进 settings（避免入全量 PUT 载荷）----
+const SEARCH_HISTORY_KEY = 'tacklist_search_history';
+const SEARCH_HISTORY_MAX = 10;
+
+function _loadSearchHistory() {
+    try {
+        const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    } catch (e) { return []; }
+}
+
+function _saveSearchHistory(arr) {
+    try { localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(arr)); } catch (e) { /* 配额满等场景静默放弃 */ }
+}
+
+function _addSearchHistory(query) {
+    const q = (query || '').trim();
+    if (!q) return;
+    let arr = _loadSearchHistory().filter(x => x !== q);
+    arr.unshift(q);
+    if (arr.length > SEARCH_HISTORY_MAX) arr = arr.slice(0, SEARCH_HISTORY_MAX);
+    _saveSearchHistory(arr);
+}
+
+// 内联 onclick 的 JS 字符串字面量安全化（' 与 \ 转义）
+function _jsStr(s) { return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
+function removeSearchHistoryItem(query) {
+    _saveSearchHistory(_loadSearchHistory().filter(x => x !== query));
+    // 删除后即时刷新（仅当当前处于空输入历史视图）
+    const input = document.getElementById('command-palette-input');
+    const resultsContainer = document.getElementById('command-palette-results');
+    if (input && resultsContainer && !input.value.trim()) {
+        resultsContainer.innerHTML = renderSearchHistory();
+    }
+}
+
+// 点击历史词：填入 /s 词 并走一遍 input 流程（搜索立即执行）
+function _useSearchHistory(query) {
+    const input = document.getElementById('command-palette-input');
+    if (!input) return;
+    input.value = '/s ' + query;
+    input.focus();
+    handleCommandPaletteInput({});
+}
+
+// 空输入时展示搜索历史（V8-8）；无历史返回 ''（维持空白）
+function renderSearchHistory() {
+    const arr = _loadSearchHistory();
+    if (!arr.length) return '';
+    return `<div class="px-5 py-2 text-xs text-theme-muted flex items-center gap-2 border-b border-theme sticky top-0 bg-theme-secondary">
+            <i class="fas fa-clock-rotate-left"></i>最近搜索
+        </div>` + arr.map(q => `
+        <div class="px-3 py-1">
+            <div class="task-row flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-theme-tertiary transition cursor-pointer group"
+                 onclick="_useSearchHistory('${_jsStr(q)}')">
+                <i class="fas fa-magnifying-glass text-xs text-theme-muted flex-shrink-0"></i>
+                <span class="flex-1 text-sm text-theme-primary truncate min-w-0">${escapeHtml(q)}</span>
+                <button class="opacity-0 group-hover:opacity-100 text-theme-muted hover:text-red-400 transition px-1 flex-shrink-0" title="删除该记录"
+                        onclick="event.stopPropagation(); removeSearchHistoryItem('${_jsStr(q)}')">
+                    <i class="fas fa-times text-xs"></i>
+                </button>
+            </div>
+        </div>`).join('');
 }
 
 function renderSearchHint() {
@@ -603,32 +1084,64 @@ function renderSearchHint() {
     </div>`;
 }
 
-function renderSearchResults(results, query) {
+// 排序切换（紧凑三态，仅 /s 有结果时渲染于结果区顶部）
+function _renderSearchSortToggle() {
+    return `<div class="flex items-center gap-2 px-5 py-2 border-b border-theme text-xs text-theme-secondary sticky top-0 bg-theme-secondary z-[1]">
+        <i class="fas fa-sort-amount-down text-theme-muted"></i><span>排序</span>
+        <div class="flex gap-1">
+        ${SEARCH_SORT_MODES.map(m => `<button type="button" class="px-2 py-0.5 rounded transition ${_searchSortMode === m.key ? 'bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light font-bold' : 'hover:bg-theme-tertiary text-theme-secondary'}" onclick="setSearchSortMode('${m.key}')">${m.label}</button>`).join('')}
+        </div>
+    </div>`;
+}
+
+// 键盘导航高亮同步：不整块重渲染，仅在 DOM 上切换高亮类并滚动到可见（FR-08-3）
+function _updateSearchActiveHighlight() {
+    const container = document.getElementById('command-palette-results');
+    if (!container) return;
+    container.querySelectorAll('[data-search-index]').forEach(row => {
+        const idx = parseInt(row.getAttribute('data-search-index'), 10);
+        const inner = row.firstElementChild;
+        if (inner) inner.classList.toggle('bg-theme-tertiary', idx === _searchActiveIndex);
+    });
+    const active = container.querySelector(`[data-search-index="${_searchActiveIndex}"]`);
+    if (active && typeof active.scrollIntoView === 'function') active.scrollIntoView({ block: 'nearest' });
+}
+
+function renderSearchResults(results, query, total) {
     if (results.length === 0) {
         return `<div class="px-5 py-6 text-center text-theme-secondary text-sm">
             <i class="fas fa-search mr-2"></i>未找到匹配「${escapeHtml(query)}」的任务
         </div>`;
     }
-    return results.map(task => {
-        const list = lists.find(l => l.id === task.listId);
-        const listColor = list ? list.color : '#9ca3af';
-        const listName = list ? list.name : '';
-        const focusMinutes = getTaskFocusMinutes(task.id);
-        const timeDisplay = formatTaskListTime(task, { fullDate: true });
-        const progress = task.progress || 0;
-        const quadColors = getQuadrantColorClass(task);
-        const isOverdue = isTaskOverdue(task);
-        const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
-        const tagCapsules = renderTagCapsules(task, 2, 'right');
+    const keywords = _parseSearchQuery(query).keywords;
+    const header = _renderSearchSortToggle();
+    const body = results.map((task, idx) => _renderSearchRow(task, idx, keywords)).join('');
+    // 超出首屏的部分给「+N 更多」懒加载入口（点击按 SEARCH_PAGE_SIZE 追加，不一次性全渲染）
+    return header + body + _renderSearchMoreFooter(total - results.length);
+}
 
-        return `<div class="px-3 py-1">
-            <div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
+// 单条搜索结果行（首屏渲染与「+N 更多」追加共用同一份模板）
+// 注：搜索结果行是「查看」而非「操作」——不带完成勾选框、不带开始专注按钮，
+//     避免搜索时顺手改完成态或直接进入专注；这两项请在点开的任务详情面板里操作。
+function _renderSearchRow(task, idx, keywords) {
+    const list = lists.find(l => l.id === task.listId);
+    const listColor = list ? list.color : '#9ca3af';
+    const listName = list ? list.name : '';
+    const focusMinutes = getTaskFocusMinutes(task.id);
+    const timeDisplay = formatTaskListTime(task, { fullDate: true });
+    const progress = task.progress || 0;
+    const quadColors = getQuadrantColorClass(task);
+    const isOverdue = isTaskOverdue(task);
+    const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
+    const tagCapsules = renderTagCapsules(task, 2, 'right');
+    const snippet = _notesSnippet((task.notes || '') + ' ' + (task.description || ''), keywords);
+
+    return `<div class="px-3 py-1" data-search-index="${idx}">
+            <div class="task-list-item cmd-search-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''} ${idx === _searchActiveIndex ? 'bg-theme-tertiary' : ''}"
                  data-list-id="${task.listId || 'default'}"
                  onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
                 <div class="task-list-color-bar" style="background-color: ${_extTaskBarColor(task, getTaskBarColor(task, listColor))};"></div>
-                ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
-                ${_extTaskIconHtml(task)}<span class="flex-1 text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${escapeHtml(task.title || '新任务')}</span>
-                ${renderFocusButton(task.id)}
+                ${_extTaskIconHtml(task)}<div class="flex-1 min-w-0"><span class="flex items-center block text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${_highlightText(task.title || '新任务', keywords)}</span>${snippet ? `<span class="block text-xs text-theme-muted truncate mt-0.5">${snippet}</span>` : ''}</div>
                 <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                     ${tagCapsules}
                     ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
@@ -638,7 +1151,38 @@ function renderSearchResults(results, query) {
                 ${timeDisplay ? `<span class="flex-shrink-0 text-xs ${timeTextClass} whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
             </div>
         </div>`;
-    }).join('');
+}
+
+// 结果区底部「+N 更多」：点击按 SEARCH_PAGE_SIZE 追加下一批（懒加载，参考任务视图的分批渲染思路，
+// 不一次性把上千条塞进 DOM）。无剩余时返回空串。
+function _renderSearchMoreFooter(remain) {
+    if (typeof remain !== 'number' || remain <= 0) return '';
+    return `<div id="cmd-search-more" class="px-5 py-2.5 text-center text-xs border-t border-theme">
+            <button type="button" class="text-accent-dark dark:text-accent-light hover:underline transition"
+                    onclick="expandSearchResults()">+${remain} 更多</button>
+        </div>`;
+}
+
+// 「+N 更多」：增量插入下一批结果行（不整块重渲染，滚动位置与键盘高亮均不丢）
+function expandSearchResults() {
+    const container = document.getElementById('command-palette-results');
+    if (!container) return;
+    const footer = document.getElementById('cmd-search-more');
+    const startIdx = _searchLoadedCount;
+    const next = _searchMatchedAll.slice(startIdx, startIdx + SEARCH_PAGE_SIZE);
+    if (!next.length) { if (footer) footer.remove(); return; }
+
+    const keywords = _parseSearchQuery(_lastSearchQuery).keywords;
+    const html = next.map((task, i) => _renderSearchRow(task, startIdx + i, keywords)).join('');
+    if (footer) footer.insertAdjacentHTML('beforebegin', html);
+    else container.insertAdjacentHTML('beforeend', html);
+
+    _searchLoadedCount = startIdx + next.length;
+    _lastSearchResults = _searchMatchedAll.slice(0, _searchLoadedCount);
+
+    const remain = _searchMatchedAll.length - _searchLoadedCount;
+    if (remain <= 0) { if (footer) footer.remove(); }
+    else if (footer) footer.outerHTML = _renderSearchMoreFooter(remain);
 }
 
 // ==================== NLP 解析 (FR-28) ====================
@@ -655,6 +1199,9 @@ function parseNLPInput(input) {
     let removedParts = [];
     let notes = '';
     let titleText = '';
+    let fuzzyConflict = false; // 模糊时段词命中后由冲突检测回绕产生
+    let dayOffset = 0;         // 相对日期的跨天偏移天数（明天=1 / 后天=2 / 大后天=3 / N天后=N）
+    let lateNightWarning = false; // 凌晨时段(00:00-06:00) + 跨天相对日期 的提醒标记
 
     // 0. 用 | 分割：|之前为标题，|之后为详情
     const pipeIndex = text.indexOf('|');
@@ -712,10 +1259,21 @@ function parseNLPInput(input) {
     if (!startTime) {
         const titleDateResult = parseNLPDate(titleText);
         if (titleDateResult) {
-            startTime = titleDateResult.date;
-            isAllDay = titleDateResult.isAllDay;
-            endTime = titleDateResult.endTime || null;
-            repeat = titleDateResult.repeat || null;
+            dayOffset = titleDateResult.dayOffset || 0;
+            if (titleDateResult._fuzzyResolve) {
+                // 模糊时段词：交由 resolveFuzzyTimeConflict 做顺延 + 冲突检测
+                const resolved = resolveFuzzyTimeConflict(titleDateResult.date, titleDateResult._fuzzyResolve);
+                startTime = resolved.startTime;
+                isAllDay = false;
+                endTime = null;
+                repeat = null;
+                fuzzyConflict = resolved.conflict;
+            } else {
+                startTime = titleDateResult.date;
+                isAllDay = titleDateResult.isAllDay;
+                endTime = titleDateResult.endTime || null;
+                repeat = titleDateResult.repeat || null;
+            }
             if (removeTimeText) {
                 titleDateResult.matches.forEach(m => {
                     titleText = titleText.replace(m, ' ');
@@ -724,9 +1282,29 @@ function parseNLPInput(input) {
             removedParts.push(...titleDateResult.matches);
         }
     }
+
+    // 3.5 相对时间词（稍后/等等/一会儿）：仅当未识别到任何日期/时间时生效
+    if (!startTime) {
+        const _relPrefs = settings.commandTimePrefs || {};
+        let _laterMins = (typeof _relPrefs.laterMinutes === 'number') ? _relPrefs.laterMinutes : 15;
+        _laterMins = Math.max(5, Math.min(120, _laterMins));
+        for (let ri = 0; ri < FUZZY_RELATIVE_WORDS.length; ri++) {
+            const rw = FUZZY_RELATIVE_WORDS[ri];
+            if (titleText.indexOf(rw) !== -1) {
+                const dt = new Date();
+                dt.setMinutes(dt.getMinutes() + _laterMins, 0, 0);
+                startTime = dt;
+                isAllDay = false;
+                removedParts.push(rw);
+                if (removeTimeText) titleText = titleText.replace(rw, ' ');
+                break;
+            }
+        }
+    }
     if (!startTime && notes) {
         const notesDateResult = parseNLPDate(notes);
         if (notesDateResult) {
+            dayOffset = notesDateResult.dayOffset || 0;
             startTime = notesDateResult.date;
             isAllDay = notesDateResult.isAllDay;
             endTime = notesDateResult.endTime || null;
@@ -738,6 +1316,11 @@ function parseNLPInput(input) {
             }
         }
     }
+
+    // 3.6 凌晨提醒：当前处于 00:00-06:00 且命令使用了跨天相对日期（明天/后天/大后天/N天后）。
+    //     凌晨时段用户口中的"明天"可能是其感知里的"当天"，故提示核对任务时间是否符合预期。
+    const _curHour = new Date().getHours();
+    lateNightWarning = !!(startTime && dayOffset >= 1 && _curHour >= 0 && _curHour < 6);
 
     // 4. 清理标题：去除多余空格和已解析的标识
     titleText = titleText.replace(/\s+/g, ' ').trim();
@@ -764,7 +1347,9 @@ function parseNLPInput(input) {
         important,
         urgent,
         notes,
-        removedParts
+        removedParts,
+        fuzzyConflict,
+        lateNightWarning
     };
 }
 
@@ -797,6 +1382,10 @@ function parseNLPDate(text) {
     let endHour = null;
     let endMinute = 0;
     let periodSpecified = false;
+    let _fuzzyResolve = null; // 命中模糊时段词时携带 {key,min,max,prefMin,text}，供 parseNLPInput 后处理
+    // 相对日期的跨天偏移天数：明天=1 / 后天=2 / 大后天=3 / N天后=N；今天与具体日期=0。
+    // 供 parseNLPInput 判断「凌晨时段 + 跨天相对日期」时给出提醒。
+    let dayOffset = 0;
 
     // --- 辅助函数 ---
     const cnNumMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '两': 2, '零': 0 };
@@ -912,6 +1501,7 @@ function parseNLPDate(text) {
             const days = parseCnNum(m[1]);
             date = new Date(now);
             date.setDate(date.getDate() + days);
+            dayOffset = days;
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
@@ -1095,6 +1685,7 @@ function parseNLPDate(text) {
         if (m) {
             date = new Date(now);
             date.setDate(date.getDate() + 3);
+            dayOffset = 3;
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
@@ -1106,6 +1697,7 @@ function parseNLPDate(text) {
         if (m) {
             date = new Date(now);
             date.setDate(date.getDate() + 2);
+            dayOffset = 2;
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
@@ -1117,6 +1709,7 @@ function parseNLPDate(text) {
         if (m) {
             date = new Date(now);
             date.setDate(date.getDate() + 1);
+            dayOffset = 1;
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
@@ -1290,6 +1883,32 @@ function parseNLPDate(text) {
         }
     }
 
+    // --- 模糊时段词解析（上午/中午/下午/晚上）：取用户偏好时间 ---
+    // 仅当未匹配到具体小时时生效（"上午10点"仍以 10 点为准）；命中后直接返回，
+    // 日期/顺延/冲突检测交由 parseNLPInput 的 resolveFuzzyTimeConflict 后处理
+    if (hour === null && !repeat) {
+        const _fuzzyPrefs = settings.commandTimePrefs || {};
+        for (const fw of FUZZY_TIME_WORDS) {
+            const fm = remaining.match(fw.word);
+            if (fm) {
+                let prefMin = (typeof _fuzzyPrefs[fw.key] === 'number') ? _fuzzyPrefs[fw.key] : fw.defaultMin;
+                prefMin = Math.max(fw.min, Math.min(fw.max, prefMin));
+                let _fdate = date ? new Date(date) : new Date(now);
+                _fdate.setHours(0, 0, 0, 0);
+                matches.push(fm[0]);
+                return {
+                    date: _fdate,
+                    isAllDay: false,
+                    endTime: null,
+                    repeat: null,
+                    matches: matches,
+                    dayOffset: dayOffset,
+                    _fuzzyResolve: { key: fw.key, min: fw.min, max: fw.max, prefMin: prefMin, text: fm[0] }
+                };
+            }
+        }
+    }
+
     // 仅有时段没有具体时间
     if (!date && hour === null && !repeat) return null;
 
@@ -1380,7 +1999,115 @@ function parseNLPDate(text) {
         }
     }
 
-    return { date, isAllDay, endTime, repeat, matches };
+    return { date, isAllDay, endTime, repeat, matches, dayOffset };
+}
+
+// ==================== 模糊时段词后处理：顺延 + 冲突检测 ====================
+// 开关 settings.commandTimePrefs.smartSchedule（设置项「模糊时间任务智能计划时间」，默认 true）：
+//   开启 → 完整智能排程；关闭 → 仅按偏好时间排程（当天已过则次日），不检测任务冲突。
+// 步长 step = settings.commandTimePrefs.timeGranularity（设置项「任务时间粒度」，默认 30，1-120）。
+// 规则（开启时）：
+//   1. 当天该偏好时间已过 → 同日区间[min,max]内取当前时刻之后下一个时间块；
+//      区间内已无时间块 → 次日偏好值。
+//   2. 冲突检测：按步长推进，时段内有任务则顺延；到区间上限仍冲突 →
+//      放置到「任务量最少」的时段（并列时取最接近偏好值的时段）。
+// baseDate: 已确定为当天 00:00 的日期；fw: { key, min, max, prefMin }
+function resolveFuzzyTimeConflict(baseDate, fw) {
+    const now = new Date();
+    const _prefs = settings.commandTimePrefs || {};
+    // 时间块粒度（分钟）：默认 30，允许 1-120（设置项「任务时间粒度」）
+    const step = Math.max(1, Math.min(120,
+        (typeof _prefs.timeGranularity === 'number') ? _prefs.timeGranularity : FUZZY_TIME_STEP));
+    // 智能计划时间开关（默认开启）：关闭时仅按偏好时间排程，不做同日就近与冲突检测
+    const smart = _prefs.smartSchedule !== false;
+    // 区间右端点可能为 1440（24:00）：它只是文案边界，不能作为可放置时刻（1440 会回绕到次日 00:00），
+    // 故实际可放置/可回绕的最大分钟数封顶到 1439；偏好值同样封顶，避免越界回绕。
+    const maxSlot = Math.min(fw.max, 1439);
+    const prefMin = Math.min(fw.prefMin, maxSlot);
+    // 当前时刻之后的第一个时间块起点（以偏好时间为基准对齐，保证偏好值本身也是块起点）
+    function firstSlotAfter(min) {
+        return prefMin + Math.ceil((min + 1 - prefMin) / step) * step;
+    }
+    function mkDateTime(day, mins) {
+        const d = new Date(day);
+        d.setHours(Math.floor(mins / 60), mins % 60, 0, 0);
+        return d;
+    }
+    function sameDay(a, b) {
+        return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    }
+    function minsOfDay(d) { return d.getHours() * 60 + d.getMinutes(); }
+    // 冲突判定：该时段（FUZZY_TIME_STEP 分钟）内已有任务即视为冲突。
+// 与回绕时的任务量统计口径保持一致，避免 15:10 的任务不被 15:00 视为冲突这类漏判。
+    function hasConflict(d) {
+        return countTasksInSlot(d, d.getHours() * 60 + d.getMinutes()) > 0;
+    }
+    // 统计某个时间块（step 分钟）内的任务数量（按 startTime 落入 [start, start+step) 判定）。
+    // 用于回绕时挑选「任务量最少」的时段：时段内可能有非整点任务，故按范围而非精确时分统计。
+    function countTasksInSlot(day, startMin) {
+        const endMin = startMin + step;
+        return tasks.reduce(function (n, t) {
+            if (!t.startTime) return n;
+            const td = new Date(t.startTime);
+            if (!sameDay(td, day)) return n;
+            const tm = td.getHours() * 60 + td.getMinutes();
+            return (tm >= startMin && tm < endMin) ? n + 1 : n;
+        }, 0);
+    }
+
+    // 1. 确定候选日期与时间
+    let candidate = mkDateTime(baseDate, prefMin);
+    if (sameDay(candidate, now) && candidate.getTime() <= now.getTime()) {
+        if (!smart) {
+            // 关闭智能计划：次日同一偏好时间
+            candidate = mkDateTime(baseDate, prefMin);
+            candidate.setDate(candidate.getDate() + 1);
+        } else {
+            // 已过：同日区间内取当前时刻之后的下一个时间块；区间内已无时间块 → 次日偏好值
+            let next = firstSlotAfter(minsOfDay(now));
+            if (next < fw.min) next = fw.min;
+            if (next <= maxSlot) {
+                candidate = mkDateTime(baseDate, next);
+            } else {
+                candidate = mkDateTime(baseDate, prefMin);
+                candidate.setDate(candidate.getDate() + 1);
+            }
+        }
+    }
+    // 关闭智能计划：不检测任务冲突，直接返回
+    if (!smart) return { startTime: candidate, conflict: false };
+
+    // 2. 冲突检测顺延（在该词语区间内按步长推进）
+    let conflict = false;
+    const curDay = new Date(candidate);
+    let curMin = minsOfDay(candidate);
+    // 回绕统计的有效区间起点：当天时排除已过时段，未来日期取区间下限
+    let effMin = fw.min;
+    if (sameDay(candidate, now)) {
+        effMin = Math.max(fw.min, firstSlotAfter(minsOfDay(now)));
+    }
+    while (hasConflict(candidate)) {
+        curMin += step;
+        if (curMin > maxSlot) {
+            // 区间上限仍冲突 → 放置到「任务量最少」的时段（并列时取最接近偏好值的时段）
+            let bestSlot = prefMin, bestCount = Infinity, bestDist = Infinity;
+            for (let s = effMin; s <= maxSlot; s += step) {
+                const cnt = countTasksInSlot(curDay, s);
+                const dist = Math.abs(s - prefMin);
+                // 同任务量时取最接近偏好值的时段；距离也相同时优先偏好值之后（保持「往后顺延」语义）
+                const better = (cnt < bestCount)
+                    || (cnt === bestCount && dist < bestDist)
+                    || (cnt === bestCount && dist === bestDist && s >= prefMin && bestSlot < prefMin);
+                if (better) { bestCount = cnt; bestDist = dist; bestSlot = s; }
+            }
+            candidate = mkDateTime(curDay, bestSlot);
+            // 选中时段本就无任务时不应标记冲突
+            conflict = bestCount > 0;
+            break;
+        }
+        candidate = mkDateTime(curDay, curMin);
+    }
+    return { startTime: candidate, conflict: conflict };
 }
 
 // ==================== NLP 预览渲染 ====================
@@ -1398,6 +2125,10 @@ function renderNLPPreview(parsed) {
             timeStr += `-${ed.getHours().toString().padStart(2, '0')}:${ed.getMinutes().toString().padStart(2, '0')}`;
         }
         parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded text-xs"><i class="fas fa-calendar-alt"></i>${dateStr} ${timeStr}</span>`);
+        // 模糊时段词命中后冲突回绕：提示该时间点已存在任务
+        if (parsed.fuzzyConflict) {
+            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 rounded text-xs"><i class="fas fa-exclamation-circle"></i>时间冲突</span>`);
+        }
     }
 
     // 重复预览
@@ -1461,10 +2192,17 @@ function renderNLPPreview(parsed) {
     }
 
     const tagsHtml = parts.length > 0 ? `<div class="flex flex-wrap gap-1.5 mb-2">${parts.join('')}</div>` : '';
+    // 凌晨提醒：紧贴在时间徽章下方（当前已过 0 点且用了"明天/后天"等跨天相对日期）
+    // 结构与下方「创建任务」行保持一致（外层不设 text-*，图标按继承渲染；文字用 text-sm），
+    // 使提示图标与 fa-plus-circle 同尺寸、提示文字与「创建任务」同字号。
+    const lateNightHtml = parsed.lateNightWarning
+        ? `<div class="flex items-center gap-2 mb-2 text-amber-500 dark:text-amber-400"><i class="fas fa-exclamation-circle"></i><span class="text-sm">当前已过凌晨0点，注意任务时间设置是否符合预期。</span></div>`
+        : '';
     const notesHtml = parsed.notes ? `<div class="text-xs text-theme-secondary mt-1 ml-7 truncate"><i class="fas fa-align-left mr-1"></i>${escapeHtml(parsed.notes)}</div>` : '';
 
     return `<div class="px-5 py-4">
         ${tagsHtml}
+        ${lateNightHtml}
         <div class="flex items-center gap-2">
             <i class="fas fa-plus-circle text-green-500"></i>
             <span class="text-sm text-theme-secondary">创建任务：</span>
@@ -1525,34 +2263,102 @@ function createTaskFromNLP(parsed) {
     renderLists();
     renderView();
 
-    // 2行消息提示：第1行"任务创建成功"，第2行"任务标题（任务时间）"
-    showToast(buildTaskToastMessage(newTask), 'success', null, '任务创建成功');
+    // 2行消息提示：第1行状态词（SUCCESS），第2行"任务标题（任务时间）"
+    showToast(buildTaskToastMessage(newTask), 'success');
 }
 
 // ==================== 快捷键系统 ====================
-
+// 单一注册表 + 单一派发器。除「固定快捷键」（见下）外，所有键位都能在「设置 → 快捷键」自定义。
+// 注册表由两路合并而来（2026-10-17）：
+//   · 原「组合键」：Ctrl+Alt 的大动作（命令面板 Ctrl+Alt+N、番茄专注 Ctrl+Alt+P）与 Alt+数字的视图切换
+//   · 原「导航键」：无修饰键单键（N 新建任务、/ 搜索任务、K 看板 …）
+// ⚠️ 迁移后**不再保留任何无修饰键的默认键位**：单键在浏览界面时极易误触（敲一下就弹新建任务）。
+// ⚠️ 命名空间分两族（2026-10-17 最终方案，用户拍板）：
+//     · 动作类（newTask / searchTasks / editCurrentTask / filterToday / shortcutsHelp / commandPalette / togglePomodoro）
+//       → 统一 **Ctrl+Alt+字母**。其中命令面板从 Ctrl+Alt+N 挪到 **Ctrl+Alt+K**（沿用 GitHub 式
+//       「命令面板 = K」惯例），把 N 让给「新建任务」，避免二者在 Ctrl+Alt 命名空间撞车。
+//     · 视图类（viewTask~viewQuadrant + viewKanban + viewSummary）→ 统一 **Alt**（Alt+1~5 数字 + Alt+K 看板 + Alt+S 摘要）。
+//       Alt+K / Alt+S 在主流浏览器均非菜单栏加速键（危险的是 Alt+F/E/T/H/V/B，已被赶到 Ctrl+Alt 命名空间），
+//       故视图用裸 Alt+字母是安全的；而动作类一律 Ctrl+Alt，彻底避开浏览器菜单截胡。
+//     派发器仍保留「无修饰键」分支（守卫：非输入焦点 + 无浮层打开），便于将来按需回退，当前无登记项。
+// ⚠️ 固定快捷键不入注册表、不可自定义：撤销最近操作 Ctrl/Cmd+Z（trash.js:initUndoHotkey）、
+//    关闭浮层 / 面板 Esc。二者只在帮助浮层里静态展示。
+// ⚠️ 「完成 / 取消完成当前任务」的 Space 快捷键已整体移除：完成态只能通过勾选框修改。
 const DEFAULT_SHORTCUTS = {
-    commandPalette: { ctrl: true, alt: true, shift: false, key: 'n', label: '命令面板' },
-    togglePomodoro: { ctrl: true, alt: true, shift: false, key: 'p', label: '番茄专注' },
-    viewTask: { ctrl: false, alt: true, shift: false, key: '1', label: '任务视图' },
-    viewSchedule: { ctrl: false, alt: true, shift: false, key: '2', label: '日程视图' },
-    viewWeek: { ctrl: false, alt: true, shift: false, key: '3', label: '周视图' },
-    viewMonth: { ctrl: false, alt: true, shift: false, key: '4', label: '月视图' },
-    viewQuadrant: { ctrl: false, alt: true, shift: false, key: '5', label: '四象限视图' }
+    commandPalette:  { ctrl: true,  alt: true,  shift: false, key: 'k', label: '命令面板' },
+    togglePomodoro:  { ctrl: true,  alt: true,  shift: false, key: 'p', label: '番茄专注' },
+    newTask:         { ctrl: true,  alt: true,  shift: false, key: 'n', label: '新建任务' },
+    searchTasks:     { ctrl: true,  alt: true,  shift: false, key: 'f', label: '搜索任务' },
+    editCurrentTask: { ctrl: true,  alt: true,  shift: false, key: 'e', label: '编辑当前任务' },
+    filterToday:     { ctrl: true,  alt: true,  shift: false, key: 't', label: '今天' },
+    viewTask:        { ctrl: false, alt: true,  shift: false, key: '1', label: '任务视图' },
+    viewSchedule:    { ctrl: false, alt: true,  shift: false, key: '2', label: '日程视图' },
+    viewWeek:        { ctrl: false, alt: true,  shift: false, key: '3', label: '周视图' },
+    viewMonth:       { ctrl: false, alt: true,  shift: false, key: '4', label: '月视图' },
+    viewQuadrant:    { ctrl: false, alt: true,  shift: false, key: '5', label: '四象限视图' },
+    viewKanban:      { ctrl: false, alt: true,  shift: false, key: 'k', label: '看板' },
+    viewSummary:     { ctrl: false, alt: true,  shift: false, key: 's', label: '摘要' },
+    shortcutsHelp:   { ctrl: true,  alt: true,  shift: false, key: 'h', label: '快捷键帮助' }
 };
 
-let _recordingShortcut = null;
+// Ctrl/Cmd+Z 与 Esc 之外的键位都开放自定义；这两个键由各处在 keydown 里直接处理。
+const FIXED_SHORTCUT_HINTS = [
+    { label: '撤销最近操作', text: 'Ctrl+Z' },
+    { label: '关闭浮层 / 面板', text: 'Esc' }
+];
 
+let _recordingShortcut = null;
+let _resetAllShortcutsConfirming = false; // 「全部重置」两段式确认（二次点击才真正执行）
+let _resetAllShortcutsTimer = null;
+
+// ---- 单条读值口径 ----
+// settings.shortcuts[key]：
+//   undefined / 键不存在 → 沿用默认
+//   组合对象            → 用户自定义键位
+//   null                → 用户显式「不为该功能设置快捷键」（录入时按 Backspace）
+// null 与 undefined 的区别只能靠 hasOwnProperty 判定，不能简写成 `settings.shortcuts[key] || DEFAULT`。
+function _hasUserShortcut(key) {
+    return !!(settings && settings.shortcuts && Object.prototype.hasOwnProperty.call(settings.shortcuts, key));
+}
+
+// 取生效的组合；返回 null = 该功能已停用快捷键
+function getShortcutCombo(key) {
+    const def = DEFAULT_SHORTCUTS[key];
+    if (!def) return null;
+    if (!_hasUserShortcut(key)) return { ...def };
+    const v = settings.shortcuts[key];
+    if (!v) return null;
+    return {
+        ctrl: !!v.ctrl, alt: !!v.alt, shift: !!v.shift,
+        key: v.key,
+        label: v.label || def.label
+    };
+}
+
+function isShortcutDefault(key) {
+    if (!_hasUserShortcut(key)) return true;
+    const v = settings.shortcuts[key];
+    if (!v) return false; // 停用 ≠ 默认：仍要给出「重置」入口
+    const d = DEFAULT_SHORTCUTS[key];
+    return !!v.ctrl === !!d.ctrl && !!v.alt === !!d.alt && !!v.shift === !!d.shift
+        && String(v.key).toLowerCase() === String(d.key).toLowerCase();
+}
+
+// 生效清单（停用项不参与匹配、不进帮助浮层）
 function getCurrentShortcuts() {
-    if (settings && settings.shortcuts) {
-        const merged = {};
-        for (const key of Object.keys(DEFAULT_SHORTCUTS)) {
-            merged[key] = settings.shortcuts[key] || { ...DEFAULT_SHORTCUTS[key] };
-            if (!merged[key].label) merged[key].label = DEFAULT_SHORTCUTS[key].label;
-        }
-        return merged;
+    const merged = {};
+    for (const key of Object.keys(DEFAULT_SHORTCUTS)) {
+        const combo = getShortcutCombo(key);
+        if (!combo) continue;
+        if (!combo.label) combo.label = DEFAULT_SHORTCUTS[key].label;
+        merged[key] = combo;
     }
-    return { ...DEFAULT_SHORTCUTS };
+    return merged;
+}
+
+// 快捷键随其它设置一样即时落盘（settings.shortcuts 属于 settings 的一部分）
+function _saveShortcutSettings() {
+    if (typeof saveData === 'function') saveData();
 }
 
 function formatShortcut(combo) {
@@ -1560,18 +2366,19 @@ function formatShortcut(combo) {
     if (combo.ctrl) parts.push('Ctrl');
     if (combo.alt) parts.push('Alt');
     if (combo.shift) parts.push('Shift');
-    if (combo.key) parts.push(combo.key.toUpperCase());
+    if (combo.key) parts.push(String(combo.key).toUpperCase());
     return parts.join('+');
 }
 
 function checkShortcutConflict(shortcutKey, combo) {
+    if (!combo) return null;
     const shortcuts = getCurrentShortcuts();
     for (const [key, existing] of Object.entries(shortcuts)) {
         if (key === shortcutKey) continue;
         if (existing.ctrl === !!combo.ctrl &&
             existing.alt === !!combo.alt &&
             existing.shift === !!combo.shift &&
-            existing.key.toLowerCase() === combo.key.toLowerCase()) {
+            String(existing.key).toLowerCase() === String(combo.key).toLowerCase()) {
             return existing.label;
         }
     }
@@ -1587,13 +2394,59 @@ function executeShortcutAction(action) {
         case 'togglePomodoro':
             togglePomodoroPage();
             break;
-        case 'viewTask': case 'viewSchedule': case 'viewWeek': case 'viewMonth': case 'viewQuadrant':
-            const viewMap = { viewTask: 'task', viewSchedule: 'schedule', viewWeek: 'week', viewMonth: 'month', viewQuadrant: 'quadrant' };
-            const pomodoroPage = document.getElementById('pomodoro-page');
-            if (pomodoroPage && !pomodoroPage.classList.contains('hidden')) closePomodoroPage();
-            switchView(viewMap[action]);
+        case 'newTask':
+            openAddTaskModal();
             break;
+        case 'searchTasks':
+            openCommandPaletteWithSearch();
+            break;
+        case 'editCurrentTask':
+            _shortcutEditCurrentTask();
+            break;
+        case 'filterToday':
+            filterToday();
+            break;
+        case 'shortcutsHelp':
+            openShortcutsHelp();
+            break;
+        case 'viewTask': case 'viewSchedule': case 'viewWeek': case 'viewMonth':
+        case 'viewQuadrant': case 'viewKanban': case 'viewSummary': {
+            const viewMap = {
+                viewTask: 'task', viewSchedule: 'schedule', viewWeek: 'week',
+                viewMonth: 'month', viewQuadrant: 'quadrant', viewKanban: 'kanban', viewSummary: 'summary'
+            };
+            _shortcutSwitchView(viewMap[action]);
+            break;
+        }
     }
+}
+
+// E：编辑当前选中任务（详情面板当前任务 > 多选态最近点击任务；无当前任务时轻提示）
+function _shortcutEditCurrentTask() {
+    const id = (typeof getBatchCurrentTaskId === 'function') ? getBatchCurrentTaskId() : null;
+    if (!id || !tasks.some(function (t) { return t.id === id && !t.deletedAt; })) {
+        showToast('没有当前任务：请先打开任务详情或多选', 'info');
+        return;
+    }
+    if (typeof isBatchSelectActive === 'function' && isBatchSelectActive()) exitBatchSelectMode();
+    openTaskDetailPanel(id, false, true);
+}
+
+// 视图切换前先收起番茄专注全屏页
+function _shortcutSwitchView(view) {
+    const pomodoroPage = document.getElementById('pomodoro-page');
+    if (pomodoroPage && !pomodoroPage.classList.contains('hidden')) closePomodoroPage();
+    switchView(view);
+}
+
+// `/` 键：打开命令面板并预填 /s 进入搜索态（FR-08 入口）
+function openCommandPaletteWithSearch() {
+    openCommandPalette();
+    const input = document.getElementById('command-palette-input');
+    if (!input) return;
+    input.value = '/s ';
+    input.focus();
+    handleCommandPaletteInput({});
 }
 
 document.addEventListener('keydown', function(e) {
@@ -1605,6 +2458,24 @@ document.addEventListener('keydown', function(e) {
         const modifierKeys = ['Control', 'Alt', 'Shift', 'Meta'];
         if (modifierKeys.includes(e.key)) return;
 
+        // Backspace / Delete：不为该功能设置快捷键（退格 = 清空键位，且立即落盘）
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+            const clearedKey = _recordingShortcut;
+            if (!settings.shortcuts) settings.shortcuts = {};
+            settings.shortcuts[clearedKey] = null; // null = 显式停用，区别于「未设置」
+            _recordingShortcut = null;
+            _saveShortcutSettings();
+            renderShortcutsSettings();
+            showToast('已取消「' + (DEFAULT_SHORTCUTS[clearedKey] ? DEFAULT_SHORTCUTS[clearedKey].label : clearedKey) + '」的快捷键', 'success');
+            return;
+        }
+        // Esc：放弃本次录制，保留原键位
+        if (e.key === 'Escape') {
+            _recordingShortcut = null;
+            renderShortcutsSettings();
+            return;
+        }
+
         const hasModifier = e.ctrlKey || e.altKey || e.shiftKey;
         if (!hasModifier) {
             const recordingBtn = document.querySelector(`[data-shortcut-key="${_recordingShortcut}"] .shortcut-record-btn`);
@@ -1612,7 +2483,7 @@ document.addEventListener('keydown', function(e) {
                 recordingBtn.textContent = '需要修饰键';
                 setTimeout(() => {
                     if (_recordingShortcut) {
-                        recordingBtn.textContent = '请按下快捷键...';
+                        recordingBtn.textContent = '请按下快捷键…';
                     }
                 }, 1500);
             }
@@ -1634,10 +2505,11 @@ document.addEventListener('keydown', function(e) {
             alt: combo.alt,
             shift: combo.shift,
             key: combo.key,
-            label: DEFAULT_SHORTCUTS[_recordingShortcut].label
+            label: (DEFAULT_SHORTCUTS[_recordingShortcut] || {}).label
         };
 
         _recordingShortcut = null;
+        _saveShortcutSettings();
         renderShortcutsSettings();
         if (conflict) {
             const warningEl = document.getElementById('shortcut-conflict-warning');
@@ -1651,13 +2523,61 @@ document.addEventListener('keydown', function(e) {
 
     // 正常快捷键处理
     if (_commandPaletteOpen) return;
+    // C4-1：IME 组字期间一律不响应全局快捷键（不吞字、不误触发）
+    if (e.isComposing) return;
 
-    const shortcuts = getCurrentShortcuts();
+    // ? 由 Shift+/ 产出，按 e.key 原值匹配；其余键小写化匹配
+    const evKey = (e.key === '?') ? '?' : (e.key || '').toLowerCase();
+    const shortcuts = getCurrentShortcuts(); // 已排除「不设置快捷键」的功能
+    const _t = e.target;
+    const inEditable = !!(_t && (_t.tagName === 'INPUT' || _t.tagName === 'TEXTAREA' || _t.isContentEditable));
+
+    // 单键分支：仅无修饰键单键命中（沿用原导航键层的守卫 C4-2/C4-4：
+    // 输入焦点内不响应、任意浮层打开时不响应）。单键与组合键共用同一张注册表，
+    // 区别只在这里多两道守卫 —— 单键不会在写字时误触发。
+    if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (inEditable) return;
+        if (typeof isAnyOverlayOpen === 'function' && isAnyOverlayOpen()) return;
+        for (const [action, combo] of Object.entries(shortcuts)) {
+            if (!combo.ctrl && !combo.alt && !combo.shift && String(combo.key).toLowerCase() === evKey) {
+                e.preventDefault();
+                executeShortcutAction(action);
+                return;
+            }
+        }
+        return; // 无修饰键的其余键不参与组合键匹配
+    }
+
+    // FR-03 多选态组合键：Ctrl/Cmd+A 全选、Ctrl/Cmd+Backspace 删除选中（破坏性操作必须用组合键）。
+    // C4-2：输入焦点内不拦截（保留输入框原生 Ctrl+A 全选 / Ctrl+Backspace 删词）
+    if ((e.ctrlKey || e.metaKey) && !e.altKey
+        && typeof isBatchSelectActive === 'function' && isBatchSelectActive()) {
+        if (!inEditable) {
+            if (e.key.toLowerCase() === 'a') {
+                e.preventDefault();
+                if (typeof toggleSelectAllBatchTasks === 'function') toggleSelectAllBatchTasks();
+                return;
+            }
+            if (e.key === 'Backspace') {
+                e.preventDefault();
+                // skipConfirm：组合键本身已是 deliberate 门槛，直接执行（按钮点击才走二次确认）
+                if (typeof batchDeleteSelected === 'function') batchDeleteSelected(true);
+                return;
+            }
+        }
+    }
+
     for (const [action, combo] of Object.entries(shortcuts)) {
+    // C4-2 收严（2026-10-17）：输入焦点内只放行 Ctrl 系组合键（Ctrl+Alt+X 等），
+    // Alt+X（视图类，如 Alt+K 看板 / Alt+1 视图）一律让位给文本框自身的按键处理 —— 否则在备注里打字时
+    // 顺手按 Alt+K 会误切视图，等于把视图组合键又变成误触源。
+        // Ctrl+Alt+X 之所以放行：既有的命令面板 / 番茄专注等高频入口依赖这条通道，
+        // 且 Ctrl+Alt+字母不与浏览器任何文本编辑快捷键冲突。
+        if (inEditable && !combo.ctrl) continue;
         if (e.ctrlKey === !!combo.ctrl &&
             e.altKey === !!combo.alt &&
             e.shiftKey === !!combo.shift &&
-            e.key.toLowerCase() === combo.key.toLowerCase()) {
+            String(combo.key).toLowerCase() === evKey) {
             e.preventDefault();
             executeShortcutAction(action);
             return;
@@ -1665,38 +2585,49 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+// 3 栏网格：功能补全后共 14 项，一栏会拖得过长；每格「标签一行 + 键位一行」，
+// 竖排比左右分栏更抗压（栏宽约 190px，键位按钮也不至于挤成省略号）。
 function renderShortcutsSettings() {
     const container = document.getElementById('shortcuts-settings-container');
     if (!container) return;
 
-    const shortcuts = getCurrentShortcuts();
-    let html = '';
+    let html = '<div class="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-3">';
 
-    for (const [key, combo] of Object.entries(shortcuts)) {
+    for (const key of Object.keys(DEFAULT_SHORTCUTS)) {
+        const combo = getShortcutCombo(key);           // null = 用户未给该功能设置快捷键
+        const label = DEFAULT_SHORTCUTS[key].label;
+        const disabled = combo === null;
         const isRecording = _recordingShortcut === key;
-        const conflict = checkShortcutConflict(key, combo);
-        const displayText = isRecording ? '请按下快捷键...' : formatShortcut(combo);
-        const isDefault = !settings.shortcuts || !settings.shortcuts[key] ||
-            (settings.shortcuts[key].ctrl === DEFAULT_SHORTCUTS[key].ctrl &&
-             settings.shortcuts[key].alt === DEFAULT_SHORTCUTS[key].alt &&
-             settings.shortcuts[key].shift === DEFAULT_SHORTCUTS[key].shift &&
-             settings.shortcuts[key].key === DEFAULT_SHORTCUTS[key].key);
+        let displayText;
+        if (isRecording) displayText = '请按下快捷键…';
+        else if (disabled) displayText = '未设置';
+        else displayText = formatShortcut(combo);
+        const btnClass = isRecording
+            ? 'border-accent bg-accent text-white'
+            : (disabled
+                ? 'border-dashed border-theme text-theme-muted hover:bg-theme-tertiary'
+                : 'border-theme bg-theme-tertiary text-theme-primary hover:bg-theme-secondary');
 
         html += `
-            <div class="flex items-center justify-between py-2" data-shortcut-key="${key}">
-                <span class="text-sm text-theme-secondary">${combo.label || DEFAULT_SHORTCUTS[key].label}</span>
-                <div class="flex items-center gap-2">
-                    ${!isDefault ? `<button class="p-1 text-theme-muted hover:text-theme-primary transition" onclick="resetShortcut('${key}')" title="重置为默认"><i class="fas fa-undo text-xs"></i></button>` : ''}
-                    <button class="shortcut-record-btn px-3 py-1.5 text-sm border border-theme rounded-lg ${isRecording ? 'bg-accent text-white border-accent' : 'bg-theme-tertiary text-theme-primary hover:bg-theme-secondary'} transition min-w-[140px] text-center"
-                            onclick="startShortcutRecording('${key}')">
-                        ${displayText}
-                    </button>
+            <div class="flex flex-col gap-1 min-w-0" data-shortcut-key="${key}">
+                <div class="flex items-center gap-1 min-w-0">
+                    <span class="flex-1 min-w-0 truncate text-xs text-theme-secondary" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+                    <span class="flex-shrink-0 w-5 inline-flex items-center justify-center ${isShortcutDefault(key) ? 'invisible' : ''}"><button class="p-0.5 text-theme-muted hover:text-theme-primary transition" onclick="resetShortcut('${key}')" title="重置为默认"><i class="fas fa-undo text-xs"></i></button></span>
                 </div>
+                <button class="shortcut-record-btn w-full px-2 py-1.5 text-xs border rounded-lg transition text-center truncate ${btnClass}"
+                        onclick="startShortcutRecording('${key}')"
+                        title="${isRecording ? '按下新快捷键；Backspace 不设置，Esc 取消' : (disabled ? '未设置快捷键，点击录制' : '点击修改快捷键')}">
+                    ${escapeHtml(displayText)}
+                </button>
             </div>`;
     }
 
+    html += '</div>';
     html += `<div id="shortcut-conflict-warning" class="hidden text-xs text-red-500 mt-1"></div>`;
-    html += `<div class="flex justify-end mt-2"><button class="px-3 py-1.5 text-xs text-theme-muted hover:text-theme-primary border border-theme rounded-lg transition" onclick="resetAllShortcuts()">全部重置</button></div>`;
+    html += `<div class="flex justify-between items-center mt-3">`;
+    html += `<button class="px-3 py-1.5 text-xs text-theme-muted hover:text-theme-primary border border-theme rounded-lg transition" onclick="openShortcutsHelp()"><i class="fas fa-keyboard mr-1"></i>查看所有快捷键</button>`;
+    html += `<button class="px-3 py-1.5 text-xs border rounded-lg transition ${_resetAllShortcutsConfirming ? 'border-red-500 bg-red-500 text-white' : 'text-theme-muted hover:text-theme-primary border-theme'}" onclick="requestResetAllShortcuts()" title="${_resetAllShortcutsConfirming ? '再次点击确认重置全部快捷键' : '重置全部快捷键为默认'}">${_resetAllShortcutsConfirming ? '再次点击确认重置' : '全部重置'}</button>`;
+    html += `</div>`;
 
     container.innerHTML = html;
 }
@@ -1710,14 +2641,135 @@ function resetShortcut(shortcutKey) {
     if (settings.shortcuts) {
         delete settings.shortcuts[shortcutKey];
     }
+    _saveShortcutSettings();
     renderShortcutsSettings();
 }
 
-function resetAllShortcuts() {
+function requestResetAllShortcuts() {
+    // 两段式确认：首次点击进入待确认态（按钮变红 + 文案提示），3 秒内再次点击才真正重置
+    if (!_resetAllShortcutsConfirming) {
+        _resetAllShortcutsConfirming = true;
+        renderShortcutsSettings();
+        _resetAllShortcutsTimer = setTimeout(function () {
+            _resetAllShortcutsConfirming = false;
+            _resetAllShortcutsTimer = null;
+            renderShortcutsSettings();
+        }, 3000);
+        return;
+    }
+    // 二次确认：执行全部重置
+    clearTimeout(_resetAllShortcutsTimer);
+    _resetAllShortcutsTimer = null;
+    _resetAllShortcutsConfirming = false;
     if (settings) {
         settings.shortcuts = {};
     }
+    _saveShortcutSettings();
     renderShortcutsSettings();
+}
+
+// ==================== 快捷键帮助浮层（FR-04 一期） ====================
+let _shortcutsHelpEscBound = false;
+
+function openShortcutsHelp() {
+    const modal = document.getElementById('shortcuts-help-modal');
+    if (!modal) return;
+    const content = document.getElementById('shortcuts-help-content');
+    if (content) content.innerHTML = renderShortcutsHelpContent();
+    // Esc 惰性绑定（对齐 openBgDirBrowser 范式）
+    if (!_shortcutsHelpEscBound) {
+        _shortcutsHelpEscBound = true;
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Escape') return;
+            const m = document.getElementById('shortcuts-help-modal');
+            if (m && !m.classList.contains('hidden')) closeShortcutsHelp();
+        });
+    }
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeShortcutsHelp() {
+    const modal = document.getElementById('shortcuts-help-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+function _helpKbd(text) {
+    return `<kbd class="px-1.5 py-0.5 bg-theme-tertiary text-theme-primary border border-theme rounded text-xs font-mono min-w-[2.5rem] text-center inline-block">${escapeHtml(text)}</kbd>`;
+}
+
+// 帮助内容四区：① 快捷键（导航键与组合键合并，全部可自定义）② 固定快捷键 ③ 批量管理 ④ 搜索语法
+function renderShortcutsHelpContent() {
+    let html = `<div>
+        <h3 class="text-sm font-semibold text-theme-secondary mb-2">快捷键</h3>
+        <div class="grid grid-cols-2 gap-x-6 gap-y-0.5">`;
+    const combos = getCurrentShortcuts();
+    for (const combo of Object.values(combos)) {
+        html += _helpRow(escapeHtml(combo.label || ''), formatShortcut(combo));
+    }
+    html += `</div></div>`;
+
+    html += `<div>
+        <h3 class="text-sm font-semibold text-theme-secondary mb-2">固定快捷键</h3>
+        <div class="space-y-0.5">`;
+    for (const fixed of FIXED_SHORTCUT_HINTS) {
+        html += _helpRow(escapeHtml(fixed.label), fixed.text);
+    }
+    html += `</div></div>`;
+
+    html += `<div>
+        <h3 class="text-sm font-semibold text-theme-secondary mb-2">任务视图批量管理</h3>
+        <div class="space-y-1.5">
+            <div class="flex items-center justify-between py-0.5">
+                <span class="text-sm text-theme-primary">全选（多选态）</span>
+                ${_helpKbd('Ctrl+A')}
+            </div>
+            <div class="flex items-center justify-between py-0.5">
+                <span class="text-sm text-theme-primary">删除选中项（多选态）</span>
+                ${_helpKbd('Ctrl+Backspace')}
+            </div>
+            <div class="flex items-center justify-between py-0.5">
+                <span class="text-sm text-theme-primary">退出多选态</span>
+                ${_helpKbd('Esc')}
+            </div>
+            <div class="text-xs text-theme-muted pt-1 space-y-0.5">
+                <div>顶部「批量管理」按钮或命令面板 <span class="font-mono text-theme-primary">/select 关键词</span> 进入多选态</div>
+                <div>多选态内：点击 = 选中，<span class="font-mono text-theme-primary">Shift+点击</span> = 连续区间，<span class="font-mono text-theme-primary">Ctrl+点击</span> = 离散补选；点分组前的方块可整组勾选</div>
+                <div>退出多选需点击「退出多选」后二次确认；主动退出会恢复进入前的任务详情栏</div>
+            </div>
+        </div>
+    </div>`;
+
+    // 搜索语法：左右分离式（左 = 语法，右 = 含义），不用居中破折号串写，扫读更快
+    html += `<div>
+        <h3 class="text-sm font-semibold text-theme-secondary mb-2">搜索语法</h3>
+        <div class="space-y-1">`;
+    const searchSyntax = [
+        ['/s 关键词', '搜索标题 / 备注 / 子任务 / 标签 / 清单名'],
+        ['~清单名', '限定清单（如 ~工作）'],
+        ['#标签名', '限定标签（如 #重要）'],
+        ['is:已完成 / is:未完成', '完成态'],
+        ['is:今天 / is:逾期 / is:无日期', '时间态']
+    ];
+    for (const [syntax, desc] of searchSyntax) {
+        html += `<div class="flex items-baseline gap-3">
+            <span class="flex-shrink-0 font-mono text-xs text-theme-primary truncate" style="width: 12rem;" title="${escapeHtml(syntax)}">${escapeHtml(syntax)}</span>
+            <span class="flex-1 text-xs text-theme-secondary">${escapeHtml(desc)}</span>
+        </div>`;
+    }
+    html += `<div class="text-xs text-theme-muted pt-1">多条件用空格分隔，语义为 AND；按 Enter 记入搜索历史</div>`;
+    html += `</div></div>`;
+    return html;
+}
+
+// 帮助浮层的一行：左侧功能名 / 右侧键位
+function _helpRow(labelHtml, comboText) {
+    return `<div class="flex items-center justify-between gap-2 py-0.5 min-w-0">
+            <span class="text-sm text-theme-primary truncate">${labelHtml}</span>
+            ${_helpKbd(comboText)}
+        </div>`;
 }
 
 // 切换番茄专注页面

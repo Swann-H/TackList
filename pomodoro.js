@@ -2063,12 +2063,12 @@ function syncPomodoroFromServer() {
         
         // 检测休眠自动暂停：如果服务器状态变为pause但客户端之前在运行
         if (state.state === 'pause' && (pomodoroState.state === 'focusing' || pomodoroState.state === 'resting')) {
-            showInAppNotification('系统休眠检测', '检测到系统休眠，专注已自动暂停');
+            showInAppNotification('系统休眠检测', '检测到系统休眠，专注已自动暂停', 'warning');
         }
         // 检测休眠期间专注完成：客户端之前在运行，服务器已完成结算
         if (state.state === 'completed' && (pomodoroState.state === 'focusing' || pomodoroState.state === 'resting')) {
             if (state.phase !== 'focus') {
-                showInAppNotification('专注完成', '系统休眠期间专注已自动完成');
+                showInAppNotification('专注完成', '系统休眠期间专注已自动完成', 'success');
                 playPomodoroChime(true);
             }
         }
@@ -2955,7 +2955,7 @@ function relinkTask(recordIdx, taskId) {
     saveData();
     rebuildFocusMinutesCache();
     renderPomodoroPage();
-    showToast('专注记录已重新关联', 'success');
+    showToast('已重新关联专注记录', 'success');
 }
 
 // 新增记录弹窗专用日期选择器：今天/昨天/前天/上周最后一个工作日
@@ -3089,7 +3089,7 @@ function deletePomodoroRecord(recordIdx) {
             refreshAll();
         });
         const taskName = (removed && removed.taskName) ? removed.taskName : '一般专注';
-        showToast(`已删除专注记录（${taskName}）`, 'success');
+        showToast(`已删除专注记录「${taskName}」`, 'success');
         return;
     }
 
@@ -3352,7 +3352,7 @@ function submitPomodoroAddRecord() {
     rebuildFocusMinutesCache();
     renderPomodoroPage();
     closePomodoroAddRecord();
-    showToast('专注记录已添加', 'success');
+    showToast('已添加专注记录', 'success');
     // 立即保存（不走节流），保存完成后重新渲染确保数据同步
     saveDataImmediate().then(() => {
         renderPomodoroPage();
@@ -3436,7 +3436,8 @@ function acceptBoringThing(thingId) {
     const thing = mindfulThings.find(t => t.id === thingId);
     if (!thing) return;
 
-    if (settings.autoCreateTask) {
+    // 接受任务固定自动创建任务（原设置项「接受后自动创建任务」已移除，默认值固定为是）
+    {
         const todayStr = formatDate(new Date());
         tasks.push({
             id: generateId(),
@@ -3461,9 +3462,7 @@ function acceptBoringThing(thingId) {
         saveDataImmediate();
         renderLists();
         renderView();
-        showToast('已添加到今日任务！', 'success');
-    } else {
-        showToast('好的，去做吧！', 'info');
+        showToast('已加入今日任务', 'success');
     }
 
     closeBoringModal();

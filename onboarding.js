@@ -273,15 +273,15 @@ function _obBuildSteps() {
                         </div>
                     </div>
                     <div class="flex gap-2 mt-2.5 justify-end text-xs font-bold tracking-wider">
-                        <span class="px-2.5 py-1 bg-green-500/20 text-green-400 border border-green-500 rounded">FOCUS</span>
-                        <span class="px-2.5 py-1 bg-amber-500/20 text-amber-400 border border-amber-500 rounded">DONE</span>
+                        <span class="px-2.5 py-1 bg-cyan-500/20 text-cyan-400 border border-cyan-500 rounded">FOCUS</span>
+                        <span class="px-2.5 py-1 bg-green-500/20 text-green-400 border border-green-500 rounded">DONE</span>
                         <span class="px-2.5 py-1 bg-cyan-500/20 text-cyan-400 border border-cyan-500 rounded">LATER</span>
                         <span class="px-2.5 py-1 bg-slate-700/50 text-slate-400 border border-slate-600 rounded">OK</span>
                     </div>
                 </div>
                 <ul class="ob-ul text-sm">
-                    <li><b class="text-green-400">FOCUS</b>：立刻开始该任务的番茄专注</li>
-                    <li><b class="text-amber-400">DONE</b>：一键标记任务完成</li>
+                    <li><b class="text-cyan-400">FOCUS</b>：立刻开始该任务的番茄专注</li>
+                    <li><b class="text-green-400">DONE</b>：一键标记任务完成</li>
                     <li><b class="text-cyan-400">LATER</b>：稍后提醒（默认 15 分钟，可在设置中调整）</li>
                     <li><b class="text-slate-400">OK</b>：仅关闭任务提醒卡片</li>
                 </ul>

@@ -609,18 +609,29 @@ function buildTaskListItemHtml(task, useShortTime) {
             : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '');
     }
 
+    // FR-03 多选态：行点击切换为「选中」语义（V3-5），完成勾选框替换为选择指示器，
+    // 隐藏专注按钮避免误触；选中行高亮由 batch-select-mode CSS 控制（batchSelect.js）
+    const batchMode = (typeof isBatchSelectActive === 'function') && isBatchSelectActive();
+    const rowOnclick = batchMode
+        ? `event.stopPropagation(); onBatchTaskRowClick(event, '${task.id}')`
+        : `event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)`;
+    const leftControl = batchMode
+        ? renderBatchSelectIndicator(task)
+        : renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' });
+
     return `
         <div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
              data-list-id="${task.listId || 'default'}"
-             onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)"
+             data-task-id="${task.id}"
+             onclick="${rowOnclick}"
              >
             <div class="task-list-color-bar" style="background-color: ${getTaskBarColor(task, barColor)};"></div>
-            ${renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' })}
+            ${leftControl}
             <div class="flex-1 min-w-0 flex flex-col">
                 <span class="${tvcShowDetails ? 'font-medium' : 'text-sm'} ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0 flex items-center">${extIcon}${task.title || '新任务'}</span>
                 ${taskDetailsLine ? `<div>${taskDetailsLine}</div>` : ''}
             </div>
-            ${renderFocusButton(task.id, getTaskViewConfig().showFocusButton)}
+            ${batchMode ? '' : renderFocusButton(task.id, getTaskViewConfig().showFocusButton)}
             <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                 ${tagCapsules}
                 ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
@@ -786,6 +797,8 @@ function renderTaskListView(container) {
     }
     // 按天分组视图：任务时间只显示 HH:MM，避免与分组标题中的日期重复
     const useShortTime = isSpecialTimeFilter();
+    // 多选态：分组标题前加整组选择指示器（batchSelect.js）
+    const batchMode = (typeof isBatchSelectActive === 'function') && isBatchSelectActive();
 
     if (groups.length === 0) {
         _teardownTaskListVirtualScroll();
@@ -823,6 +836,7 @@ function renderTaskListView(container) {
                      onclick="toggleTaskListGroup('${group.key}')">
                     <div class="flex items-center gap-2">
                         <i class="fas fa-chevron-${isCollapsed ? 'right' : 'down'} text-xs text-theme-muted mr-1"></i>
+                        ${batchMode ? renderBatchGroupIndicator(group.key) : ''}
                         <h3 class="text-base font-semibold ${group.overdue ? 'text-red-500' : 'text-theme-primary'}">${group.labelHtml}</h3>
                     </div>
                 </div>
@@ -895,6 +909,11 @@ function _populateTaskListGroupContent(lazyEl, groups, useShortTime) {
     }
     lazyEl.innerHTML = inner;
     lazyEl.dataset.populated = 'true';
+    // 多选态：新注入的行是「未选中」骨架，需要按当前选中集补上 .batch-selected（含分组指示器三态）
+    if (typeof isBatchSelectActive === 'function' && isBatchSelectActive()
+        && typeof _refreshBatchSelectionDom === 'function') {
+        _refreshBatchSelectionDom();
+    }
 }
 
 // 设置任务列表虚拟滚动：视口附近分组立即填充，远端分组由 IO 懒加载
@@ -1055,10 +1074,10 @@ function toggleTaskListGroup(groupKey, opts) {
         }
     }
 
-    // 更新分组标题的折叠图标
+    // 更新分组标题的折叠图标（须限定 chevron：多选态下分组标题里还有整组选择指示器的 i.fas）
     const groupWrapper = contentEl.closest('[data-task-group]');
     if (groupWrapper) {
-        const icon = groupWrapper.querySelector('.task-list-group-header i.fas');
+        const icon = groupWrapper.querySelector('.task-list-group-header i.fa-chevron-down, .task-list-group-header i.fa-chevron-right');
         if (icon) {
             icon.className = `fas fa-chevron-${nowCollapsed ? 'right' : 'down'} text-xs text-theme-muted mr-1`;
         }
