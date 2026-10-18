@@ -38,6 +38,7 @@ Thumbs.db
 # Local dev test scripts (not shipped)
 test-cp.js
 inject_test_data.py
+tools/
 
 # Design/plan docs (local only, not shipped; only README*.md are tracked)
 DESIGN_*.md

@@ -1348,6 +1348,16 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
         if (e.key === 'Enter' && !e.shiftKey) {
             const tag = e.target.tagName.toLowerCase();
             if (tag === 'textarea') return;
+            // 日期/时间输入框：回车只提交当前输入并收起快速选择下拉，不关闭整个详情面板。
+            // （此前回车会走 closeTaskDetailPanel：面板被关掉，且浏览器尚未定稿的输入值
+            //   按空串读走 → 时间被清空、任务被误判为全天任务）
+            if (e.target instanceof HTMLInputElement &&
+                (e.target.type === 'date' || e.target.type === 'time')) {
+                e.preventDefault();
+                e.stopPropagation();
+                commitDetailDateTimeInput(e.target);
+                return;
+            }
             e.preventDefault();
             closeTaskDetailPanel();
         }
@@ -3046,6 +3056,44 @@ function setupDateTimeInteractions() {
             updateDetailTimeBtnText();
         };
     }
+
+    // 记录「用户在框内动过键盘」的状态：回车提交时用来区分「输入无法识别」与
+    // 「本来就空」（后者视为清空时间，按点击面板外一致处理）。
+    // 用 keydown 而非 input：键入不被接受的字符（如只输了个 "9"）时 input 不触发，
+    // 但 value 同样是空串，正是要提示的那种情况。
+    // 输入框每次打开面板都会 clone 重建，标记随之自然重置。
+    [newDateInput, newTimeInput, endDateInput, endTimeInput].forEach(el => {
+        if (!el) return;
+        el.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') el._detailDateTimeDirty = true;
+        });
+    });
+}
+
+// 详情栏日期/时间输入框内按回车：把编辑中的输入定稿（合法则写回 value 并派发 change），
+// 收起快速选择下拉，详情面板与时间菜单保持打开。
+// - 输入有效 → 立即落库（与点击面板外收起时间菜单同一口径）
+// - 输入为空但用户动过键盘（如只输了 "9"，或输入了无法识别的字符）→ 不动任务数据，
+//   提示重新输入，避免「以为设了时间，实际被清成全天任务」
+// - 输入为空且未动过键盘 → 视为清空时间（与点击面板外一致，按全天处理）
+function commitDetailDateTimeInput(input) {
+    // 未定稿的无效原文（如只输入了 "9"）：此时 blur 也不会写入 value
+    const hasUnparseableInput = !!(input.validity && input.validity.badInput);
+    // blur 让浏览器完成定稿/校验（Enter 的默认行为被 preventDefault 掉后不会自动发生），
+    // 随后立刻还回焦点，用户不必重新点输入框
+    input.blur();
+    input.focus();
+    // 只收起快速时间/日期选择下拉，不动 #detail-time-menu 与任务详情面板
+    closeAllTimePickers();
+    // 定稿后仍为空且用户动过键盘 → 输入无法识别，不动任务数据
+    if (!input.value && (hasUnparseableInput || input._detailDateTimeDirty)) {
+        input.select();
+        showToast(input.type === 'date'
+            ? '未能识别输入的日期，请检查日期格式'
+            : '未能识别输入的时间，请按 HH:MM 格式填写（如 09:30）', 'warning');
+        return;
+    }
+    saveDetailTimeConfig();
 }
 
 function closeTaskDetailPanel() {

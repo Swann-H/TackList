@@ -139,6 +139,10 @@ function _qVtOn() {
 let _qActiveTransition = null;
 // 在途的详情面板切换目标状态（true=呼出 / false=收回 / null=无），用于吞掉同向重复请求
 let _qPanelTogglePending = null;
+// 抑制标记：即将进入功能页（番茄专注等）前若需关闭详情面板，临时禁用四象限的 View Transition
+// 接管，让面板以瞬时方式收起，避免「三象限右展」过渡与功能页进入动画叠加播放。
+// 由 switchToPomodoroPage() 在关闭详情面板前后置位/复位（用完即清，非长期状态）。
+let _suppressQuadrantPanelTransition = false;
 
 // 过渡期 root 标记（必须挂在 documentElement：::view-transition 伪元素树隶属 :root）：
 //   fx-q-vt         —— 统一时长/缓动，并关闭整页交叉淡入（露出实时新状态，消除主区收缩前后的重影）
@@ -237,7 +241,8 @@ function qHookDetailPanelToggle(open, applyClassChange, taskId) {
     // 不满足时象限跟随仍需生效（立即渲染），其余交由默认路径
     const container = document.getElementById('quadrants-container');
     if (!container || !container.classList.contains('quadrant-expanded')
-        || settings.smoothAnimations !== true || !_qVtOn()) {
+        || settings.smoothAnimations !== true || !_qVtOn()
+        || _suppressQuadrantPanelTransition) {
         if (switched) renderView();
         return false;
     }

@@ -598,7 +598,17 @@ function switchToPomodoroPage() {
         _pomodoroReturnDetailTaskId = currentDetailTaskId;
         _pomodoroReturnDetailReadOnly = !!detailReadOnly;
     }
+    // 进入番茄页前关闭详情面板：禁用四象限的 View Transition 接管，让面板瞬时收起，
+    // 否则「三象限右展」过渡会与番茄页进入动画叠加播放（bug：两动画并行）。
+    // 同时暂关主区 margin-right 过渡，使详情面板让位的 24rem 收缩瞬时到位，
+    // 番茄页进入时主内容直接后退变暗，不残留主区向右扩张的过程。
+    const mainEl = document.getElementById('main-content');
+    const prevMainTransition = mainEl ? mainEl.style.transition : null;
+    if (typeof _suppressQuadrantPanelTransition !== 'undefined') _suppressQuadrantPanelTransition = true;
+    if (mainEl) mainEl.style.transition = 'none';
     if (typeof closeTaskDetailPanel === 'function') closeTaskDetailPanel();
+    if (typeof _suppressQuadrantPanelTransition !== 'undefined') _suppressQuadrantPanelTransition = false;
+    if (mainEl) mainEl.style.transition = prevMainTransition || '';
     // 番茄页内容渲染（光圈扩散期间需展示完整页面，故立即渲染、仅暂停内部动画）
     const showPage = () => {
         document.getElementById('pomodoro-page').classList.remove('hidden');

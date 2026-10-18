@@ -861,8 +861,8 @@ function showReminderToast(title, message, taskId, opts = {}) {
         onBodyClick: openDetail,
         actions: [
             {
-                // Focus: 开始/切换番茄专注
-                label: 'FOCUS', variant: 'primary', cls: 'reminder-focus-btn',
+                // Focus: 开始/切换番茄专注（fa6b351 配色：绿色）
+                label: 'FOCUS', variant: 'success', cls: 'reminder-focus-btn',
                 onClick: function () {
                     if (taskId && typeof startPomodoroForTask === 'function') {
                         startPomodoroForTask(taskId);
@@ -872,7 +872,8 @@ function showReminderToast(title, message, taskId, opts = {}) {
             {
                 // Done: 主任务提醒 → 标记任务完成；子任务提醒 → 勾选该子任务
                 // （子任务场景下若沿用"完成整个任务"会造成误操作，语义必须区分）
-                label: 'DONE', variant: 'success', cls: 'reminder-done-btn',
+                // fa6b351 配色：琥珀色（新增 .toast-btn-amber）
+                label: 'DONE', variant: 'amber', cls: 'reminder-done-btn',
                 onClick: function () {
                     if (!taskId) return;
                     if (subtaskId) {
@@ -894,8 +895,8 @@ function showReminderToast(title, message, taskId, opts = {}) {
             },
             {
                 // Later: 稍后提醒（子任务场景下延迟的是该子任务）
-                // 灰色 = 关闭/推迟，与 FOCUS 的青色主操作区分（一卡只留一个 primary）
-                label: 'LATER', variant: 'ghost', cls: 'reminder-later-btn',
+                // fa6b351 配色：青色（primary）——四按钮各一色，不复用 FOCUS 的绿色
+                label: 'LATER', variant: 'primary', cls: 'reminder-later-btn',
                 onClick: function () {
                     if (!taskId) return;
                     const delayMinutes = (typeof settings !== 'undefined' && settings.snoozeDelay) ? settings.snoozeDelay : 15;
