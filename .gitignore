@@ -10,6 +10,8 @@ bg_carousel.json
 
 # User data
 data.json
+# WebDAV credentials (server-local, never commit)
+webdav_config.json
 
 # Python
 __pycache__/

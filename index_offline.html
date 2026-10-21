@@ -5353,6 +5353,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2" data-page-node-id="BRCD6UjUveKzmMQGmmulU2">数据与系统</div>
                             <ul class="space-y-1" data-page-node-id="TCzfWvmLwF5X2Ho7ODHoxd">
                                 <li data-page-node-id="dLly5BWj1EULH2ArmASv9I"><a data-target="settings-section-sync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="BCmvJaRvqIOYAouwGE2Rll">数据同步</a></li>
+                                <li><a data-target="settings-section-webdav" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer">WebDAV 云同步</a></li>
                                 <li data-page-node-id="ZQu2tr75LoxHxoFeK7XMOc"><a data-target="settings-section-network" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="ISFU8pifJrXxYnNGiUCFFc">网络配置</a></li>
                                 <li data-page-node-id="TqatHKf2UasQRbI9ivIGyR"><a data-target="settings-section-data" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="mlRw0N33aOSrD1dKCEK7ZC">数据管理</a></li>
                                 <li data-page-node-id="aboutNavOff"><a data-target="settings-section-about" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="aboutNavLinkOff">关于</a></li>
@@ -5975,6 +5976,38 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                         </div>
                     </div>
 
+                    <!-- WebDAV 云同步 -->
+                    <div id="settings-section-webdav" class="settings-group-start">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4">WebDAV 云同步</h3>
+                        <div class="space-y-4">
+                            <p class="text-xs text-theme-muted">电脑和手机各运行一份本系统时，两端配置同一个 WebDAV 地址（支持坚果云、Nextcloud 等），在一端「上传到云端」、在另一端「从云端下载」即可同步数据。配置与凭据保存在服务器本地，不随数据导出。</p>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-secondary mb-2">WebDAV 地址（需包含完整文件名）</label>
+                                <input type="url" id="webdav-url" placeholder="https://dav.jianguoyun.com/dav/TackList/tacklist-data.json" autocomplete="off" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent font-mono text-sm">
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm font-medium text-theme-secondary mb-2">用户名</label>
+                                    <input type="text" id="webdav-username" autocomplete="off" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-theme-secondary mb-2">应用密码</label>
+                                    <input type="password" id="webdav-password" autocomplete="new-password" placeholder="应用密码" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent">
+                                </div>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="webdavTest()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm"><i class="fas fa-plug mr-1"></i>测试连接</button>
+                                <button onclick="saveWebdavConfig()" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm"><i class="fas fa-save mr-1"></i>保存配置</button>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="webdavPush()" class="flex-1 px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary text-sm flex items-center justify-center gap-2"><i class="fas fa-cloud-arrow-up"></i>上传到云端</button>
+                                <button onclick="webdavPull()" class="flex-1 px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary text-sm flex items-center justify-center gap-2"><i class="fas fa-cloud-arrow-down"></i>从云端下载</button>
+                            </div>
+                            <div id="webdav-status" class="text-xs bg-theme-tertiary text-theme-secondary rounded-lg px-3 py-2 whitespace-pre-line">正在读取同步状态…</div>
+                            <p class="text-xs text-theme-muted">说明：上传时会同时在同目录生成 <code class="font-mono">tacklist-reminders.ics</code>，可在手机系统日历中订阅该地址，把未完成的日程同步到手机日历。从云端下载会覆盖本机数据，覆盖前自动备份到 backups 目录。</p>
+                        </div>
+                    </div>
+
                     <!-- 网络配置 -->
                     <div id="settings-section-network" data-page-node-id="GUE04AaRtQYccLb9KeaG2T">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="80j3aM8bMDrZbTGzQslueC">网络配置</h3>
@@ -6263,6 +6296,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
     <script src="lunar.js"></script>
     <script src="utils.js"></script>
     <script src="data.js"></script>
+    <script src="webdav.js"></script>
     <script src="sidebarViews.js"></script>
     <script src="calendarViews.js"></script>
     <script src="quadrantView.js"></script>

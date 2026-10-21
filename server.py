@@ -497,6 +497,441 @@ def restore_extended_backup_fields(data):
         except Exception as e:
             print("Restore bg carousel config error: %s" % str(e))
 
+# ==================== WebDAV 手动同步 ====================
+# 使用场景：电脑与手机各自运行一份本系统，两端配置同一个 WebDAV 地址（坚果云、
+# Nextcloud 等），在设置面板手动「上传到云端 / 从云端下载」即可完成数据同步。
+# 凭据单独保存在 webdav_config.json，不写入 data.json，
+# 避免账号密码随数据导出/导入在设备间扩散。
+WEBDAV_CONFIG_FILE = os.path.join(DIRECTORY, 'webdav_config.json')
+WEBDAV_TIMEOUT = 20
+
+webdav_lock = threading.Lock()
+
+
+def load_webdav_config():
+    """读取 WebDAV 配置；文件不存在或损坏时返回空 dict。"""
+    try:
+        if os.path.exists(WEBDAV_CONFIG_FILE):
+            with open(WEBDAV_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+            return cfg if isinstance(cfg, dict) else {}
+    except Exception as e:
+        print("Load webdav config error: %s" % str(e))
+    return {}
+
+
+def save_webdav_config(cfg):
+    try:
+        with open(WEBDAV_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print("Save webdav config error: %s" % str(e))
+        return False
+
+
+def _encode_webdav_password(p):
+    """base64 编码后存储，避免配置文件里出现明文密码（仅混淆，不是加密）。"""
+    import base64
+    return 'b64:' + base64.b64encode(p.encode('utf-8')).decode('ascii')
+
+
+def _get_webdav_password(cfg):
+    p = cfg.get('password') or ''
+    if p.startswith('b64:'):
+        import base64
+        try:
+            return base64.b64decode(p[4:]).decode('utf-8')
+        except Exception:
+            return ''
+    return p
+
+
+def _webdav_auth_header(username, password):
+    import base64
+    token = base64.b64encode(('%s:%s' % (username or '', password or '')).encode('utf-8')).decode('ascii')
+    return 'Basic ' + token
+
+
+def _webdav_ssl_context():
+    """宽松 SSL 上下文。
+
+    用户填写的 WebDAV 多为自建服务（自签证书），部分运行环境（如移动端 p4a
+    运行时）也缺少系统 CA 证书，严格校验会直接抛 CERTIFICATE_VERIFY_FAILED。
+    地址由用户手动配置，风险可控，故此处不校验证书。
+    """
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _webdav_request(method, url, username, password, data=None, timeout=WEBDAV_TIMEOUT,
+                    content_type=None):
+    """发送 WebDAV 请求，返回 (status, payload)。
+
+    GET/PUT 时 payload 为响应体 bytes；HEAD 时 payload 为响应头。
+    4xx/5xx 由 urllib 抛 HTTPError，交由调用方按状态码转为可读提示。
+    """
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header('Authorization', _webdav_auth_header(username, password))
+    if data is not None:
+        req.add_header('Content-Type', content_type or 'application/json; charset=utf-8')
+        req.add_header('Content-Length', str(len(data)))
+    with urllib.request.urlopen(req, timeout=timeout, context=_webdav_ssl_context()) as resp:
+        if method == 'HEAD':
+            return resp.status, resp.headers
+        return resp.status, resp.read()
+
+
+def webdav_test_connection(cfg):
+    """用表单里的临时值测试连通性，无需先保存配置。
+
+    GET 目标文件：200=可读写且文件已存在，404=地址可达但文件尚未创建，401=认证失败。
+    """
+    url = (cfg.get('url') or '').strip()
+    if not url:
+        return {'ok': False, 'message': '请先填写 WebDAV 地址'}
+    try:
+        status, _ = _webdav_request('GET', url, cfg.get('username') or '',
+                                    cfg.get('password') or '', timeout=10)
+        if status == 200:
+            return {'ok': True, 'message': '连接成功，云端文件已存在，可执行上传或下载'}
+        return {'ok': False, 'message': '连接异常：返回 HTTP %d' % status}
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {'ok': True, 'message': '连接成功（云端尚无该文件，首次上传会自动创建）'}
+        if e.code == 401:
+            return {'ok': False, 'message': '认证失败（HTTP 401）：请检查用户名与应用密码'}
+        if e.code == 403:
+            return {'ok': False, 'message': '访问被拒绝（HTTP 403）：请检查账号与该目录的权限'}
+        return {'ok': False, 'message': '连接失败（HTTP %d）' % e.code}
+    except Exception as e:
+        return {'ok': False, 'message': '连接失败：%s（%s）' % (str(e), type(e).__name__)}
+
+
+def webdav_probe_cloud(cfg):
+    """轻量探测云端文件，返回 (reachable, exists, last_modified, error)。"""
+    url = (cfg.get('url') or '').strip()
+    username = cfg.get('username') or ''
+    password = _get_webdav_password(cfg)
+    if not url or not username or not password:
+        return None, None, None, None
+    try:
+        status, headers = _webdav_request('HEAD', url, username, password, timeout=8)
+        modified = None
+        try:
+            modified = headers.get('Last-Modified')
+        except Exception:
+            pass
+        return True, (status == 200), modified, None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True, False, None, None
+        if e.code == 401:
+            return False, None, None, '认证失败（HTTP 401）'
+        return True, None, None, 'HTTP %d' % e.code
+    except Exception as e:
+        return False, None, None, str(e)
+
+
+def _webdav_touch_sync_state(key):
+    """记录最近一次上传/下载时间，便于在设置面板展示同步状态。"""
+    try:
+        cfg = load_webdav_config()
+        if not cfg:
+            return
+        cfg[key] = datetime.now().astimezone().isoformat(timespec='seconds')
+        save_webdav_config(cfg)
+    except Exception as e:
+        print("Webdav sync state error: %s" % str(e))
+
+
+def webdav_status():
+    """设置面板打开时拉取的同步状态（配置、云端文件、本地修改时间）。"""
+    cfg = load_webdav_config()
+    url = (cfg.get('url') or '').strip()
+    username = (cfg.get('username') or '').strip()
+    has_password = bool(cfg.get('password'))
+    configured = bool(url and username and has_password)
+    local_modified = None
+    try:
+        if os.path.exists(DATA_FILE):
+            local_modified = datetime.fromtimestamp(os.path.getmtime(DATA_FILE)).astimezone().isoformat(timespec='seconds')
+    except Exception:
+        pass
+    reachable, exists, cloud_modified, err = None, None, None, None
+    # 未配置完整时不做网络探测，避免打开设置面板无谓等待
+    if configured:
+        reachable, exists, cloud_modified, err = webdav_probe_cloud(cfg)
+    return {
+        'configured': configured,
+        'config': {'url': url, 'username': username, 'hasPassword': has_password},
+        'cloudReachable': reachable,
+        'cloudExists': exists,
+        'cloudModified': cloud_modified,
+        'localModified': local_modified,
+        'lastPushAt': cfg.get('lastPushAt'),
+        'lastPullAt': cfg.get('lastPullAt'),
+        'message': err,
+    }
+
+
+# ---------- 日程提醒 .ics（上传到 WebDAV 同目录，供手机日历订阅） ----------
+
+def _ics_escape(text):
+    """转义 ICS 文本字段中的特殊字符。"""
+    if text is None:
+        return ''
+    s = str(text)
+    return s.replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,').replace('\n', '\\n')
+
+
+def _ics_local_date_parts(iso_str):
+    """把 UTC ISO 时间转成本地日期 (Y, M, D, datetime)。
+
+    全天任务在数据里存的是 UTC 16:00（= 北京次日 00:00），必须用本地时间取日期。
+    """
+    try:
+        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00')).astimezone()
+        return dt.year, dt.month, dt.day, dt
+    except Exception:
+        return None
+
+
+def _ics_fmt_local_dt(dt):
+    """本地 datetime -> ICS 本地时间字符串（不带 Z，表示浮动本地时间）。"""
+    return dt.strftime('%Y%m%dT%H%M%S')
+
+
+def _ics_fmt_date(y, m, d):
+    return '%04d%02d%02d' % (y, m, d)
+
+
+def _ics_uid(task):
+    """稳定 UID：用任务 id，保证每次重新生成对应同一个事件（更新而非重复）。"""
+    return '%s@tacklist' % (task.get('id') or 'task')
+
+
+def _ics_dtstamp():
+    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+
+
+def _build_ics_from_data(data):
+    """把任务数据转换成 ICS 日历字符串。
+
+    - 全天任务：DTSTART 用日期，DTEND 为次日（ICS 结束日期排他），当天提醒一次
+    - 定时任务：DTSTART/DTEND 用本地浮动时间，VALARM 按 reminder 分钟提前提醒
+    - 只输出有日期且未完成的任务：已完成任务不再写入事件，
+      手机日历刷新后对应事件会自动消失
+    """
+    lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//TackList//Task Reminder//CN',
+             'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:TackList 日程提醒',
+             'X-WR-TIMEZONE:Asia/Shanghai']
+
+    tasks = data.get('tasks', []) if isinstance(data, dict) else []
+    for t in tasks:
+        if t.get('completed'):
+            continue
+        iso = t.get('startTime') or t.get('endTime')
+        if not iso:
+            continue
+        parsed = _ics_local_date_parts(iso)
+        if not parsed:
+            continue
+        y, m, d, local_dt = parsed
+        is_all_day = bool(t.get('isAllDay'))
+        title = t.get('title') or '未命名任务'
+        try:
+            reminder_min = int(t.get('reminder')) if t.get('reminder') is not None else 0
+        except Exception:
+            reminder_min = 0
+
+        lines.append('BEGIN:VEVENT')
+        lines.append('UID:%s' % _ics_uid(t))
+        lines.append('DTSTAMP:%s' % _ics_dtstamp())
+
+        if is_all_day:
+            lines.append('DTSTART;VALUE=DATE:%s' % _ics_fmt_date(y, m, d))
+            next_day = datetime(y, m, d) + timedelta(days=1)
+            lines.append('DTEND;VALUE=DATE:%s' % _ics_fmt_date(next_day.year, next_day.month, next_day.day))
+            lines.append('BEGIN:VALARM')
+            lines.append('ACTION:DISPLAY')
+            lines.append('DESCRIPTION:%s' % _ics_escape(title))
+            lines.append('TRIGGER:PT0M')
+            lines.append('END:VALARM')
+        else:
+            start_dt = local_dt
+            end_parsed = _ics_local_date_parts(t.get('endTime')) if t.get('endTime') else None
+            end_dt = end_parsed[3] if end_parsed else None
+            if not end_dt or end_dt <= start_dt:
+                end_dt = start_dt + timedelta(hours=1)
+            lines.append('DTSTART;TZID=Asia/Shanghai:%s' % _ics_fmt_local_dt(start_dt))
+            lines.append('DTEND;TZID=Asia/Shanghai:%s' % _ics_fmt_local_dt(end_dt))
+            lines.append('BEGIN:VALARM')
+            lines.append('ACTION:DISPLAY')
+            lines.append('DESCRIPTION:%s' % _ics_escape(title))
+            lines.append('TRIGGER:-PT%dM' % max(0, reminder_min))
+            lines.append('END:VALARM')
+
+        lines.append('SUMMARY:%s' % _ics_escape(title))
+        note = t.get('notes') or t.get('description') or ''
+        if note:
+            lines.append('DESCRIPTION:%s' % _ics_escape(note))
+        lines.append('STATUS:CONFIRMED')
+        lines.append('END:VEVENT')
+
+    lines.append('END:VCALENDAR')
+    # ICS 规范要求 CRLF 换行
+    return '\r\n'.join(lines) + '\r\n'
+
+
+def _ics_url_from_data_url(data_url):
+    """根据数据文件的 WebDAV URL 推导同目录下 .ics 的 URL。"""
+    base = (data_url or '').strip()
+    if '?' in base:
+        base = base.split('?', 1)[0]
+    prefix = base.rsplit('/', 1)[0] if '/' in base else ''
+    return prefix + '/tacklist-reminders.ics'
+
+
+def webdav_push_ics(cfg):
+    """生成 .ics 并上传到 WebDAV 同目录，返回 (ok, message)。
+
+    手机端在系统日历里订阅该地址，可把未完成的日程同步进手机日历。
+    该步骤失败不影响数据同步结果，仅作为附加提示返回。
+    """
+    data_url = (cfg.get('url') or '').strip()
+    if not data_url:
+        return False, '未配置 WebDAV 地址'
+    try:
+        ics_str = _build_ics_from_data(load_data_from_file())
+        ics_url = _ics_url_from_data_url(data_url)
+        body = ics_str.encode('utf-8')
+        status, _ = _webdav_request('PUT', ics_url, cfg.get('username'),
+                                    _get_webdav_password(cfg), data=body,
+                                    content_type='text/calendar; charset=utf-8')
+        if 200 <= status < 300:
+            return True, '日程提醒日历已更新'
+        return False, '日程提醒日历上传失败（HTTP %d）' % status
+    except Exception as e:
+        return False, '日程提醒日历上传失败：%s' % str(e)
+
+
+# ---------- 上传 / 下载 ----------
+
+def webdav_push_data(cfg):
+    """把本地完整数据（含归档专注历史、节假日、背景轮播配置）上传到云端。"""
+    url = (cfg.get('url') or '').strip()
+    if not url:
+        return {'ok': False, 'message': '未配置 WebDAV 地址，请先保存配置'}
+    with webdav_lock:
+        data = load_data_from_file()
+        export_data = dict(data)
+        export_data.update(collect_extended_backup_fields())
+        export_data['version'] = '4.0'
+        export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        body = json.dumps(export_data, ensure_ascii=False).encode('utf-8')
+        try:
+            status, _ = _webdav_request('PUT', url, cfg.get('username'),
+                                        _get_webdav_password(cfg), data=body)
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {'ok': False, 'message': '上传失败：认证失败（HTTP 401），请检查用户名与应用密码'}
+            if e.code == 409:
+                return {'ok': False, 'message': '上传失败（HTTP 409）：请确认 WebDAV 地址中的上级目录已在云端创建'}
+            if e.code == 507:
+                return {'ok': False, 'message': '上传失败：云端存储空间不足（HTTP 507）'}
+            return {'ok': False, 'message': '上传失败（HTTP %d）' % e.code}
+        except Exception as e:
+            return {'ok': False, 'message': '上传失败：%s（%s）' % (str(e), type(e).__name__)}
+        if not (200 <= status < 300):
+            return {'ok': False, 'message': '上传失败（HTTP %d）' % status}
+        _webdav_touch_sync_state('lastPushAt')
+        ics_ok, ics_msg = webdav_push_ics(cfg)
+        msg = '上传成功，云端数据已更新（%d 个任务）' % len(export_data.get('tasks') or [])
+        msg += '；' + (ics_msg if ics_ok else '但提醒日历同步失败：%s' % ics_msg)
+        return {'ok': True, 'message': msg}
+
+
+def _webdav_backup_local_before_pull():
+    """覆盖前把本地完整数据备份到 backups/，返回备份文件名（失败返回 None）。"""
+    try:
+        export_data = dict(load_data_from_file())
+        export_data.update(collect_extended_backup_fields())
+        export_data['version'] = '4.0'
+        export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        if not os.path.exists(BACKUP_DIR):
+            os.makedirs(BACKUP_DIR)
+        name = 'pre-webdav-pull-%s.json' % datetime.now().strftime('%Y%m%d-%H%M%S')
+        with open(os.path.join(BACKUP_DIR, name), 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, ensure_ascii=False, indent=2)
+        return name
+    except Exception as e:
+        print("WebDAV pull local backup error: %s" % str(e))
+        return None
+
+
+def webdav_pull_data(cfg):
+    """从 WebDAV 下载数据并覆盖本地。
+
+    覆盖前自动把本地数据备份到 backups/，覆盖后抬高数据版本号，
+    使其他标签页/客户端在下一次轮询时强制重新渲染。
+    """
+    global _data_version
+    url = (cfg.get('url') or '').strip()
+    if not url:
+        return {'ok': False, 'message': '未配置 WebDAV 地址，请先保存配置'}
+    with webdav_lock:
+        try:
+            status, raw = _webdav_request('GET', url, cfg.get('username'),
+                                          _get_webdav_password(cfg))
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {'ok': False, 'message': '下载失败：认证失败（HTTP 401），请检查用户名与应用密码'}
+            if e.code == 404:
+                return {'ok': False, 'message': '下载失败：云端文件不存在（HTTP 404），请先在任意一端执行「上传到云端」'}
+            return {'ok': False, 'message': '下载失败（HTTP %d）' % e.code}
+        except Exception as e:
+            return {'ok': False, 'message': '下载失败：%s（%s）' % (str(e), type(e).__name__)}
+        if status != 200:
+            return {'ok': False, 'message': '下载失败（HTTP %d）' % status}
+        try:
+            cloud_data = json.loads(raw.decode('utf-8'))
+        except Exception:
+            return {'ok': False, 'message': '下载失败：云端文件不是有效的 JSON'}
+        if not isinstance(cloud_data, dict) or not isinstance(cloud_data.get('tasks'), list):
+            return {'ok': False, 'message': '下载失败：云端文件不是有效的 TackList 数据（缺少 tasks 字段）'}
+
+        backup_name = _webdav_backup_local_before_pull()
+        # 剥离扩展字段与导出元数据后写入 data.json，扩展字段再分别还原到各自文件/缓存
+        main_data = {k: v for k, v in cloud_data.items()
+                     if k not in ('pomodoroArchive', 'holidayData', 'bgCarousel',
+                                  'version', 'exportDate')}
+        # 持锁写盘并抬高版本号，防止其他标签页携带旧版本号的全量 PUT 覆盖刚拉取的数据
+        with data_lock:
+            save_data_to_file(main_data)
+            _bump_data_version()
+        restore_extended_backup_fields(cloud_data)
+
+        # 番茄时长等设置项同步到服务端内存状态，避免后台 tick 继续沿用旧配置
+        s = main_data.get('settings') or {}
+        with pomodoro_lock:
+            pomodoro_state['focusDuration'] = s.get('focusDuration', pomodoro_state.get('focusDuration', 25))
+            pomodoro_state['shortBreakDuration'] = s.get('shortBreakDuration', pomodoro_state.get('shortBreakDuration', 5))
+            pomodoro_state['longBreakDuration'] = s.get('longBreakDuration', pomodoro_state.get('longBreakDuration', 15))
+            pomodoro_state['longBreakInterval'] = s.get('longBreakInterval', pomodoro_state.get('longBreakInterval', 4))
+            pomodoro_state['autoBreak'] = s.get('autoBreak', pomodoro_state.get('autoBreak', False))
+            pomodoro_state['autoFocus'] = s.get('autoFocus', pomodoro_state.get('autoFocus', False))
+
+        _webdav_touch_sync_state('lastPullAt')
+        msg = '下载成功，已用云端数据覆盖本地（%d 个任务）' % len(main_data.get('tasks') or [])
+        if backup_name:
+            msg += '；覆盖前的本地数据已备份为 backups/%s' % backup_name
+        return {'ok': True, 'message': msg, 'version': _data_version}
+
+
 def _save_pomodoro_history_entry(history_entry):
     """保存单条番茄历史记录（去重：startedAt+taskId组合唯一）。
 
@@ -2244,6 +2679,11 @@ class TodoHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # WebDAV 手动同步：配置与云端状态（设置面板打开时拉取）
+        if path == '/api/webdav/status':
+            self.send_json_response(webdav_status())
+            return
+
         if path == '/api/export':
             data = load_data_from_file()
             export_data = dict(data)
@@ -2636,6 +3076,77 @@ class TodoHandler(BaseHTTPRequestHandler):
                             os.remove(fp)
                             deleted += 1
                 self.send_json_response({'deleted': deleted})
+                return
+
+            # WebDAV 手动同步：保存配置（password 留空表示沿用已保存的密码）
+            if path == '/api/webdav/config':
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length)
+                try:
+                    req_data = json.loads(body.decode('utf-8'))
+                except Exception:
+                    self.send_error_json("Invalid JSON", 400)
+                    return
+                if not isinstance(req_data, dict):
+                    self.send_error_json("Invalid data format", 400)
+                    return
+                new_url = (req_data.get('url') or '').strip()
+                new_username = (req_data.get('username') or '').strip()
+                if not new_url:
+                    self.send_error_json("请填写 WebDAV 地址", 400)
+                    return
+                if not new_url.startswith(('http://', 'https://')):
+                    self.send_error_json("WebDAV 地址需以 http:// 或 https:// 开头", 400)
+                    return
+                if not new_username:
+                    self.send_error_json("请填写用户名", 400)
+                    return
+                cfg = load_webdav_config()
+                new_cfg = {
+                    'url': new_url,
+                    'username': new_username,
+                    'password': cfg.get('password', ''),
+                }
+                # 保留同步时间等附加字段
+                for key in ('lastPushAt', 'lastPullAt'):
+                    if cfg.get(key):
+                        new_cfg[key] = cfg[key]
+                if req_data.get('password'):
+                    new_cfg['password'] = _encode_webdav_password(req_data['password'])
+                if not new_cfg['password']:
+                    self.send_error_json("请填写应用密码", 400)
+                    return
+                if save_webdav_config(new_cfg):
+                    self.send_json_response({'ok': True, 'message': 'WebDAV 配置已保存'})
+                else:
+                    self.send_error_json('配置保存失败', 500)
+                return
+
+            # WebDAV 手动同步：测试连接（用表单中的临时值，无需先保存）
+            if path == '/api/webdav/test':
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length)
+                try:
+                    req_data = json.loads(body.decode('utf-8'))
+                except Exception:
+                    self.send_error_json("Invalid JSON", 400)
+                    return
+                test_cfg = {
+                    'url': (req_data.get('url') or '').strip(),
+                    'username': req_data.get('username') or '',
+                    'password': req_data.get('password') or '',
+                }
+                self.send_json_response(webdav_test_connection(test_cfg))
+                return
+
+            # WebDAV 手动同步：上传本地数据到云端
+            if path == '/api/webdav/push':
+                self.send_json_response(webdav_push_data(load_webdav_config()))
+                return
+
+            # WebDAV 手动同步：从云端下载并覆盖本地
+            if path == '/api/webdav/pull':
+                self.send_json_response(webdav_pull_data(load_webdav_config()))
                 return
 
             if path == '/api/notify':

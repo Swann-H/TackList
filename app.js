@@ -618,6 +618,9 @@ function openSettingsModal() {
     // 初始化开机自启状态
     loadAutoStartStatus();
 
+    // 初始化 WebDAV 同步状态（异步探测云端文件，失败不影响面板打开）
+    if (typeof loadWebdavStatus === 'function') loadWebdavStatus();
+
     // 更新背景图片预览
     const previewContainer = document.getElementById('bg-image-preview');
     const previewImg = document.getElementById('bg-preview-img');
