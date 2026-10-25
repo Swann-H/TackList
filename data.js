@@ -89,6 +89,14 @@ async function refreshDataFromServer() {
         _dataRefreshPending = true;
         return;
     }
+    // 首次使用引导进行中：演示清单/清单集/标签只存在于内存（引导结束即删除，刻意不写盘），
+    // 全量刷新会用服务端 taskLists 覆盖本地 lists，导致「清单与清单集」步骤失去高亮锚点
+    // （表现为侧栏没有预设清单、该组卡片退化为居中）。引导通常只持续一两分钟，
+    // 期间跳过刷新即可；结束后由下一轮定时器或保存后的 pending 刷新恢复同步。
+    if (typeof _onboardingActive !== 'undefined' && _onboardingActive) {
+        _dataRefreshPending = true;
+        return;
+    }
     // 视图感知：标签页隐藏时不做后台全量渲染（主线程开销大且用户看不见），
     // 标签页重新可见时由 visibilitychange 监听器触发刷新。
     if (document.hidden) {
@@ -129,6 +137,8 @@ async function refreshDataFromServer() {
         applySettings(data.settings);
         quadrantOrder = data.quadrantOrder || quadrantOrder;
         pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || pomodoroHistory);
+        // FR-09：任务模板（顶层键白名单，PUT 体缺此键会导致刷新即丢）
+        if (Array.isArray(data.taskTemplates)) taskTemplates = data.taskTemplates;
         // 数据实际变化后才重建派生缓存
         if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
         if (typeof rebuildSearchIndex === 'function') rebuildSearchIndex();
@@ -472,6 +482,7 @@ function _doSaveData() {
         settings: settings,
         quadrantOrder: quadrantOrder,
         pomodoroHistory: pomodoroHistory,
+        taskTemplates: taskTemplates,
         _version: _dataVersion
     };
     return fetch('/api/data', {
@@ -613,6 +624,26 @@ function _mergeServerData(serverData) {
         h => !serverHistoryKeys.has((h.startedAt || '') + '|' + (h.taskId || ''))
     );
     pomodoroHistory = deduplicatePomodoroHistory([...serverHistory, ...localOnlyRecords]);
+    // FR-09：模板按 id 做并集，避免另一个标签新建的模板在冲突合并时整体丢失；
+    // 同 id 以 updatedAt 较新者为准（本地改动通常更新更晚，保持本地优先）
+    if (Array.isArray(serverData.taskTemplates)) {
+        const merged = Array.isArray(taskTemplates) ? taskTemplates.slice() : [];
+        const indexById = new Map();
+        merged.forEach(function (tpl, i) { if (tpl && tpl.id) indexById.set(tpl.id, i); });
+        serverData.taskTemplates.forEach(function (st) {
+            if (!st || !st.id) return;
+            const localIndex = indexById.get(st.id);
+            if (localIndex === undefined) {
+                indexById.set(st.id, merged.length);
+                merged.push(st);
+                return;
+            }
+            const localTime = Date.parse(merged[localIndex].updatedAt || '') || 0;
+            const serverTime = Date.parse(st.updatedAt || '') || 0;
+            if (serverTime > localTime) merged[localIndex] = st;
+        });
+        taskTemplates = merged;
+    }
     if (typeof rebuildFocusMinutesCache === 'function') rebuildFocusMinutesCache();
     if (typeof invalidateScheduleFilterCache === 'function') invalidateScheduleFilterCache();
     if (typeof invalidateTaskListGroupsCache === 'function') invalidateTaskListGroupsCache();
@@ -643,6 +674,8 @@ function importData(file) {
                 const archiveMonths = (data.pomodoroArchive && typeof data.pomodoroArchive === 'object') ? data.pomodoroArchive : {};
                 const archiveRecords = [].concat(...Object.values(archiveMonths).filter(Array.isArray));
                 pomodoroHistory = deduplicatePomodoroHistory([...(data.pomodoroHistory || []), ...archiveRecords]);
+                // FR-09：模板随导入恢复；旧备份无此键时清空为 []（不残留上一个数据集的模板）
+                taskTemplates = Array.isArray(data.taskTemplates) ? data.taskTemplates : [];
 
                 applySettings(settings);
                 // 先确保数据写入服务端，再重新初始化（避免 init 的 loadData 读到旧数据）
@@ -861,7 +894,6 @@ const DEFAULT_SETTINGS = {
     defaultListId: 'default',
     defaultImportant: false,
     defaultUrgent: false,
-    defaultDuration: 30,
     defaultView: 'task',
     // 外部日历订阅(ICS)：详见《外部日历订阅同步需求说明书.md》4.1
     calendarSubscriptions: [],
@@ -878,6 +910,8 @@ const DEFAULT_SETTINGS = {
     ],
     // 默认首页视图（须为 viewOrder 中已启用的项；summary 不可设为首页）
     defaultHomeView: 'task',
+    // 视图右上角操作按钮顺序（从左到右，不含「更多」）；所有按钮固定启用，仅支持排序
+    viewActionOrder: VIEW_ACTION_DEFAULT_ORDER.slice(),
     weekStart: 'monday',
     showCompleted: true,
     showLunar: true,
@@ -916,6 +950,9 @@ const DEFAULT_SETTINGS = {
     showHolidayCountdown: true,
     priorityTaskBg: true,
     priorityDisplayMode: 'checkbox',
+    // 视图操作按钮显示数量：右上角最多显示的按钮数（含「更多」按钮；「添加任务」与「从模板添加」算 1 个）。
+    // 超出时从最左侧开始收进「更多」，1–10。窄屏（≤768px）不生效，固定只显示「更多」。
+    viewActionLimit: 8,
     showSidebarExtras: true,
     showFocusButton: true,
     // 侧边栏清单配置：控制侧边栏固定项与分组的显隐
@@ -931,7 +968,8 @@ const DEFAULT_SETTINGS = {
         summary: 'show',       // 摘要
         tags: 'show',          // 标签分组
         filters: 'show',       // 过滤器分组
-        trash: 'show'          // 回收站（FR-02）
+        trash: 'show',         // 回收站（FR-02）
+        externalCalendar: 'show' // 外部日历分组（仅在线版有配置入口）
     },
     // 回收站保留天数（FR-02，C2-4：与备份保留期 retentionPeriod 语义解耦）：0 = 永久保留
     trashRetentionDays: 30,
@@ -996,7 +1034,9 @@ const DEFAULT_SETTINGS = {
     //   'workweek' = 当周全部工作日（按「周开始于」定周、经 isWorkday 逐日判定，联动节假日与调休），
     //   天数与是否连续均不固定，整周放假时为 0 天（周视图走居中空态）
     weekConfig: {
-        displayDays: '7'
+        displayDays: '7',
+        // 任务块默认时长（分钟）：周视图中未设置结束时间的任务按此高度显示
+        blockMinutes: 30
     },
     // 月视图配置（showCompleted/showLunar 迁移自全局的可分离项，不设默认值=未显式设置）
     monthConfig: {
@@ -1039,6 +1079,14 @@ function applySettings(parsed) {
     if (settings.autoCreateTask !== undefined) {
         delete settings.autoCreateTask;
     }
+    // 迁移：全局「新建任务的默认时长」→ 周视图配置「任务块默认时长」
+    if (settings.defaultDuration !== undefined) {
+        const parsedWeek = (parsed && parsed.weekConfig && typeof parsed.weekConfig === 'object') ? parsed.weekConfig : null;
+        if (!parsedWeek || parsedWeek.blockMinutes === undefined) {
+            settings.weekConfig.blockMinutes = settings.defaultDuration;
+        }
+        delete settings.defaultDuration;
+    }
     // 迁移：toastDuration（1–30 秒数字）→ toastPace（快/标准/慢）
     // 旧值只对未传时长的调用生效，因此按区间粗映射；映射后删除旧字段
     if (settings.toastDuration !== undefined) {
@@ -1047,6 +1095,11 @@ function applySettings(parsed) {
         delete settings.toastDuration;
     }
     if (['fast', 'normal', 'slow'].indexOf(settings.toastPace) < 0) settings.toastPace = 'normal';
+    // 视图操作按钮显示数量：1–10 的整数，非法值回退默认 8
+    (function sanitizeViewActionLimit() {
+        var n = parseInt(settings.viewActionLimit, 10);
+        settings.viewActionLimit = isNaN(n) ? 8 : Math.max(1, Math.min(10, n));
+    })();
     // 迁移：默认任务日期仅保留「无日期/今天」，历史遗留值（明天/下周一）归一为今天
     if (settings.defaultTaskDate !== undefined && !['none', 'today'].includes(settings.defaultTaskDate)) {
         settings.defaultTaskDate = 'today';
@@ -1100,6 +1153,8 @@ function applySettings(parsed) {
     if (settings.defaultView !== settings.defaultHomeView) {
         settings.defaultView = settings.defaultHomeView; // 兼容旧读取方（如彩蛋刷新）
     }
+    // 视图右上角操作按钮顺序：去重/补齐（所有按钮固定启用，仅排序）
+    if (typeof getViewActionOrder === 'function') getViewActionOrder();
     // 迁移：旧全局视图偏好 → 各视图配置（设置面板已移除「全局默认」，导入/加载旧数据无感升级）
     // 幂等：仅当视图配置字段未显式设置（undefined）时写入旧全局值，不覆盖用户已改过的视图级配置
     (function migrateLegacyViewPrefs() {
@@ -1233,6 +1288,9 @@ async function loadData() {
         quadrantOrder = data.quadrantOrder || ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
         pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || []);
 
+        // FR-09：任务模板（顶层键读回；缺失时保留内存现值，避免多标签页刷新被清空）
+        if (Array.isArray(data.taskTemplates)) taskTemplates = data.taskTemplates;
+
         // 服务端加载成功，同步缓存到 IndexedDB
         cacheToIndexedDB(data);
     } catch (err) {
@@ -1252,6 +1310,7 @@ async function loadData() {
             applySettings(data.settings);
             quadrantOrder = data.quadrantOrder || ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
             pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || []);
+            if (Array.isArray(data.taskTemplates)) taskTemplates = data.taskTemplates;
             showToast('服务端不可用，已从本地缓存恢复数据', 'warning');
         } else {
             // 降级：尝试从 LocalStorage 迁移
@@ -1266,6 +1325,7 @@ async function loadData() {
                     applySettings(data.settings);
                     quadrantOrder = data.quadrantOrder || ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
                     pomodoroHistory = deduplicatePomodoroHistory(data.pomodoroHistory || []);
+                    if (Array.isArray(data.taskTemplates)) taskTemplates = data.taskTemplates;
                 } catch (err2) {
                     applySettings(null);
                 }

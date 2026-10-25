@@ -1,6 +1,8 @@
 // 数据模型
 let lists = [];
 let tasks = [];
+// FR-09 任务模板：data.json 顶层键（与 pomodoroHistory 同级），读取时 [] 兜底
+let taskTemplates = [];
 let settings = {};
 let currentView = 'task';
 let currentListId = null;
@@ -56,7 +58,8 @@ const SIDEBAR_ITEM_DEFAULTS = {
     summary: 'show',
     tags: 'show',
     filters: 'show',
-    trash: 'show'
+    trash: 'show',
+    externalCalendar: 'show'
 };
 
 // 当前（或给定）筛选是否为侧边栏特殊时间筛选
@@ -1698,6 +1701,56 @@ function getHomeView() {
 function setHomeView(id) {
     settings.defaultHomeView = id;
     settings.defaultView = id; // 兼容旧读取方
+}
+
+// 视图右上角操作按钮：元数据与默认顺序（从左到右，不含「更多」）。
+// 所有操作按钮固定启用，仅支持排序；「视图配置」聚合当前视图的 6 个配置按钮为 1 项。
+// color 对应主视图按钮的语义色，设置面板中的图标按钮与「更多」面板共用同一套色值。
+const VIEW_ACTION_COLOR_HEX = {
+    blue: '#3b82f6',
+    green: '#22c55e',
+    orange: '#f97316',
+    teal: '#14b8a6',
+    cyan: '#06b6d4',
+    indigo: '#6366f1',
+    purple: '#a855f7',
+    red: '#ef4444',
+    amber: '#f59e0b',
+    pink: '#ec4899',
+    slate: '#64748b'
+};
+const VIEW_ACTION_DEFS = {
+    sync:       { label: '外部日历同步', icon: 'fas fa-cloud-arrow-down', color: 'cyan' },
+    today:      { label: '今天',         icon: 'fas fa-bullseye',         color: 'blue' },
+    plan:       { label: '计划',         icon: 'fas fa-clipboard-list',   color: 'green' },
+    postpone:   { label: '顺延任务',     icon: 'fas fa-forward',          color: 'orange' },
+    toggleAll:  { label: '全部展开/收起', icon: 'fas fa-angles-down',      color: 'teal' },
+    batch:      { label: '批量管理',     icon: 'fas fa-list',             color: 'cyan' },
+    viewConfig: { label: '视图配置',     icon: 'fas fa-sliders-h',        color: 'indigo' },
+    addTask:    { label: '添加任务',     icon: 'fas fa-plus',             color: 'purple' }
+};
+const VIEW_ACTION_DEFAULT_ORDER = ['sync', 'today', 'plan', 'postpone', 'toggleAll', 'batch', 'viewConfig', 'addTask'];
+
+// 读取/规范化操作按钮顺序：仅保留已知 id、去重、补齐缺失项（缺失项追加到末尾）
+function getViewActionOrder() {
+    const def = VIEW_ACTION_DEFAULT_ORDER;
+    if (!Array.isArray(settings.viewActionOrder) || settings.viewActionOrder.length === 0) {
+        settings.viewActionOrder = def.slice();
+        return settings.viewActionOrder;
+    }
+    const seen = {};
+    const out = [];
+    settings.viewActionOrder.forEach(function (id) {
+        if (typeof id === 'string' && def.indexOf(id) !== -1 && !seen[id]) {
+            seen[id] = true;
+            out.push(id);
+        }
+    });
+    def.forEach(function (id) {
+        if (!seen[id]) out.push(id);
+    });
+    settings.viewActionOrder = out;
+    return settings.viewActionOrder;
 }
 
 // ---------- per-list 视图偏好 ----------

@@ -28,6 +28,8 @@ let _obRepositionTimer = null;
 // 本次引导为演示而创建的清单/标签 id（仅这些会在结束时删除；用户原有的同名数据不受影响）
 let _obCreatedListIds = [];
 let _obCreatedTagIds = [];
+// 引导期间被临时展开的分区（记录用户原有折叠偏好，结束时还原）
+let _obCollapsedBackup = {};
 
 // —— 样式注入（仅一次） ——
 function _obEnsureStyle() {
@@ -57,10 +59,19 @@ function _obEnsureStyle() {
 }
 
 // —— 示例数据（幂等：同名不存在才创建；仅存内存不写盘，结束时删除本次创建的） ——
-function _obEnsureDemoData() {
+// keepTrack=true：保留已有的跟踪 id（供步骤级补回时重复调用，见 _obEnsureDemoAnchors），
+// 同时剔除「已被后台数据刷新抹掉」的历史 id，避免跟踪数组无限累积。
+function _obEnsureDemoData(keepTrack) {
     if (typeof lists === 'undefined' || !Array.isArray(lists)) return;
-    _obCreatedListIds = [];
-    _obCreatedTagIds = [];
+    if (!keepTrack) {
+        _obCreatedListIds = [];
+        _obCreatedTagIds = [];
+    } else {
+        const liveListIds = new Set(lists.map(l => l.id));
+        _obCreatedListIds = _obCreatedListIds.filter(id => liveListIds.has(id));
+        const liveTagIds = new Set(((settings.tags && Array.isArray(settings.tags)) ? settings.tags : []).map(t => t.id));
+        _obCreatedTagIds = _obCreatedTagIds.filter(id => liveTagIds.has(id));
+    }
     let changed = false;
     const now = new Date().toISOString();
 
@@ -163,7 +174,7 @@ function _obBuildSteps() {
             delay: 380,
             title: '添加任务方式二：命令面板一句话创建',
             body: `
-                <p>按 ${kbd('Ctrl')}+${kbd('Alt')}+${kbd('N')} 呼出命令面板，一句话写完所有信息（各段之间用空格分隔）。上方输入框已自动填入示例：</p>
+                <p>按 ${kbd('Ctrl')}+${kbd('Alt')}+${kbd('K')} 呼出命令面板，一句话写完所有信息（各段之间用空格分隔）。上方输入框已自动填入示例：</p>
                 <div class="ob-demo">
                     <span class="ob-seg bg-blue-500/10 text-blue-400 border-blue-500/40" title="日期时间：自动识别">明天下午5点</span><span class="ob-seg text-theme-primary font-medium" title="任务标题">团队会议</span><span class="ob-seg bg-purple-500/10 text-purple-400 border-purple-500/40" title="清单">~团队工作</span><span class="ob-seg bg-cyan-500/10 text-cyan-500 border-cyan-500/40" title="标签">#总结会</span><span class="ob-seg bg-red-500/10 text-red-500 border-red-500/40" title="优先级">!!!</span><span class="ob-seg bg-slate-500/10 text-theme-secondary border-slate-500/40" title="备注">|记得提前准备会议资料</span>
                 </div>
@@ -182,6 +193,7 @@ function _obBuildSteps() {
             group: '清单与清单集 · 1/4',
             target: '#sidebar-lists-header',
             reveal: ['#sidebar-lists-header button[title="新建清单"]'],
+            ensureDemo: true,
             title: '新建清单',
             body: `
                 <p>单击「清单」标题行右侧的 <b>+</b> 按钮：</p>
@@ -194,6 +206,7 @@ function _obBuildSteps() {
         {
             group: '清单与清单集 · 2/4',
             target: demoListSel,
+            ensureDemo: true,
             title: '编辑清单',
             body: `
                 <p>单击清单前的<b>颜色图标</b>，即可打开编辑表单：</p>
@@ -207,6 +220,7 @@ function _obBuildSteps() {
         {
             group: '清单与清单集 · 3/4',
             targets: demoFolder ? [demoFolderSel, demoFolderSel + ' + div.mt-1'] : ['#lists-container'],
+            ensureDemo: true,
             title: '新建清单集',
             body: `
                 <p>把一个清单<b>拖拽</b>到另一个清单上，自动合并为清单集：</p>
@@ -220,6 +234,7 @@ function _obBuildSteps() {
             group: '清单与清单集 · 4/4',
             target: demoFolderSel,
             reveal: demoFolder ? [`${demoFolderSel} .fa-pen`] : [],
+            ensureDemo: true,
             title: '编辑清单集',
             body: `
                 <p>鼠标悬停清单集行，单击行尾出现的<b>编辑按钮</b>：</p>
@@ -262,26 +277,30 @@ function _obBuildSteps() {
             title: '任务提醒',
             body: `
                 <p>任务到达提醒时间时，屏幕底部居中位置会弹出提醒卡片：</p>
-                <div class="rounded-lg bg-slate-900/95 border-l-4 border-amber-500 p-3 text-slate-200 shadow-lg mt-2 select-none">
-                    <div class="flex items-center gap-3">
-                        <div class="w-9 h-9 rounded-full border-2 border-amber-500 text-amber-400 flex items-center justify-center flex-shrink-0">
-                            <i class="fas fa-bell"></i>
+                <!-- 示意卡直接复用真实 Toast 的类名（.quest-toast / .toast-btn-*），
+                     与 utils.js showReminderToast 的 DOM 同构——按钮配色、圆角、切角、
+                     辉光都由同一份样式定义，改样式时此处自动跟随，不要再手写近似样式。
+                     pointer-events:none：静态示意，避免 hover 变色造成"可以点"的错觉。 -->
+                <div class="quest-toast flex flex-col p-4 bg-slate-900/95 backdrop-blur-sm border-l-4 border-amber-500 text-slate-200 shadow-[0_0_15px_rgba(245,158,11,0.3)] w-full mt-3 select-none" style="pointer-events:none">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full border-2 border-amber-500 text-amber-400 bg-slate-900 shadow-[0_0_10px_currentColor] mr-4 relative z-10">
+                            <i class="fas fa-bell text-lg"></i>
                         </div>
-                        <div class="flex-1 min-w-0">
-                            <div class="text-amber-400 text-xs font-black tracking-widest uppercase">17:00</div>
-                            <div class="text-sm font-medium text-slate-300 truncate">团队会议</div>
+                        <div class="flex-1 min-w-0 relative z-10 flex flex-col justify-center">
+                            <div class="text-amber-400 text-sm font-black tracking-[0.15em] uppercase mb-0.5 drop-shadow-md truncate">17:00</div>
+                            <div class="text-sm font-medium text-slate-300 leading-snug break-words">团队会议</div>
                         </div>
                     </div>
-                    <div class="flex gap-2 mt-2.5 justify-end text-xs font-bold tracking-wider">
-                        <span class="px-2.5 py-1 bg-cyan-500/20 text-cyan-400 border border-cyan-500 rounded">FOCUS</span>
-                        <span class="px-2.5 py-1 bg-green-500/20 text-green-400 border border-green-500 rounded">DONE</span>
-                        <span class="px-2.5 py-1 bg-cyan-500/20 text-cyan-400 border border-cyan-500 rounded">LATER</span>
-                        <span class="px-2.5 py-1 bg-slate-700/50 text-slate-400 border border-slate-600 rounded">OK</span>
+                    <div class="flex gap-2 mt-3 relative z-10 justify-end">
+                        <span class="toast-btn toast-btn-success">FOCUS</span>
+                        <span class="toast-btn toast-btn-amber">DONE</span>
+                        <span class="toast-btn toast-btn-primary">LATER</span>
+                        <span class="toast-btn toast-btn-ghost">OK</span>
                     </div>
                 </div>
                 <ul class="ob-ul text-sm">
-                    <li><b class="text-cyan-400">FOCUS</b>：立刻开始该任务的番茄专注</li>
-                    <li><b class="text-green-400">DONE</b>：一键标记任务完成</li>
+                    <li><b class="text-green-400">FOCUS</b>：立刻开始该任务的番茄专注</li>
+                    <li><b class="text-amber-400">DONE</b>：一键标记任务完成</li>
                     <li><b class="text-cyan-400">LATER</b>：稍后提醒（默认 15 分钟，可在设置中调整）</li>
                     <li><b class="text-slate-400">OK</b>：仅关闭任务提醒卡片</li>
                 </ul>
@@ -291,14 +310,13 @@ function _obBuildSteps() {
         {
             group: '设置入口 · 1/1',
             target: '#sidebar-brand-btn',
-            title: '设置在这里',
+            title: '系统设置入口',
             body: `
                 <p>单击侧边栏顶部「<b class="text-theme-primary">日程管理</b>」标题即可打开设置面板：</p>
                 <ul class="ob-ul text-sm">
                     <li>鼠标移上去时，左侧的日历图标会<b>变成齿轮</b>，提示这里可以点</li>
                     <li>主题与背景、视图与外观、番茄时长、快捷键、数据管理都在这里</li>
-                </ul>
-                <p class="ob-tip text-xs">侧边栏底部不再单独放设置按钮，入口收在这里以腾出更多清单空间。</p>`
+                </ul>`
         }
     ];
 }
@@ -320,6 +338,41 @@ function _obEnterPaletteDemo() {
 function _obLeavePaletteDemo() {
     // 清除草稿关闭（false = 不保留输入内容）
     if (typeof closeCommandPalette === 'function') closeCommandPalette(false);
+}
+
+// —— 清单与清单集步骤的锚点兜底 ——
+// 演示清单/清单集只存在于内存（引导结束即删除、不写盘），而 /api/data 的后台全量刷新
+// （data.js refreshDataFromServer：lists = data.taskLists）会在服务端版本号变化时用服务端
+// taskLists 整体覆盖本地 lists —— 外部日历同步、提醒落盘、其他标签页写入、设置保存都会抬版本号。
+// 一旦被覆盖，侧栏就没有这些行（表现为「没有预设清单」），步骤 2/4~4/4 找不到锚点，
+// 卡片只能退化为居中且不画聚光框（表现为「引导界面丢失」）。
+// 进入步骤时：幂等补回演示数据 → 强制重建侧栏 DOM → 临时展开被折叠的清单分区；
+// 若演示数据被重建（id 变化），同步重建步骤表里的选择器。
+function _obEnsureDemoAnchors() {
+    const beforeIds = _obCreatedListIds.join(',');
+    _obEnsureDemoData(true);
+    if (typeof renderLists === 'function') renderLists(true);
+    _obExpandListsSection();
+    if (_obCreatedListIds.join(',') !== beforeIds) _obSteps = _obBuildSteps();
+    return _obSteps[_onboardingStep];
+}
+
+// 清单分区被收起时，这些锚点都落在 display:none 的容器里，同样会失去指向。
+// 临时展开并在引导结束时还原（不写入 localStorage，用户的折叠偏好保持不变）。
+function _obExpandListsSection() {
+    if (typeof sectionCollapsed === 'undefined' || !sectionCollapsed) return;
+    if (!sectionCollapsed.lists) return;
+    _obCollapsedBackup.lists = true;
+    sectionCollapsed.lists = false;
+    if (typeof applySectionCollapse === 'function') applySectionCollapse();
+}
+
+function _obRestoreCollapsedSections() {
+    const keys = Object.keys(_obCollapsedBackup);
+    _obCollapsedBackup = {};
+    if (!keys.length || typeof sectionCollapsed === 'undefined' || !sectionCollapsed) return;
+    keys.forEach(function (k) { sectionCollapsed[k] = true; });
+    if (typeof applySectionCollapse === 'function') applySectionCollapse();
 }
 
 // —— 引导期间强制显形的元素清理 ——
@@ -459,8 +512,15 @@ function _obPosition() {
 
 // —— 渲染当前步骤 ——
 function _obShowStep() {
-    const step = _obSteps[_onboardingStep];
+    if (!_obTooltip) return;
+    // 回归修复：带 delay 的步骤（命令面板演示）会先把卡片设为 visibility:hidden 等定位，
+    // 若用户在该 delay 内点了「下一步」，clearTimeout 后 hidden 不会被复位，
+    // 之后的步骤卡片全部不可见（表现为「引导界面丢失」）。每步进入时无条件复位。
+    _obTooltip.style.visibility = '';
+    let step = _obSteps[_onboardingStep];
     if (!step) return;
+    // 清单与清单集步骤：锚点（演示清单/清单集行）可能已被后台数据刷新抹掉，进入前补齐
+    if (step.ensureDemo) step = _obEnsureDemoAnchors();
 
     _obClearReveals();
     if (typeof step.onEnter === 'function') step.onEnter();
@@ -533,6 +593,8 @@ function _obFinish(markSeen) {
 function _obTeardown() {
     _onboardingActive = false;
     _obClearReveals();
+    // 还原引导期间被临时展开的侧栏分区（用户的折叠偏好不被改写）
+    _obRestoreCollapsedSections();
     if (_obRepositionTimer) { clearTimeout(_obRepositionTimer); _obRepositionTimer = null; }
     window.removeEventListener('resize', _obPosition);
     window.removeEventListener('scroll', _obPosition, true);

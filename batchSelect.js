@@ -437,7 +437,7 @@ function _renderBatchActionBar() {
             // ② 暂存类：开弹层挑选的都进草稿，由「应用」一次性写入
             '<div class="' + glass + '">' +
                 btn('batch-btn-tag', 'batchTagsOpenPicker', 'fa-tag', '设置标签', 'border-purple-500 text-purple-500', stagedTag ? 'is-on' : '') +
-                btn('batch-btn-move', 'batchMoveOpenPicker', 'fa-folder', '移动到清单', 'border-indigo-500 text-indigo-500', stagedMove ? 'is-on' : '') +
+                btn('batch-btn-move', 'batchMoveOpenPicker', 'fa-inbox', '移动到清单', 'border-indigo-500 text-indigo-500', stagedMove ? 'is-on' : '') +
                 btn('batch-btn-time', 'batchTimeOpenPicker', 'fa-clock', '设置任务时间', 'border-orange-500 text-orange-500', stagedTime ? 'is-on' : '') +
                 btn('batch-btn-important', 'batchToggleImportant', 'fa-star', (impAction ? '标记重要' : '取消重要'), 'border-yellow-500 text-yellow-500', impStaged ? 'is-on' : '') +
                 btn('batch-btn-urgent', 'batchToggleUrgent', 'fa-fire', (urgAction ? '标记紧急' : '取消紧急'), 'border-orange-500 text-orange-500', urgStaged ? 'is-on' : '') +
@@ -1008,7 +1008,7 @@ function batchTimeOpenPicker() {
     batchUpdateRepeatText();
 }
 
-// ---------- 时间段开关（口径同详情栏 toggleTimeRange：按开始时间 + 默认时长预填结束） ----------
+// ---------- 时间段开关（口径同详情栏 toggleTimeRange：按开始时间 + 任务块默认时长预填结束） ----------
 function batchToggleTimeRange() {
     const d = _batchEnsureTimeDraft();
     d.range = !d.range;
@@ -1017,7 +1017,7 @@ function batchToggleTimeRange() {
     if (btn) btn.textContent = d.range ? '时间' : '时间段';
     if (container) container.classList.toggle('hidden', !d.range);
     if (d.range) {
-        const duration = (typeof settings !== 'undefined' && settings.defaultDuration) || 30;
+        const duration = (typeof getWeekTaskBlockMinutes === 'function') ? getWeekTaskBlockMinutes() : 30;
         const startDate = document.getElementById('batch-task-date').value;
         const startTime = document.getElementById('batch-task-time').value;
         if (startDate && startTime) {

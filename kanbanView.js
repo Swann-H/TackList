@@ -13,7 +13,6 @@ let _draggedKanbanCol = null;  // 正在拖拽的自定义分组列 key
 let _kanbanLeafMap = {};       // colKey -> 列元数据（含 type / listId / groupId / tagId / bucket / priorityLevel）
 // 视图配置面板的开关状态由 utils.js _viewConfigPanels 统一管理（_registerViewConfig）
 let _kanbanGroupConfigOpen = false;    // 分组配置子面板是否打开
-let _kgCfgDragToken = null;    // 分组配置面板内正在拖拽的分组 token
 let _kanbanNewGroupIds = new Set(); // 刚由「新增分组」创建、尚未命名（正在编辑）的分组 id 集合（失焦/关闭未命名则视为误操作删除）
 let _kanbanEditingGroupId = null; // 当前正在进行行内改名（input 编辑中）的分组 id；编辑期间禁用该列拖拽并阻止看板整板重渲染销毁输入框
 
@@ -1562,7 +1561,10 @@ function _onKanbanGroupConfigClosed() {
         pruneEmptyKanbanGroups(list); // 删除所有空名分组（含被放弃的新分组）
     }
     _kanbanGroupConfigOpen = false;
-    kanbanGroupDeleteConfirming = null; // 关闭分组配置面板时重置删除二次确认状态，避免残留
+    // 关闭时复位拖拽与删除确认状态：面板 DOM 已收起，避免残留计时器/指针捕获
+    kgCfgCancelHold();
+    if (kgCfgDragActive) kgCfgEndDrag();
+    resetKanbanGroupDeleteConfirm();
 }
 
 function renderKanbanGroupConfigPanel() {
@@ -1570,6 +1572,8 @@ function renderKanbanGroupConfigPanel() {
     const list = ctx.selectedList;
     const body = document.getElementById('kanbanGroupConfigBody');
     if (!body || !list) return;
+    // 面板重建即丢弃旧 DOM：顺带复位删除确认态，避免红色图标或计时器残留到新行
+    resetKanbanGroupDeleteConfirm();
     const order = getKanbanColumnOrder(list);
     const groupById = {};
     (list.groups || []).forEach(g => { groupById[g.id] = g; });
@@ -1578,51 +1582,221 @@ function renderKanbanGroupConfigPanel() {
         const isUngrouped = token === 'ungrouped';
         const name = isUngrouped ? '默认' : (groupById[token] ? groupById[token].name : '');
         if (!isUngrouped && !groupById[token]) return; // 跳过已删除的分组 token
+        // 行 = 拖拽单元（长按 300ms 激活，见下方「分组配置面板拖拽」）；group 类供删除按钮 hover 显隐
         html += `
-            <div class="flex items-center gap-2 p-2 rounded-lg bg-theme-tertiary border border-theme" draggable="true"
+            <div class="kg-cfg-row group relative flex items-center gap-2 p-2 rounded-lg bg-theme-tertiary border border-theme"
                  data-kg-token="${token}"
-                 ondragstart="kanbanGroupCfgDragStart(event, '${token}')"
-                 ondragover="kanbanGroupCfgDragOver(event)"
-                 ondrop="kanbanGroupCfgDrop(event, '${token}')"
-                 ondragend="kanbanGroupCfgDragEnd(event)">
+                 onpointerdown="kgCfgPointerDown(event, '${token}')">
                 ${isUngrouped
                     ? `<span class="flex-1 text-sm text-theme-primary font-medium">${name}</span>`
-                    : `<input id="kginput-${token}" type="text" value="${escapeHtml(name)}" placeholder="分组名称" draggable="false" ondragstart="event.preventDefault()" onfocus="this.parentElement.setAttribute('draggable','false')" onblur="this.parentElement.setAttribute('draggable','true'); kanbanGroupCfgRename('${token}', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault(); this.blur();}" class="flex-1 px-2 py-1 text-sm rounded bg-theme-secondary text-theme-primary border border-theme focus:outline-none focus:border-accent" />`}
-                ${isUngrouped ? '' : `<button onclick="kanbanGroupCfgDelete('${token}')" class="kg-del-btn w-7 h-7 rounded hover:bg-red-500/10 text-red-500 flex items-center justify-center" title="删除分组"><i class="fas fa-trash text-xs"></i></button>`}
+                    : `<input id="kginput-${token}" type="text" value="${escapeHtml(name)}" placeholder="分组名称" onblur="kanbanGroupCfgRename('${token}', this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault(); this.blur();}" class="flex-1 px-2 py-1 text-sm rounded bg-theme-secondary text-theme-primary border border-theme focus:outline-none focus:border-accent" />`}
+                ${isUngrouped ? '' : `<button onclick="kanbanGroupCfgDelete('${token}')" onmousedown="event.preventDefault()" class="kg-del-btn w-7 h-7 rounded hover:bg-red-500/10 flex items-center justify-center" title="删除分组"><i class="fas fa-trash text-xs"></i></button>`}
             </div>`;
     });
     body.innerHTML = html || '<div class="text-center text-theme-muted text-sm py-6">暂无分组</div>';
 }
 
-function kanbanGroupCfgDragStart(e, token) {
-    _kgCfgDragToken = token;
-    e.target.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', token);
+// ==================== 分组配置面板：长按拖拽排序（与子任务同一套指针事件方案） ====================
+// 为什么不用原生 HTML5 DnD：行内含文本输入框，按压起点落在 input 内时浏览器按"拖选文本"处理，
+// dragstart 不触发；旧实现靠 onfocus 临时把 draggable 置 false 规避，代价是输入框内根本拖不动，
+// 且拖动与输入互相打断。改为长按 300ms + Pointer Events 驱动后，「点选/选词/输入」与「拖动」彻底分开。
+const KG_CFG_HOLD_MS = 300;             // 长按激活阈值（与子任务一致）
+const KG_CFG_HOLD_TOLERANCE = 6;        // 判定期位移容差：超过视为点选/划选文本，立即取消
+const KG_CFG_HOLD_HINT_DELAY_MS = 150;  // 进度线延迟出现：普通单击全程看不到它
+// 进度线填充时长 = 长按阈值 − 延迟，保证「线走满」与「拖拽激活」同时发生
+const KG_CFG_HOLD_FILL_MS = KG_CFG_HOLD_MS - KG_CFG_HOLD_HINT_DELAY_MS;
+if (typeof document !== 'undefined') {
+    document.documentElement.style.setProperty('--kg-cfg-hold-anim-ms', KG_CFG_HOLD_FILL_MS + 'ms');
 }
-function kanbanGroupCfgDragOver(e) { e.preventDefault(); }
-function kanbanGroupCfgDragEnd(e) {
-    document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
-    _kgCfgDragToken = null;
+
+let kgCfgHoldTimer = null;
+let kgCfgHoldHintTimer = null;
+let kgCfgHoldRow = null;
+let kgCfgHoldPointerId = null;
+let kgCfgHoldStartX = 0;
+let kgCfgHoldStartY = 0;
+let kgCfgDragActive = false;
+let kgCfgDraggedRow = null;
+let kgCfgDragPointerId = null;
+let kgCfgDragToken = null;
+let kgCfgDragTarget = null;   // { token, insertAfter }
+let kgCfgRects = [];          // 激活时缓存各行视口坐标，热路径零布局读取
+let kgCfgRAF = null;
+let kgCfgPendingHL = null;    // 本帧待应用的插入线目标（同一帧多次移动只保留最后一次）
+let kgCfgActiveEl = null;
+let kgCfgActiveSide = null;   // 当前插入线方向：'top' | 'bottom'
+
+function kgCfgCancelHold() {
+    if (kgCfgHoldTimer) { clearTimeout(kgCfgHoldTimer); kgCfgHoldTimer = null; }
+    if (kgCfgHoldHintTimer) { clearTimeout(kgCfgHoldHintTimer); kgCfgHoldHintTimer = null; }
+    if (kgCfgHoldRow) { kgCfgHoldRow.classList.remove('kg-cfg-holding'); kgCfgHoldRow = null; }
 }
-function kanbanGroupCfgDrop(e, targetToken) {
-    e.preventDefault();
-    if (!_kgCfgDragToken || _kgCfgDragToken === targetToken) { _kgCfgDragToken = null; return; }
-    const ctx = kanbanListContext();
-    const list = ctx.selectedList;
-    if (!list) { _kgCfgDragToken = null; return; }
-    const order = getKanbanColumnOrder(list).slice();
-    const from = order.indexOf(_kgCfgDragToken);
-    const to = order.indexOf(targetToken);
-    if (from > -1 && to > -1 && from !== to) {
-        order.splice(from, 1);
-        order.splice(to, 0, _kgCfgDragToken);
-        setKanbanColumnOrder(list, order);
-        renderKanbanGroupConfigPanel();
-        renderView();
+
+function kgCfgClearHighlight() {
+    if (kgCfgRAF) { cancelAnimationFrame(kgCfgRAF); kgCfgRAF = null; }
+    kgCfgPendingHL = null;
+    if (kgCfgActiveEl) {
+        kgCfgActiveEl.style.boxShadow = '';
+        kgCfgActiveEl.style.transition = '';
+        kgCfgActiveEl = null;
     }
-    _kgCfgDragToken = null;
-    kanbanGroupCfgDragEnd(e);
+    kgCfgActiveSide = null;
+}
+
+// 插入线用 inset box-shadow 指示，不触发布局
+function kgCfgApplyHighlight(el, side) {
+    // 同一行上下半部来回移动时 side 会变，必须一并比较，否则插入线会停留在首次方向
+    if (!el || (el === kgCfgActiveEl && side === kgCfgActiveSide)) return;
+    kgCfgClearHighlight();
+    kgCfgActiveEl = el;
+    kgCfgActiveSide = side;
+    el.style.transition = 'none';
+    el.style.boxShadow = side === 'top' ? 'inset 0 3px 0 -1px #3b82f6' : 'inset 0 -3px 0 -1px #3b82f6';
+}
+
+function kgCfgScheduleHighlight(el, side) {
+    // 同一帧内多次 pointermove 只应用最后一次（合并而不是丢弃）：否则快速划过再停住时，
+    // 插入线会停留在该帧第一个落点，与最终落点不一致。
+    kgCfgPendingHL = { el: el, side: side };
+    if (kgCfgRAF) return;
+    kgCfgRAF = requestAnimationFrame(() => {
+        kgCfgRAF = null;
+        const p = kgCfgPendingHL;
+        kgCfgPendingHL = null;
+        if (p) kgCfgApplyHighlight(p.el, p.side);
+    });
+}
+
+// 按下：起长按计时；移动超容差或提前松开静默取消，不影响点选/选词/输入
+function kgCfgPointerDown(e, token) {
+    if (e.pointerType === 'touch') return;                       // 触摸端保持原生滚动，不启用拖拽
+    if (e.button !== undefined && e.button !== 0) return;
+    if (e.target.closest && e.target.closest('button')) return;  // 删除按钮不参与长按
+    const row = e.currentTarget;
+    kgCfgCancelHold();
+    kgCfgHoldRow = row;
+    kgCfgHoldPointerId = e.pointerId;
+    kgCfgHoldStartX = e.clientX;
+    kgCfgHoldStartY = e.clientY;
+    kgCfgHoldHintTimer = setTimeout(() => {
+        kgCfgHoldHintTimer = null;
+        if (kgCfgHoldRow === row) row.classList.add('kg-cfg-holding');
+    }, KG_CFG_HOLD_HINT_DELAY_MS);
+    kgCfgHoldTimer = setTimeout(() => {
+        kgCfgHoldTimer = null;
+        kgCfgStartDrag(row, token);
+    }, KG_CFG_HOLD_MS);
+}
+
+// 激活拖拽：捕获指针 + 缓存行坐标 + 落盘未提交的输入文字
+function kgCfgStartDrag(row, token) {
+    kgCfgDragActive = true;
+    kgCfgDraggedRow = row;
+    kgCfgDragToken = token;
+    kgCfgDragPointerId = kgCfgHoldPointerId;
+    kgCfgDragTarget = null;
+    // 防御：引导条延迟计时器若还没触发，先清掉，避免它在拖拽中把类加回来
+    if (kgCfgHoldHintTimer) { clearTimeout(kgCfgHoldHintTimer); kgCfgHoldHintTimer = null; }
+    row.classList.remove('kg-cfg-holding');
+    row.classList.add('kg-cfg-drag-ready');
+    try { if (kgCfgDragPointerId !== null) row.setPointerCapture(kgCfgDragPointerId); } catch (_) {}
+    // 输入框里未提交的文字先落盘（直接改数据、不触发重渲染，否则正在拖的行会被销毁）
+    const inp = row.querySelector('input');
+    const ctx = kanbanListContext();
+    const list = ctx && ctx.selectedList;
+    if (inp && list) {
+        const val = (inp.value || '').trim();
+        const g = (list.groups || []).find(x => x.id === token);
+        if (g && val && g.name !== val && !kanbanGroupExists(list, val, token)) { g.name = val; saveData(); }
+    }
+    const body = document.getElementById('kanbanGroupConfigBody');
+    if (body) {
+        kgCfgRects = [...body.querySelectorAll('.kg-cfg-row')].map(el => {
+            const r = el.getBoundingClientRect();
+            return { el, top: r.top, bottom: r.bottom, midY: r.top + r.height / 2 };
+        });
+    }
+}
+
+function kgCfgEndDrag() {
+    kgCfgCancelHold();
+    if (kgCfgDraggedRow) {
+        kgCfgDraggedRow.classList.remove('kg-cfg-drag-ready');
+        try {
+            if (kgCfgDragPointerId !== null && kgCfgDraggedRow.hasPointerCapture(kgCfgDragPointerId)) {
+                kgCfgDraggedRow.releasePointerCapture(kgCfgDragPointerId);
+            }
+        } catch (_) {}
+    }
+    kgCfgDragActive = false;
+    kgCfgDraggedRow = null;
+    kgCfgDragPointerId = null;
+    kgCfgDragToken = null;
+    kgCfgDragTarget = null;
+    kgCfgRects = [];
+    kgCfgClearHighlight();
+}
+
+// 拖拽热路径：仅查缓存坐标 + rAF 高亮，零布局读取
+function kgCfgUpdateDragPosition(clientY) {
+    const hit = kgCfgRects.find(r => clientY >= r.top && clientY <= r.bottom);
+    if (!hit || hit.el === kgCfgDraggedRow) {   // 落点无效：不在任何行上 / 在拖拽行自身
+        kgCfgDragTarget = null;
+        kgCfgClearHighlight();
+        return;
+    }
+    const insertAfter = clientY >= hit.midY;
+    kgCfgDragTarget = { token: hit.el.dataset.kgToken, insertAfter: insertAfter };
+    kgCfgScheduleHighlight(hit.el, insertAfter ? 'bottom' : 'top');
+}
+
+function kgCfgFinishDrag() {
+    const token = kgCfgDragToken;
+    const target = kgCfgDragTarget;
+    kgCfgEndDrag();
+    if (!token || !target || target.token === token) return;
+    const ctx = kanbanListContext();
+    const list = ctx && ctx.selectedList;
+    if (!list) return;
+    const order = getKanbanColumnOrder(list).slice();
+    const from = order.indexOf(token);
+    if (from < 0) return;
+    order.splice(from, 1);
+    const to = order.indexOf(target.token);
+    if (to < 0) return;
+    order.splice(target.insertAfter ? to + 1 : to, 0, token);
+    setKanbanColumnOrder(list, order);   // 内部已 saveData
+    renderKanbanGroupConfigPanel();
+    renderView();
+}
+
+// 全局统一监听（仅绑定一次；非拖拽态时一两次判断即返回，开销可忽略）
+if (typeof document !== 'undefined') {
+    document.addEventListener('pointermove', (e) => {
+        if (kgCfgDragActive) {
+            if (e.pointerId !== kgCfgDragPointerId) return;
+            if (!(e.buttons & 1)) { kgCfgEndDrag(); return; }  // 按键已释放（如窗口外松开）则中止
+            kgCfgUpdateDragPosition(e.clientY);
+            return;
+        }
+        if (!kgCfgHoldTimer) return;
+        if (Math.abs(e.clientX - kgCfgHoldStartX) > KG_CFG_HOLD_TOLERANCE ||
+            Math.abs(e.clientY - kgCfgHoldStartY) > KG_CFG_HOLD_TOLERANCE) {
+            kgCfgCancelHold();   // 判定期移动超容差：视为点选/划选文本，静默取消
+        }
+    }, { passive: true });
+    document.addEventListener('pointerup', () => {
+        if (kgCfgDragActive) kgCfgFinishDrag();
+        else kgCfgCancelHold();
+    });
+    document.addEventListener('pointercancel', () => {
+        if (kgCfgDragActive) kgCfgEndDrag();
+        else kgCfgCancelHold();
+    });
+    // 拖拽中滚动容器会使缓存坐标失效，直接中止以避免错误落点
+    document.addEventListener('wheel', () => {
+        if (kgCfgDragActive) kgCfgEndDrag();
+    }, { passive: true });
 }
 function kanbanGroupCfgRename(token, name) {
     const ctx = kanbanListContext();
@@ -1650,50 +1824,49 @@ function kanbanGroupCfgRename(token, name) {
         }
         return;
     }
+    const changed = g.name !== trimmed;
     g.name = trimmed;
     if (isNew) _kanbanNewGroupIds.delete(token);
+    if (!changed) return;   // 名称未变：不重建面板，避免打断紧随其后的点击（如删除按钮）
     saveData();
     renderKanbanGroupConfigPanel();
     renderView();
 }
-// 分组配置面板删除按钮：仿照 deleteTask 行内二次确认（点击→变「确认删除」→再点执行→3s 还原）
+// 分组配置面板删除按钮：平时不显示（仅悬浮该行时出现），灰色图标 → 单击变红（确认态）→ 再单击删除，
+// 3 秒无操作自动复位（与子任务删除的二次确认口径一致）。
 let kanbanGroupDeleteConfirming = null;
+let kanbanGroupDeleteConfirmTimer = null;
+
+function resetKanbanGroupDeleteConfirm() {
+    kanbanGroupDeleteConfirming = null;
+    if (kanbanGroupDeleteConfirmTimer) {
+        clearTimeout(kanbanGroupDeleteConfirmTimer);
+        kanbanGroupDeleteConfirmTimer = null;
+    }
+    document.querySelectorAll('#kanbanGroupConfigBody .kg-del-btn.kg-del-confirm')
+        .forEach(btn => btn.classList.remove('kg-del-confirm'));
+}
+
 function kanbanGroupCfgDelete(token) {
     const ctx = kanbanListContext();
     const list = ctx.selectedList;
     if (!list) return;
+    // 第二次单击：执行删除（内部已调用 renderKanbanGroupConfigPanel，该行自然消失）
+    if (kanbanGroupDeleteConfirming === token) {
+        resetKanbanGroupDeleteConfirm();
+        doDeleteKanbanGroup(list, token);
+        return;
+    }
     const panelBody = document.getElementById('kanbanGroupConfigBody');
     if (!panelBody) return;
     const row = panelBody.querySelector(`[data-kg-token="${token}"]`);
-    if (!row) return;
-
-    if (kanbanGroupDeleteConfirming === token) {
-        kanbanGroupDeleteConfirming = null;
-        doDeleteKanbanGroup(list, token);   // 内部已调用 renderKanbanGroupConfigPanel，删除后该行自然消失
-        return;
-    }
-
-    kanbanGroupDeleteConfirming = token;
-    const delBtn = row.querySelector('.kg-del-btn');
+    const delBtn = row && row.querySelector('.kg-del-btn');
     if (!delBtn) return;
-    const confirmBtn = document.createElement('button');
-    confirmBtn.className = 'kg-del-btn px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 flex items-center justify-center';
-    confirmBtn.textContent = '确认删除';
-    confirmBtn.onclick = (e) => { e.stopPropagation(); kanbanGroupCfgDelete(token); };
-    delBtn.parentNode.replaceChild(confirmBtn, delBtn);
-    setTimeout(() => {
-        kanbanGroupDeleteConfirming = null;
-        const r2 = panelBody.querySelector(`[data-kg-token="${token}"]`);
-        const cb = r2 && r2.querySelector('.kg-del-btn');
-        if (cb && cb.textContent === '确认删除') {
-            const restore = document.createElement('button');
-            restore.className = 'kg-del-btn w-7 h-7 rounded hover:bg-red-500/10 text-red-500 flex items-center justify-center';
-            restore.title = '删除分组';
-            restore.innerHTML = '<i class="fas fa-trash text-xs"></i>';
-            restore.onclick = () => kanbanGroupCfgDelete(token);
-            cb.parentNode.replaceChild(restore, cb);
-        }
-    }, 3000);
+    // 第一次单击：进入确认态（互斥，同时只允许一行变红）
+    resetKanbanGroupDeleteConfirm();
+    kanbanGroupDeleteConfirming = token;
+    delBtn.classList.add('kg-del-confirm');
+    kanbanGroupDeleteConfirmTimer = setTimeout(resetKanbanGroupDeleteConfirm, 3000);
 }
 function kanbanGroupCfgAdd() {
     const ctx = kanbanListContext();

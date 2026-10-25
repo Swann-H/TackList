@@ -18,10 +18,18 @@ function getWeekConfig() {
     // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    if (typeof c.blockMinutes !== 'number') c.blockMinutes = 30;
     // per-list 回退链
     const listPrefs = _getCurrentListViewPrefs('week');
     if (listPrefs) return Object.assign({}, c, listPrefs);
     return c;
+}
+
+// 周视图任务块默认时长：未设置结束时间的任务按此高度显示
+function getWeekTaskBlockMinutes() {
+    const raw = parseInt(getWeekConfig().blockMinutes, 10);
+    if (!isFinite(raw)) return 30;
+    return Math.min(480, Math.max(15, raw));
 }
 function getMonthConfig() {
     if (!settings.monthConfig || typeof settings.monthConfig !== 'object') {
@@ -133,6 +141,8 @@ function openWeekConfig() {
     const slEl = document.getElementById('wc-showlunar');
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (slEl) slEl.checked = cfg.showLunar !== false;
+    const blockEl = document.getElementById('wc-block-minutes');
+    if (blockEl) blockEl.value = getWeekTaskBlockMinutes();
     // 显示天数：回填分段控件选中态（归一化后的值，非法值显示为「7 天」）
     const daysWrap = document.getElementById('wc-displaydays');
     if (daysWrap) {
@@ -165,6 +175,12 @@ function onWeekConfigChange() {
     const slEl = document.getElementById('wc-showlunar');
     if (scEl) target.showCompleted = scEl.checked;
     if (slEl) target.showLunar = slEl.checked;
+    const blockEl = document.getElementById('wc-block-minutes');
+    if (blockEl) {
+        const n = parseInt(blockEl.value, 10);
+        target.blockMinutes = isFinite(n) ? Math.min(480, Math.max(15, n)) : 30;
+        blockEl.value = target.blockMinutes;
+    }
     const daysWrap = document.getElementById('wc-displaydays');
     if (daysWrap) {
         const on = daysWrap.querySelector('.wc-days-btn.is-on');
@@ -912,13 +928,13 @@ function layoutDayTasks(dayTasks, hourHeight) {
 }
 
 function getTaskDurationMinutes(task) {
-    // 任务时长统一由结束时间推导：有 endTime 用起止差值，否则回退设置默认值
-    if (task.endTime) {
-        const start = new Date(task.startTime);
-        const end = new Date(task.endTime);
-        return Math.max(15, (end - start) / (1000 * 60));
+    // 仅按实际起止时间计算；无结束时间时按周视图配置的任务块默认时长占位。
+    // 日程块高度需要最小高度保护，故保留 15 分钟下限。
+    if (task && task.startTime && task.endTime) {
+        const diff = (new Date(task.endTime).getTime() - new Date(task.startTime).getTime()) / 60000;
+        if (isFinite(diff) && diff > 0) return Math.max(15, diff);
     }
-    return settings.defaultDuration || 30;
+    return Math.max(15, getWeekTaskBlockMinutes());
 }
 
 function isCurrentWeek(weekDays) {

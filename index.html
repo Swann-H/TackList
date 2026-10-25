@@ -75,6 +75,8 @@
             --bg-secondary-rgb: 255,255,255;
             --bg-tertiary: #f3f4f6;
             --bg-tertiary-rgb: 243,244,246;
+            /* 背景图透明度降低时融向的遮罩色：浅色模式白 / 深色模式黑 */
+            --bg-image-mask: #ffffff;
             --text-primary: #111827;
             --text-secondary: #6b7280;
             --text-muted: #78716c;
@@ -101,6 +103,7 @@
             --bg-secondary-rgb: 31,41,55;
             --bg-tertiary: #374151;
             --bg-tertiary-rgb: 55,65,81;
+            --bg-image-mask: #000000;
             --text-primary: #f9fafb;
             --text-secondary: #d1d5db;
             --text-muted: #a8a29e;
@@ -116,6 +119,12 @@
             background-color: var(--bg-primary);
             color: var(--text-primary);
             transition: background-color 500ms ease-in-out, color 500ms ease-in-out;
+        }
+        /* 背景图底层遮罩：背景图模式 body 透明，透出的是根节点底色，
+           所以这里必须提供主题化的画布色，否则深色模式会透出浏览器默认白底 */
+        html {
+            background-color: var(--bg-image-mask);
+            transition: background-color 500ms ease-in-out;
         }
         
         #main-content {
@@ -2488,6 +2497,194 @@
             .subtask-manage-btn { display: none !important; }
         }
 
+        /* ===== FR-09 任务模板入口：+ 悬浮组 ===== */
+        .add-task-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        .add-task-template-pop {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            padding-top: 8px;
+            z-index: 50;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-4px);
+            pointer-events: none;
+            transition: opacity .14s ease, transform .14s ease, visibility 0s linear .24s;
+        }
+        .add-task-group:hover .add-task-template-pop {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+            transition-delay: .15s, .15s, 0s;
+        }
+        /* 键盘聚焦时立即展开，避免延迟导致子按钮无法 Tab 到 */
+        .add-task-group:focus-within .add-task-template-pop {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+            transition-delay: 0s;
+        }
+        @media (hover: none) {
+            .add-task-template-pop { display: none !important; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .add-task-template-pop { transition: opacity .01ms linear, visibility 0s; transform: none; }
+        }
+
+        /* ===== 视图操作按钮溢出：「更多」按钮与面板 ===== */
+        .header-more-group {
+            display: none;
+            position: relative;
+            align-items: center;
+        }
+        .header-more-group.overflow-active { display: flex; }
+        .header-more-group.overflow-active #mobile-more-btn { display: flex; }
+        .header-action-collapsed { display: none !important; }
+        .header-more-pop {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: auto;
+            padding-top: 8px;
+            z-index: 60;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-4px);
+            pointer-events: none;
+            transition: opacity .14s ease, transform .14s ease, visibility 0s linear .24s;
+        }
+        .header-more-group.overflow-active:hover .header-more-pop,
+        .header-more-group.more-open .header-more-pop {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+            transition-delay: .15s, .15s, 0s;
+        }
+        .header-more-group.align-right .header-more-pop { left: auto; right: 0; }
+        .header-more-group.more-open .header-more-pop { transition-delay: 0s, 0s, 0s; }
+        #mobile-more-menu {
+            min-width: 190px;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
+            padding: 8px;
+            border-radius: 12px;
+            background: rgba(var(--bg-secondary-rgb, 255, 255, 255), 0.78);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        html[data-blur="off"] #mobile-more-menu {
+            background: rgba(var(--bg-secondary-rgb, 255, 255, 255), 0.95);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        #mobile-more-menu.is-empty { display: none; }
+        .header-more-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            flex-shrink: 0;
+            padding: 4px 8px 4px 4px;
+            border-radius: 12px;
+            background: transparent;
+            font-size: 14px;
+            color: var(--text-primary);
+            text-align: left;
+            transition: background-color .12s;
+        }
+        .header-more-item:hover { background: rgba(var(--bg-tertiary-rgb, 243, 244, 246), 0.5); }
+        .header-more-item:focus-visible { outline: 2px solid var(--accent-color, #3b82f6); outline-offset: 1px; }
+        .header-more-icon {
+            --more-color: var(--text-secondary);
+            flex: 0 0 2.5rem;
+            width: 2.5rem;
+            height: 2.5rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--more-color);
+            border-radius: 9999px;
+            color: var(--more-color);
+            transition: background-color .15s, color .15s;
+        }
+        .header-more-icon i { font-size: 1rem; }
+        .header-more-item:hover .header-more-icon,
+        .header-more-item:focus-visible .header-more-icon {
+            background-color: var(--more-color);
+            color: #fff;
+        }
+        .header-more-label {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .header-more-item.is-disabled { opacity: .45; cursor: default; }
+        @media (hover: none) {
+            .header-more-group.overflow-active:hover .header-more-pop {
+                opacity: 0;
+                visibility: hidden;
+                transform: translateY(-4px);
+                pointer-events: none;
+            }
+            .header-more-group.overflow-active.more-open .header-more-pop {
+                opacity: 1;
+                visibility: visible;
+                transform: translateY(0);
+                pointer-events: auto;
+            }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .header-more-pop { transition: opacity .01ms linear, visibility 0s; transform: none; }
+        }
+
+        /* ===== FR-09 任务模板入口：详情标题行 ===== */
+        .detail-title-template-btn {
+            flex-shrink: 0;
+            width: 2rem;
+            height: 2rem;
+            padding: 0;
+            margin-top: .125rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: .5rem;
+            color: var(--text-muted, #9ca3af);
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity .15s, color .15s, background-color .15s, visibility 0s linear .2s;
+        }
+        #detail-title-row:hover .detail-title-template-btn,
+        #detail-title-row:focus-within .detail-title-template-btn {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transition-delay: 0s;
+        }
+        .detail-title-template-btn:hover { color: var(--accent-color, #3b82f6); background: var(--bg-tertiary, #f3f4f6); }
+        .detail-title-template-btn.is-linked { color: var(--accent-color, #3b82f6); }
+        @media (hover: none) {
+            .detail-title-template-btn {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: auto;
+            }
+        }
+
         /* 子任务内联提醒面板 */
         .subtask-reminder-panel {
             margin: 0.25rem 0 0.5rem 1.5rem;
@@ -2558,6 +2755,41 @@
             justify-content: flex-end;
             max-height: 72px;
             overflow-y: auto;
+        }
+        /* FR-06 附件：网格在标签行上方展开，按钮在标签行内。
+           限高 + 内部滚动，避免展开后把详情正文压得过矮；书写态几何在下文覆盖。 */
+        #detail-attachments {
+            box-sizing: border-box;
+            width: 100%;
+            max-width: 384px;
+            margin: 0 auto 8px;
+            padding: 0 16px;
+            max-height: min(40vh, 200px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }
+        .detail-attachment-trigger {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-right: auto;
+            padding: 2px 0;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.4;
+            white-space: nowrap;
+            color: var(--text-secondary);
+            transition: color 0.15s;
+        }
+        .detail-attachment-trigger:hover { color: var(--text-primary); }
+        .detail-attachment-trigger .att-count { color: var(--text-muted); }
+        .detail-attachment-trigger .att-chevron { font-size: 10px; }
+        /* 放不下时按钮独占标签行上方的整行，标签随后右对齐 */
+        #detail-tags-display.att-trigger-above #detail-attachment-trigger {
+            flex: 0 0 100%;
+            margin-right: 0;
+            margin-bottom: 2px;
         }
         /* 进度：只描边、不填底 —— 中间与背景同色，用一圈虚线强调色提示「可拖拽调整」 */
         #progress-container {
@@ -2981,12 +3213,20 @@
 
             /* 正文：加大字号与行高，像一张可延展的纸 */
             body.detail-write-mode #detail-body { order: 4; padding-top: 4px; padding-bottom: 16px; }
+            /* 附件网格展开时，为绝对定位的底部停靠区多留出等高滚动空白，
+               正文最后一行才能滚到网格上方（文本模式原 46vh 留白之外再兜一层）。 */
+            body.detail-write-mode #task-detail-panel.att-grid-open #detail-body {
+                padding-bottom: calc(16px + min(40vh, 200px));
+            }
             /* 子任务模式补丁（第十五轮）：书写态 #detail-dock 绝对定位于 bottom:0，浮在 body 之上
                盖住底部约 130px。子任务模式下描述完全展开（无 200px 上限）+ 4 条子任务 = 1088px，
                远超 #detail-body 视口（837px），需要让 body 底部留出 dock 高度的空白，
                用户滚动到底时所有子任务才能滚到 dock 顶边之上而不是被 dock 遮住。
                文本模式 notes 已自带 padding-bottom:46vh（约 437px），足以越过 dock，本补丁不需介入。 */
             body.detail-write-mode.subtasks-mode #detail-body { padding-bottom: 132px; }
+            body.detail-write-mode.subtasks-mode #task-detail-panel.att-grid-open #detail-body {
+                padding-bottom: calc(132px + min(40vh, 200px));
+            }
             /* 书写视觉中部（第十一轮）：底部留约半屏空白，使文本到达底部、最后一行时仍可继续
                下滚，让光标所在行落到屏幕中部。 */
             body.detail-write-mode #detail-task-notes {
@@ -3026,15 +3266,23 @@
                这里只覆盖书写态独有的几何（280px + 右对齐 24px）；改样式请改共用块，
                不要在这里补第二份，否则两态会漂移。 */
             body.detail-write-mode #detail-timestamps-display { order: 5; }
-            body.detail-write-mode #detail-tags-display {
+            body.detail-write-mode #detail-attachments {
                 order: 6;
+                align-self: flex-end;
+                width: 280px;
+                max-width: 280px;
+                margin: 0 24px 8px auto !important;
+                padding: 0 !important;
+            }
+            body.detail-write-mode #detail-tags-display {
+                order: 7;
                 align-self: flex-end;
                 width: 280px;
                 margin: 0 24px 8px auto !important;
                 padding: 0 !important;
             }
             body.detail-write-mode #progress-container {
-                order: 7;
+                order: 8;
                 align-self: flex-end;
                 width: 280px;
                 margin: 0 24px 8px auto !important;
@@ -3042,7 +3290,7 @@
 
             /* 底部按钮区 → 右下角圆形簇（文档流内右对齐，位于标签/进度下方） */
             body.detail-write-mode #detail-actions {
-                order: 8;
+                order: 9;
                 align-self: flex-end;
                 width: 280px;
                 margin: 0 24px 24px auto;
@@ -3095,6 +3343,7 @@
                恢复写态原有的间距即可。） */
             /* 进度容器已在写态通用规则里统一为「透明 + 虚线强调色框」，
                这里只需要兜住它别被别处再叠一层模糊。 */
+            body.has-bg-image.detail-write-mode #detail-attachments,
             body.has-bg-image.detail-write-mode #detail-tags-display,
             body.has-bg-image.detail-write-mode #detail-actions {
                 backdrop-filter: none !important;
@@ -3542,6 +3791,54 @@
             user-select: none;
             -webkit-user-select: none;
         }
+        /* ============ 分组配置面板（看板 / 任务视图共用） ============ */
+        /* 行 = 拖拽单元：长按 300ms 的进度线，复用子任务的 keyframes（scaleX 走合成层，不触发重排）。
+           引导线由 kanbanView.js 延迟 KG_CFG_HOLD_HINT_DELAY_MS(150ms) 才挂类，
+           填充时长 = 长按阈值 − 延迟（由 kanbanView.js 写入 --kg-cfg-hold-anim-ms，默认值同值兜底）。 */
+        .kg-cfg-row.kg-cfg-holding::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            height: 2px;
+            border-radius: 2px;
+            background: #3b82f6;
+            transform-origin: left center;
+            transform: scaleX(0);
+            pointer-events: none;
+            animation: subtask-hold-fill var(--kg-cfg-hold-anim-ms, 150ms) linear forwards;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .kg-cfg-row.kg-cfg-holding::after { animation: none; transform: scaleX(0.35); }
+        }
+        /* 拖拽进行中：拿起态 + 禁止选中文字（行内含输入框，否则拖动会划选文本） */
+        .kg-cfg-row.kg-cfg-drag-ready {
+            cursor: grabbing;
+            opacity: 0.5;
+        }
+        .kg-cfg-row.kg-cfg-drag-ready,
+        .kg-cfg-row.kg-cfg-drag-ready input {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        /* 删除按钮：平时不显示也不响应，悬浮该行才出现；灰色图标 → 确认态变红 */
+        .kg-del-btn {
+            opacity: 0;
+            pointer-events: none;
+            color: var(--text-muted, #9ca3af);
+            transition: opacity .15s, color .15s;
+        }
+        .kg-cfg-row:hover .kg-del-btn,
+        .kg-del-btn:focus-visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .kg-del-btn.kg-del-confirm { color: #ef4444; }
+        /* 触摸设备没有 hover：直接常显，否则永远删不掉 */
+        @media (hover: none) {
+            .kg-cfg-row .kg-del-btn { opacity: 1; pointer-events: auto; }
+        }
         /* 开始专注按钮：默认显示描边时钟图标，hover时切换为实心填充图标 */
         .pomodoro-focus-btn .pf-icon-outline { display: inline-block; }
         .pomodoro-focus-btn .pf-icon-solid { display: none; }
@@ -3657,6 +3954,47 @@
         .palette-derive-btn.palette-derive-suggested {
             color: var(--accent-color, #3b82f6);
         }
+        /* ===== 设置面板：视图操作按钮顺序（图标化、单行） ===== */
+        #view-actions-order {
+            display: flex;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 8px;
+            min-height: 2.5rem;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        #view-actions-order::-webkit-scrollbar { display: none; }
+        .va-order-chip {
+            flex: 0 0 2.5rem;
+            width: 2.5rem;
+            height: 2.5rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--va-color, var(--text-secondary));
+            border-radius: 50%;
+            color: var(--va-color, var(--text-secondary));
+            background: transparent;
+            cursor: grab;
+            user-select: none;
+            transition: background-color .15s, color .15s, border-color .15s;
+        }
+        .va-order-chip:active { cursor: grabbing; }
+        .va-order-chip:hover {
+            background-color: var(--va-color, var(--text-secondary));
+            color: #fff;
+        }
+        .va-order-chip i { font-size: 1rem; }
+        @media (max-width: 480px) {
+            #view-actions-order { gap: 4px; }
+            .va-order-chip {
+                flex: 0 0 2.125rem;
+                width: 2.125rem;
+                height: 2.125rem;
+            }
+            .va-order-chip i { font-size: .875rem; }
+        }
 /* ==================== 移动端适配（依据《移动端显示适配.md》v3.0） ==================== */
         /* 4.2 消除移动端 300ms 点击延迟并禁止双击缩放 */
         html, body, button, [onclick], input, select, textarea, a, label { touch-action: manipulation; }
@@ -3756,34 +4094,10 @@
                 align-items: center;
                 white-space: nowrap;
             }
-            #today-btn, #plan-btn, #postpone-btn, #add-task-btn, #toggle-all-groups-btn, #batch-select-btn { display: none !important; }
+            #today-btn, #plan-btn, #postpone-btn, #add-task-group, #add-task-btn, #toggle-all-groups-btn, #batch-select-btn { display: none !important; }
+            .header-more-group { display: flex !important; }
+            .header-more-pop { left: auto; right: 0; }
             #mobile-more-btn { display: flex !important; flex-shrink: 0; }
-            #mobile-more-menu {
-                position: absolute;
-                right: 0;
-                top: calc(100% + 8px);
-                z-index: 60;
-                min-width: 148px;
-                border-radius: 12px;
-                padding: 6px;
-                background: var(--bg-secondary);
-                border: 1px solid var(--border-color);
-                box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-            }
-            #mobile-more-menu > button {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                width: 100%;
-                padding: 12px 14px;
-                min-height: 44px;
-                border-radius: 8px;
-                font-size: 14px;
-                color: var(--text-primary);
-                text-align: left;
-            }
-            #mobile-more-menu > button:hover { background: var(--bg-tertiary); }
-            #mobile-more-menu > button.hidden { display: none; }
 
             /* ---- 4.3/6.1 添加任务 FAB ---- */
             #mobile-fab {
@@ -3874,6 +4188,14 @@
                 margin-left: -16px;
                 margin-right: -16px;
                 padding: 4px 16px;
+            }
+            /* 背景图模式：与宽屏一致，分组标题随内容滚动且不铺实底（否则深色主题下是一条黑条） */
+            body.has-bg-image [data-task-group] > div:first-child {
+                position: static;
+                margin-left: 0;
+                margin-right: 0;
+                padding: 0;
+                background: transparent;
             }
 
             /* 移动端不支持书写态：隐藏详情面板右上角「展开书写」按钮（该模式下无法继续展开） */
@@ -4183,6 +4505,12 @@
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-next7days-count" data-page-node-id="SVyFMgIqsEs27yPi4PnF1H"></span>
                     </button>
                     
+                    <!-- 外部日历同步入口（在线版；位于最近7天与摘要之间） -->
+                    <button onclick="if(typeof switchToCalendarSyncPage==='function') switchToCalendarSyncPage('sidebar')" id="sidebar-external-calendar-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" style="display:none;">
+                        <i class="fas fa-calendar-plus w-5"></i>
+                        <span class="sidebar-text flex-1">外部日历同步</span>
+                    </button>
+
                     <!-- 摘要 -->
                     <button onclick="currentListId=null;currentFilter=null;currentTagIds=[];currentFilterId=null;switchView('summary')" id="sidebar-summary-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="uguGjPOeoSPyJMLFrpkkB9">
                         <i class="fas fa-file-text w-5" data-page-node-id="OREXc9XtWGcxirbDsAseNy"></i>
@@ -4214,24 +4542,6 @@
                     <div class="space-y-1" data-page-node-id="gurZB1GbQ8WTIAglMADZ6l">
                         <div id="lists-container" class="space-y-1" data-page-node-id="eADpTytIrjNaMeCKIYizoI">
                             <!-- 清单列表 -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 外部日历订阅分组（与清单同级，有订阅时显示；支持折叠；标题右侧设置图标跳转订阅设置页） -->
-                <div id="sidebar-calsync-section" class="mt-4 hidden">
-                    <div id="sidebar-calsync-header" class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('calsync')">
-                        <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">
-                            <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition"></i>
-                            <span>外部日历</span>
-                        </span>
-                        <button onclick="event.stopPropagation(); if(typeof switchToCalendarSyncPage==='function') switchToCalendarSyncPage('sidebar')" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm w-5 text-center flex items-center justify-center" title="外部日历订阅设置">
-                            <i class="fas fa-cog"></i>
-                        </button>
-                    </div>
-                    <div class="space-y-1">
-                        <div id="sidebar-calsync-container" class="space-y-1">
-                            <!-- 订阅入口（sidebarViews.js 渲染） -->
                         </div>
                     </div>
                 </div>
@@ -4323,6 +4633,14 @@
                 </div>
 
                 <div class="flex items-center gap-3" id="header-actions" data-page-node-id="RjxxlnRqXIXWbwZhNGlq8B">
+                    <div class="relative header-more-group" id="header-more-group" data-page-node-id="fEFasu7ydY0NMaPbEcZlCs">
+                        <button onclick="toggleMobileMoreMenu(event)" id="mobile-more-btn" class="w-10 h-10 rounded-full border-2 border-accent text-accent flex items-center justify-center hover:bg-accent hover:text-white transition" title="更多" aria-haspopup="menu" aria-expanded="false" data-page-node-id="1sjydbY5GOhCMmDu6Bx5Mv">
+                            <i class="fas fa-ellipsis-h" data-page-node-id="ZBemSzGpAZ6OdmwfLn5Q06"></i>
+                        </button>
+                        <div class="header-more-pop">
+                            <div id="mobile-more-menu" role="menu" aria-label="更多视图操作" data-page-node-id="JxVJg2uLoYX3qs6Z9x980A"></div>
+                        </div>
+                    </div>
                     <button onclick="triggerCalendarSync()" id="calendar-sync-btn" class="hidden w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white transition" title="同步外部日历" data-page-node-id="cWHb8uEG3Vz2FjkwBWLD5i">
                         <i class="fas fa-cloud-arrow-down" data-page-node-id="EZegmHRJHGxgRhYhpMvXoH"></i>
                     </button>
@@ -4359,20 +4677,17 @@
                     <button onclick="toggleQuadrantConfig()" id="quadrant-config-btn" class="hidden w-10 h-10 rounded-full border-2 border-indigo-500 text-indigo-500 flex items-center justify-center hover:bg-indigo-500 hover:text-white transition group relative" title="视图配置" data-page-node-id="JcKB9Vhl0utGqR9X8zLxMD">
                         <i class="fas fa-sliders-h" data-page-node-id="agvcels1dABpih7LLZ47UE"></i>
                     </button>
-                    <button onclick="openAddTaskModal()" id="add-task-btn" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务" data-page-node-id="uupvTvZuI5bAoSfwicXOIT">
-                        <i class="fas fa-plus" data-page-node-id="4OCVgDLleN6fgZPu5ogWVW"></i>
-                    </button>
-                    <div class="relative" data-page-node-id="fEFasu7ydY0NMaPbEcZlCs">
-                        <button onclick="toggleMobileMoreMenu(event)" id="mobile-more-btn" class="w-10 h-10 rounded-full border-2 border-theme text-theme-secondary flex items-center justify-center transition" title="更多" data-page-node-id="1sjydbY5GOhCMmDu6Bx5Mv">
-                            <i class="fas fa-ellipsis-h" data-page-node-id="ZBemSzGpAZ6OdmwfLn5Q06"></i>
+                    <div class="add-task-group" id="add-task-group">
+                        <button onclick="openAddTaskModal()" id="add-task-btn" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition group relative" title="添加任务" data-page-node-id="uupvTvZuI5bAoSfwicXOIT">
+                            <i class="fas fa-plus" data-page-node-id="4OCVgDLleN6fgZPu5ogWVW"></i>
                         </button>
-                        <div id="mobile-more-menu" class="hidden" data-page-node-id="JxVJg2uLoYX3qs6Z9x980A">
-                            <button id="mobile-more-today" onclick="closeMobileMoreMenu(); goToToday()" data-page-node-id="pitlmotA1rDsvYt92BFcup"><i class="fas fa-bullseye w-5" data-page-node-id="UuatrHsz0Z2iOUtXEZJ9BL"></i>今天</button>
-                            <button id="mobile-more-plan" onclick="closeMobileMoreMenu(); togglePlanPanel()" data-page-node-id="BNvX7aC9Mzh60nyg7DFlGB"><i class="fas fa-clipboard-list w-5" data-page-node-id="6NtI2xtI7tPiNFmpyFfeRt"></i>计划</button>
-                            <button id="mobile-more-postpone" onclick="closeMobileMoreMenu(); postponeOverdueTasks()" data-page-node-id="MBBkn08KXjxBX4CANR38HW"><i class="fas fa-forward w-5" data-page-node-id="QbguenH2V7IAgoPytgz0oi"></i>顺延</button>
-                            <button id="mobile-more-toggle-groups" onclick="closeMobileMoreMenu(); toggleAllTaskListGroups()" data-page-node-id="RBsvUm2VRZhPEZkLxWaoKp"><i class="fas fa-angles-down w-5" data-page-node-id="5STJ5PK53SQtlXjCZe3qUs"></i>全部展开</button>
-                            <button id="mobile-more-multi-select" onclick="closeMobileMoreMenu(); enterBatchSelectMode()"><i class="fas fa-list w-5"></i>批量管理</button>
-                            <button id="mobile-more-add" onclick="closeMobileMoreMenu(); openAddTaskModal()" data-page-node-id="wvynSmTZZfflTfKLGnMWE5"><i class="fas fa-plus w-5" data-page-node-id="uIPGSCU9gRpXjVEsL7Ua7j"></i>添加任务</button>
+                        <div class="add-task-template-pop" role="menu">
+                            <button type="button" class="add-task-template-item w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition" role="menuitem" onclick="openTaskTemplatePicker()" title="从模板添加" aria-label="从模板添加">
+                                <span class="relative inline-flex items-center justify-center" aria-hidden="true">
+                                    <i class="fas fa-layer-group"></i>
+                                    <i class="fas fa-plus absolute leading-none" style="font-size:8px; right:-5px; bottom:-4px;"></i>
+                                </span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -4420,6 +4735,9 @@
                         </button>
                         <button onclick="closeMobileNavMore(); switchToCountdownPage()" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3" data-page-node-id="FOpl3jF0MoN2E6pW99f8B4">
                             <i class="fas fa-hourglass-half w-5 text-center" data-page-node-id="A3OB9NYwHjghRA1xWh8glG"></i>倒计时
+                        </button>
+                        <button onclick="closeMobileNavMore(); openTaskTemplatePicker()" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3">
+                            <i class="fas fa-layer-group w-5 text-center"></i>从模板新建
                         </button>
                         <button onclick="closeMobileNavMore(); openMobileSidebar()" class="w-full px-4 py-2.5 text-left text-sm text-theme-primary hover:bg-theme-tertiary rounded-lg flex items-center gap-3" data-page-node-id="uwdfFwaPwBWi4laJDi8imj">
                             <i class="fas fa-cog w-5 text-center" data-page-node-id="z551iK5fztAQ0PC22a1h5a"></i>设置
@@ -4661,6 +4979,11 @@
                     <i class="fas fa-check text-xs hidden" data-page-node-id="HGqBAK0rQI5fLEm0HUPyOq"></i>
                 </button>
                 <textarea id="detail-task-title" placeholder="任务标题" rows="1" class="flex-1 text-xl font-medium bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" style="min-height: 32px; max-height: 120px;"></textarea>
+                <button type="button" onclick="saveTaskAsTemplate()" id="detail-save-template-btn"
+                        class="detail-title-template-btn wm-hide" title="存为模板" aria-label="存为模板"
+                        data-page-node-id="detailSaveTemplateBtn">
+                    <i class="fas fa-layer-group text-sm"></i>
+                </button>
             </div>
 
             <!-- 任务详情编辑 -->
@@ -4695,7 +5018,10 @@
             <div id="detail-timestamps-display" class="px-4 pt-3 pb-1 flex-col gap-1 text-sm text-theme-secondary hidden" data-page-node-id="I1m0G1EFw31FS79sc0WWLK">
             </div>
 
-            <!-- 任务标签显示（进度上方） -->
+            <!-- FR-06 附件展开区（在标签行上方展开，限高内部滚动；按钮在标签行内） -->
+            <div id="detail-attachments" class="hidden flex-shrink-0"></div>
+
+            <!-- 任务标签显示（进度上方；附件按钮作为首个子项，同行或独占一行） -->
             <div id="detail-tags-display" class="px-4 pt-3 pb-2 flex flex-wrap flex-shrink-0 min-h-0" data-page-node-id="3eEvyDigMJ1COqeTQuaN2C">
             </div>
             
@@ -4734,7 +5060,7 @@
                         <i class="fas fa-tag text-green-500" data-page-node-id="M6ylb1yWXdZyXlcGrqFE7H"></i>
                     </button>
                     <button type="button" id="detail-list-btn" onclick="toggleDetailListPicker()" title="所属清单" class="wm-circle flex items-center gap-1.5 h-10 px-3 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition text-sm max-w-[160px] truncate" data-page-node-id="A6pvJ4HideyCUvjkNMDbBC">
-                        <i id="detail-list-icon" class="fas fa-folder flex-shrink-0" data-page-node-id="YvBlAhoJcq5u2ASupANieH"></i>
+                        <i id="detail-list-icon" class="fas fa-inbox flex-shrink-0" data-page-node-id="YvBlAhoJcq5u2ASupANieH"></i>
                         <span id="detail-list-name" class="truncate" data-page-node-id="lqIlSDGVZShK9w8rKD6RFF"></span>
                     </button>
                 </div>
@@ -4817,7 +5143,7 @@
                             </button>
                             
                             <button type="button" onclick="toggleListPicker()" id="list-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary" data-page-node-id="2LiwfPpqd50mIIwks5U7r4">
-                                <i class="fas fa-folder" data-page-node-id="RUOIGBq73CKqwDliFiIa9X"></i>
+                                <i class="fas fa-inbox" data-page-node-id="RUOIGBq73CKqwDliFiIa9X"></i>
                                 <span id="list-btn-text" data-page-node-id="Pct2lyvWHOb3md0dEuJ6zh">选择清单</span>
                             </button>
                         </div>
@@ -5410,6 +5736,7 @@
                                 <li data-page-node-id="ZBNAgXBPBwhDcDX9UrrNVs"><a data-target="settings-section-defaults" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="dZTPcXUUetFoKtHSpUBR4U">新建任务默认值</a></li>
                                 <li data-page-node-id="baq0rJc04ta6vEXuwEen5q"><a data-target="settings-section-sidebar-items" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="w2tk3AvB3FtJT5V1QGzbD6">侧边栏配置</a></li>
                                 <li data-page-node-id="hrJaJu1X7l1XMfFEnCRW5x"><a data-target="settings-section-command" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="c8r7K4Nhe1d9jcGMgXggQP">命令面板</a></li>
+                                <li data-page-node-id="tplNavItem"><a data-target="settings-section-templates" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="tplNavLink">任务模板</a></li>
                                 <li data-page-node-id="jsTvzVZGs6YYG0D3XzAkSF"><a data-target="settings-section-shortcuts" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="nDp38PcECtVRZYapmM1ORN">快捷键</a></li>
                             </ul>
                         </div>
@@ -5429,7 +5756,7 @@
                         <div data-page-node-id="bde0cEEeQZSrz2DPZepowx">
                             <div class="text-xs font-semibold text-theme-muted uppercase tracking-wide mb-2 px-2" data-page-node-id="MTa1et7l6DfcoNdI26ys0A">数据与系统</div>
                             <ul class="space-y-1" data-page-node-id="N3J0NlDoHgAypaFDOj5P1x">
-                                <li data-page-node-id="EysTn8hUw6xwXzAD5Xb4n9"><a data-target="settings-section-calendarsync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="GEZnUEyyNosKPoMFsDjlfr">外部日历订阅</a></li>
+                                <li data-page-node-id="EysTn8hUw6xwXzAD5Xb4n9"><a data-target="settings-section-calendarsync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="GEZnUEyyNosKPoMFsDjlfr">外部日历同步</a></li>
                                 <li data-page-node-id="wejs9DxnNtDMhEhIiXh77b"><a data-target="settings-section-sync" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="rAWRcsEWdf2RD8s7W7ZAM7">数据同步</a></li>
                                 <li data-page-node-id="HojnmkppflJPWZ8dmPFp80"><a data-target="settings-section-network" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="C5f8dlY8uAkARAXqhWlp9I">网络配置</a></li>
                                 <li data-page-node-id="29vXzvb52n456W8ZNsYm8f"><a data-target="settings-section-data" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="BHKHqKfEZnlByFv2yIrw7c">数据管理</a></li>
@@ -5654,6 +5981,23 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="flex items-center justify-between">
+                                <div class="min-w-0 pr-3">
+                                    <label class="text-sm font-medium text-theme-primary">视图操作按钮显示数量</label>
+                                    <p class="text-xs text-theme-secondary">视图右上角最多显示的按钮数量。其他按钮将被收至「更多」按钮中</p>
+                                </div>
+                                <div class="flex items-center gap-2 flex-shrink-0">
+                                    <input type="number" id="settings-view-action-limit" min="1" max="10" value="8" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center">
+                                    <span class="text-sm text-theme-secondary">个</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-theme-primary mb-1">视图操作按钮顺序</label>
+                                <p class="text-xs text-theme-muted mb-2">拖动按钮排序</p>
+                                <div class="rounded-lg border border-dashed border-theme p-3 bg-theme-secondary">
+                                    <div id="view-actions-order"></div>
+                                </div>
+                            </div>
                             <div class="flex items-center justify-between" data-page-node-id="ODwfIN5YrYWu8OGjHjHued">
                                 <label class="text-sm font-medium text-theme-secondary" data-page-node-id="fPQqHYD4UHTtY3LyNETKuM">周开始于</label>
                                 <input type="hidden" id="settings-week-start" value="monday" data-page-node-id="r3XPV70CCWzgsVSDr7aRX0"><div class="seg" data-seg-for="settings-week-start"><button type="button" data-value="monday">周一</button><button type="button" data-value="sunday">周日</button></div>
@@ -5747,13 +6091,6 @@
                                     <div class="ui-switch switch-on-red" data-page-node-id="UcQyBesvlcEHIiMXor3snr"></div>
                                 </label>
                             </div>
-                            <div class="flex items-center justify-between" data-page-node-id="NLtiO7NUg8BAamH751mc5h">
-                                <label class="text-sm font-medium text-theme-secondary" data-page-node-id="eXZ9SCD8OPYvfqBXLpzD7Y">新建任务的默认时长</label>
-                                <div class="flex items-center gap-2" data-page-node-id="nVlZc3PGFXLcSD1EaugVNh">
-                                    <input type="number" id="settings-default-duration" min="5" max="480" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" placeholder="30" data-page-node-id="vId7IUofKqD4UPxBdSNJGK">
-                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="LU0xq2yRiNiHHfxJI6xzBB">分钟</span>
-                                </div>
-                            </div>
                             <div class="flex items-center justify-between" data-page-node-id="lRVsGBTeMswCr6bRIBxAPh">
                                 <div class="min-w-0 pr-3" data-page-node-id="H8xdqeooYWLXjf6DP22E6q">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="sEheuXGp5SVzp2bnbp2tid">默认任务日期</label>
@@ -5788,6 +6125,10 @@
                                 <div class="flex items-center justify-between" data-page-node-id="3JZHndFNdVLl5v8kcsQNEg">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="D9XiPZSovUuUqT5Ek4XKdg">最近7天</label>
                                     <input type="hidden" id="settings-sidebar-recent7days" value="show" data-page-node-id="MTe4pFQZnAWS2IMRgFFHKe"><div class="seg" data-seg-for="settings-sidebar-recent7days"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm font-medium text-theme-secondary">外部日历同步</label>
+                                    <input type="hidden" id="settings-sidebar-external-calendar" value="show"><div class="seg" data-seg-for="settings-sidebar-external-calendar"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="Yt6dGa2lMxPvRhKq9Wn4ZC">
                                     <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Ne8vJc5sQzLwTbFm3Xr7DH">摘要</label>
@@ -5894,6 +6235,16 @@
                         </div>
                     </div>
                     
+                    <!-- 任务模板（FR-09） -->
+                    <div id="settings-section-templates" data-page-node-id="tplSection">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="tplSectionTitle">任务模板</h3>
+                        <div class="space-y-3" data-page-node-id="tplSectionBody">
+                            <button type="button" onclick="switchToTaskTemplatesPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
+                                <i class="fas fa-layer-group"></i>设置任务模板
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- 快捷键 -->
                     <div id="settings-section-shortcuts" data-page-node-id="FXX8a2PgWda24XtwEbLj36">
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="TRhwBQI6wPMYDQMTT3pBeP">快捷键</h3>
@@ -6053,14 +6404,13 @@
                         </div>
                     </div>
                     
-                    <!-- 外部日历订阅(ICS) -->
+                    <!-- 外部日历同步（WebDAV 云同步 + ICS 外部日历订阅） -->
                     <div id="settings-section-calendarsync" data-page-node-id="IwvU5U3yx7IH00U0lOgofb">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="wZKvCV7yF7a41Y2eXlhsbc">外部日历订阅 (ICS)</h3>
-                        <div class="space-y-3" data-page-node-id="F4W4FLht6uIZTkh869UzXc">
-                            <button onclick="switchToCalendarSyncPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm" data-page-node-id="32IzHBwlTbJ9nB0vvgyNeX">
-                                <i class="fas fa-calendar-day" data-page-node-id="3KsbgiybP6v211O3T1AQKz"></i>设置外部日历订阅
-                            </button>
-                        </div>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-2" data-page-node-id="wZKvCV7yF7a41Y2eXlhsbc">外部日历同步</h3>
+                        <p class="text-xs text-theme-muted mb-4">配置WebDAV 云同步、ICS外部日历订阅功能</p>
+                        <button onclick="switchToCalendarSyncPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm" data-page-node-id="32IzHBwlTbJ9nB0vvgyNeX">
+                            <i class="fas fa-sliders-h" data-page-node-id="3KsbgiybP6v211O3T1AQKz"></i>打开外部日历同步设置
+                        </button>
                     </div>
 
                     <div id="settings-section-sync" class="settings-group-start" data-page-node-id="K1BszBiMM6T6RgKZDBt95O">
@@ -6214,7 +6564,7 @@
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.0</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.1</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>
@@ -6368,6 +6718,7 @@
     <script src="lunar.js"></script>
     <script src="utils.js"></script>
     <script src="data.js"></script>
+    <script src="webdav.js"></script>
     <script src="sidebarViews.js"></script>
     <script src="calendarViews.js?v=20261009-1"></script>
     <script src="quadrantView.js"></script>
@@ -6377,7 +6728,10 @@
     <script src="batchSelect.js"></script>
     <script src="kanbanView.js"></script>
     <script src="views.js"></script>
+    <script src="headerActions.js"></script>
     <script src="tasks.js"></script>
+    <script src="taskTemplates.js"></script>
+    <script src="attachments.js"></script>
     <script src="pomodoro.js"></script>
     <script src="commandPalette.js"></script>
     <script src="onboarding.js"></script>
@@ -6395,12 +6749,18 @@
             <div data-page-node-id="Al05xRpf75zBP0QHnAtR5Z">
                 <label for="kc-groupby" class="block text-sm text-theme-secondary mb-1" data-page-node-id="oBu1xivM7vGrYKTrDBGKVN">分组依据</label>
                 <select id="kc-groupby" onchange="onKanbanConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme" data-page-node-id="QvW62n1cAHf5CdikrTE7oP">
-                    <option value="custom" data-page-node-id="4GZJzGTkGEryJIWrsTFOaK">自定义</option>
+                    <option value="custom" data-page-node-id="4GZJzGTkGEryJIWrsTFOaK">自定义分组</option>
                     <option value="time" data-page-node-id="FakVBT7rSGEaSU6rYipdeI">时间</option>
                     <option value="createdTime" data-page-node-id="6fajhXXZHiKGEtf3EGL9cs">创建时间</option>
                     <option value="tag" data-page-node-id="SoVMzTs7OHgF9B6CJaAiWY">标签</option>
                     <option value="priority" data-page-node-id="isBCZjucpiwcxOJCCWY0Vj">优先级</option>
                 </select>
+                <div id="kc-groupconfig-entry" class="hidden mt-2" data-page-node-id="eEjYbrj8LCCoOmm2T1qyr1">
+                    <button onclick="openKanbanGroupConfig()" title="调整分组顺序、重命名、新增或删除分组" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-theme-tertiary hover:bg-theme text-theme-primary transition" data-page-node-id="EoO5H7FXY3lSeNpXbcAyHT">
+                        <span class="text-sm font-medium" data-page-node-id="KAj8ibzcdvONqYR2ggsgZp">分组配置</span>
+                        <i class="fas fa-chevron-right text-theme-muted" data-page-node-id="EQGU63bsVdGnz590YuKuVA"></i>
+                    </button>
+                </div>
             </div>
             <div id="kc-tagsub-wrap" class="hidden" data-page-node-id="0rqYzF63CyZvDTGEPAuVtz">
                 <label for="kc-tagsub" class="block text-sm text-theme-secondary mb-1" data-page-node-id="6bCdB9mHN1pT11QDo31OAv">标签下二级分组</label>
@@ -6464,13 +6824,6 @@
                     <div class="ui-switch" data-page-node-id="k52UquzXMHpd6Xu8hb7THB"></div>
                 </label>
             </div>
-            <div id="kc-groupconfig-entry" class="hidden border-t border-theme pt-4" data-page-node-id="eEjYbrj8LCCoOmm2T1qyr1">
-                <button onclick="openKanbanGroupConfig()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-theme-tertiary hover:bg-theme text-theme-primary transition" data-page-node-id="EoO5H7FXY3lSeNpXbcAyHT">
-                    <span class="text-sm font-medium" data-page-node-id="KAj8ibzcdvONqYR2ggsgZp">分组配置</span>
-                    <i class="fas fa-chevron-right text-theme-muted" data-page-node-id="EQGU63bsVdGnz590YuKuVA"></i>
-                </button>
-                <p class="text-xs text-theme-muted mt-2" data-page-node-id="j2XjeLBr74wCja1muWaa7d">调整分组顺序、重命名、新增或删除分组</p>
-            </div>
             <div class="pt-4 border-t border-theme space-y-2" data-page-node-id="TuP0o497PVpo8HDf6YcSST">
                 <button id="kc-reset-column-order-btn" onclick="resetViewConfigWithConfirm(this, doResetKanbanColumnOrder, '确认恢复分组默认排序？')" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm" data-page-node-id="gt8jiwwxjVklGLqGy0MGUp"><i class="fas fa-rotate-left mr-1" data-page-node-id="zxIETH1Y63xlMGODO2MVn2"></i>恢复分组默认排序</button>
                 <button onclick="resetViewConfigWithConfirm(this, resetKanbanViewConfig)" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm" data-page-node-id="zYEzH4uW2vCJG2x2oGViuc"><i class="fas fa-rotate-left mr-1" data-page-node-id="m15rYEqE7WLhS4C08xp7Fp"></i>恢复默认配置</button>
@@ -6493,9 +6846,15 @@
                     <option value="list" data-page-node-id="d3UEiaUyVHyL92kFXkYC0W">清单</option>
                     <option value="tag" data-page-node-id="LSeKvIwughHrqsKH4djXHd">标签</option>
                     <option value="priority" data-page-node-id="Kn5Ela0dydxO5apQVJ6OOw">优先级</option>
-                    <option value="custom" data-page-node-id="A1XnWuaRStD0Hr142qdm2X">自定义</option>
+                    <option value="custom" data-page-node-id="A1XnWuaRStD0Hr142qdm2X">自定义分组</option>
                     <option value="none" data-page-node-id="ZmsXzE8USKsG0RtdCdM9Sy">无</option>
                 </select>
+                <div id="tc-groupconfig-entry" class="hidden mt-2" data-page-node-id="xkuqQ4LCqMArQ866UiMBAH">
+                    <button onclick="openKanbanGroupConfig()" title="调整分组顺序、重命名、新增或删除分组" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-theme-tertiary hover:bg-theme text-theme-primary transition" data-page-node-id="SmSXF8d9OBzKEUCmmp6XWJ">
+                        <span class="text-sm font-medium" data-page-node-id="CPTPtxjYS5vangLmszX0Z9">分组配置</span>
+                        <i class="fas fa-chevron-right text-theme-muted" data-page-node-id="2pgeJ5Duw1RlAXuNnH7eLp"></i>
+                    </button>
+                </div>
             </div>
             <div data-page-node-id="oOgCLJ7yyzr9D3DpGmYq0O">
                 <label for="tc-sortby" class="block text-sm text-theme-secondary mb-1" data-page-node-id="UDbx8Q3gyKhGhPqIqH6bDj">排序依据</label>
@@ -6551,13 +6910,6 @@
                         <option value="only-completed-collapsed" data-page-node-id="MKU4VAeI2hGiR4l1npEtjT">仅折叠已完成</option>
                         <option value="all-collapsed" data-page-node-id="tDLUsiF18PVHyCFJILEFI3">全部折叠</option>
                     </select>
-                </div>
-                <div id="tc-groupconfig-entry" class="hidden border-t border-theme pt-4" data-page-node-id="xkuqQ4LCqMArQ866UiMBAH">
-                    <button onclick="openKanbanGroupConfig()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-theme-tertiary hover:bg-theme text-theme-primary transition" data-page-node-id="SmSXF8d9OBzKEUCmmp6XWJ">
-                        <span class="text-sm font-medium" data-page-node-id="CPTPtxjYS5vangLmszX0Z9">分组配置</span>
-                        <i class="fas fa-chevron-right text-theme-muted" data-page-node-id="2pgeJ5Duw1RlAXuNnH7eLp"></i>
-                    </button>
-                    <p class="text-xs text-theme-muted mt-2" data-page-node-id="DIJDnnTLORFErBzTHYUYDz">调整分组顺序、重命名、新增或删除分组</p>
                 </div>
                 <div class="pt-2 border-t border-theme" data-page-node-id="rUhTdelQpiy9FF7oJm9utt">
                     <button onclick="resetViewConfigWithConfirm(this, resetTaskViewConfig)" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm" data-page-node-id="UfjHcr6JOZbKviRzyBJUlq"><i class="fas fa-rotate-left mr-1" data-page-node-id="UpE1PYtACY0aEU6Vc4XEG0"></i>恢复默认配置</button>
@@ -6678,6 +7030,16 @@
                     <button type="button" role="radio" aria-checked="false" data-days="5" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDays5">5 天</button>
                     <button type="button" role="radio" aria-checked="false" data-days="workweek" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDaysWorkweek">工作周</button>
                     <button type="button" role="radio" aria-checked="false" data-days="7" onclick="wcSelectDays(this)" class="wc-days-btn" data-page-node-id="wcDays7">7 天</button>
+                </div>
+            </div>
+            <div class="flex items-center justify-between pt-1" data-page-node-id="wcBlockMinutesRow">
+                <div class="min-w-0 pr-3">
+                    <label for="wc-block-minutes" class="text-sm text-theme-primary">任务块默认时长</label>
+                    <p class="text-xs text-theme-muted mt-0.5">未设置结束时间的任务，在周视图中按此时长显示</p>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <input type="number" id="wc-block-minutes" min="15" max="480" step="5" onchange="onWeekConfigChange()" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" placeholder="30">
+                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">分钟</span>
                 </div>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="YUACl1zRyldpxUbH2gGYFv">

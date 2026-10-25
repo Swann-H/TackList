@@ -126,33 +126,15 @@ function renderLists(force) {
     }
     appendListGap(container, null, topLevel.length);
 
-    // 外部日历订阅筛选入口（3.4）：独立分组（与清单同级）。设计（需求说明书 A-1 / DEFAULT_SETTINGS 注释）：
-    // 在线版有订阅即始终显示分组；离线版跟随「显示外部日历」开关（关闭时同时过滤视图中的外部任务）
+    // 外部日历同步为在线版独有：在线版固定入口（与摘要/回收站同级），离线版无此入口。
+    // 在线版显隐由「侧边栏配置 → 外部日历同步」控制（show/auto/hide）
     const _subs = (settings && Array.isArray(settings.calendarSubscriptions)) ? settings.calendarSubscriptions : [];
-    const _showExtCal = window._WEB_VERSION === 'online' || !settings || settings.showExternalCalendars !== false;  // 在线始终显示
-    const calsyncSection = document.getElementById('sidebar-calsync-section');
-    const calsyncContainer = document.getElementById('sidebar-calsync-container');
-    if (calsyncSection && calsyncContainer) {
-        if (_subs.length > 0 && _showExtCal) {
-            calsyncSection.classList.remove('hidden');
-            calsyncContainer.innerHTML = '';
-            _subs.forEach(function (sub) {
-                const btn = document.createElement('button');
-                const extKey = '__extsrc__:' + sub.id;
-                const active = currentListId === extKey;
-                btn.className = 'w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition flex items-center gap-2 ' +
-                    (active ? 'sidebar-active' : 'text-theme-primary') +
-                    (sub.enabled ? '' : ' opacity-50');
-                const hex = (typeof getCalendarSubscriptionColorHex === 'function') ? getCalendarSubscriptionColorHex(sub.id) : '#9ca3af';
-                btn.innerHTML = '<i class="fas fa-calendar-day w-3 text-center text-xs" style="color:' + hex + '"></i>' +
-                    '<span class="sidebar-text flex-1 truncate">' + escapeHtml(sub.name || '订阅') + '</span>';
-                btn.title = sub.enabled ? ('来自 ' + (sub.name || '外部日历')) : '已停用';
-                btn.onclick = function () { selectExtSourceView(sub.id); };
-                calsyncContainer.appendChild(btn);
-            });
-        } else {
-            calsyncSection.classList.add('hidden');
-        }
+    const _extCalMode = window._WEB_VERSION === 'online' && typeof getSidebarItemVisibility === 'function'
+        ? getSidebarItemVisibility('externalCalendar') : 'show';
+    const extCalBtn = document.getElementById('sidebar-external-calendar-btn');
+    if (extCalBtn) {
+        const showEntry = _extCalMode === 'show' || (_extCalMode === 'auto' && _subs.length > 0);
+        extCalBtn.style.display = showEntry ? '' : 'none';
     }
 
     // 已归档清单入口（放在清单分组末位，"新建清单"按钮之前）
@@ -361,7 +343,7 @@ function toggleFolder(folderId) {
 // ==================== 侧边栏分区（清单/标签/过滤器）展开/收起 ====================
 // 折叠状态持久化到 localStorage，刷新后保持
 const SECTION_COLLAPSE_KEY = 'tacklist_section_collapsed';
-let sectionCollapsed = { lists: false, tags: false, filters: false, calsync: false };
+let sectionCollapsed = { lists: false, tags: false, filters: false };
 (function loadSectionCollapse() {
     try {
         const saved = JSON.parse(localStorage.getItem(SECTION_COLLAPSE_KEY) || '{}');
@@ -369,7 +351,6 @@ let sectionCollapsed = { lists: false, tags: false, filters: false, calsync: fal
             sectionCollapsed.lists = !!saved.lists;
             sectionCollapsed.tags = !!saved.tags;
             sectionCollapsed.filters = !!saved.filters;
-            sectionCollapsed.calsync = !!saved.calsync;
         }
     } catch (_) {}
 })();
@@ -384,9 +365,9 @@ function toggleSectionCollapse(key) {
 }
 // 依据状态设置各分区容器可见性与头部箭头
 function applySectionCollapse() {
-    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container', calsync: 'sidebar-calsync-container' };
-    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section', calsync: 'sidebar-calsync-header' };
-    ['lists', 'tags', 'filters', 'calsync'].forEach(key => {
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
+    ['lists', 'tags', 'filters'].forEach(key => {
         const c = document.getElementById(containers[key]);
         if (c) c.classList.toggle('hidden', !!sectionCollapsed[key]);
         const h = document.getElementById(headers[key]);
@@ -398,8 +379,8 @@ function applySectionCollapse() {
 }
 // 编辑某分区时强制展开（不影响已保存的折叠状态）
 function ensureSectionVisible(key) {
-    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container', calsync: 'sidebar-calsync-container' };
-    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section', calsync: 'sidebar-calsync-header' };
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
     const c = document.getElementById(containers[key]);
     if (c) c.classList.remove('hidden');
     const h = document.getElementById(headers[key]);
@@ -1102,7 +1083,8 @@ function updateSidebarHighlight() {
 
     // 清除所有侧边栏按钮的高亮
     const sidebarBtns = ['sidebar-all-tasks-btn', 'sidebar-today-btn', 'sidebar-tomorrow-btn',
-        'sidebar-recent3days-btn', 'sidebar-next7days-btn', 'sidebar-summary-btn', 'sidebar-trash-btn'];
+        'sidebar-recent3days-btn', 'sidebar-next7days-btn', 'sidebar-external-calendar-btn',
+        'sidebar-summary-btn', 'sidebar-trash-btn'];
     sidebarBtns.forEach(id => {
         const btn = document.getElementById(id);
         if (btn) {
@@ -1130,7 +1112,11 @@ function updateSidebarHighlight() {
     if (cdBox) cdBox.classList.remove('cd-active');
 
     // 高亮当前视图对应的按钮
-    if (currentFilterId) {
+    if (currentView === 'calendarsync') {
+        // 外部日历同步是独立视图：优先于残留的清单/标签/时间筛选高亮
+        const btn = document.getElementById('sidebar-external-calendar-btn');
+        if (btn) btn.classList.add('sidebar-active');
+    } else if (currentFilterId) {
         // 自定义过滤器激活时
         const btn = document.getElementById(`sidebar-filter-${currentFilterId}`);
         if (btn) btn.classList.add('sidebar-active');

@@ -87,7 +87,6 @@ document.addEventListener('click', function (e) {
 // ---------- 侧边栏分组折叠（清单默认展开，标签/过滤器默认折叠） ----------
 const _mobileSidebarSections = [
     { selector: '#lists-container', defaultCollapsed: false },
-    { selector: '#sidebar-calsync-container', defaultCollapsed: false },
     { selector: '#sidebar-tags-container', defaultCollapsed: true },
     { selector: '#sidebar-filters-container', defaultCollapsed: true }
 ];
@@ -134,47 +133,15 @@ function _applySidebarCollapseDefaults() {
 }
 
 // ==================== 2. 顶部"更多"菜单 ====================
+// 面板内容与数量裁剪统一由 headerActions.js 管理，这里仅保留旧入口转发
 function toggleMobileMoreMenu(e) {
     if (e) e.stopPropagation();
-    const menu = document.getElementById('mobile-more-menu');
-    if (!menu) return;
-    if (menu.classList.contains('hidden')) {
-        _syncMobileMoreMenu();
-        menu.classList.remove('hidden');
-    } else {
-        menu.classList.add('hidden');
-    }
+    if (typeof toggleHeaderMoreMenu === 'function') toggleHeaderMoreMenu();
 }
 
 function closeMobileMoreMenu() {
-    const menu = document.getElementById('mobile-more-menu');
-    if (menu) menu.classList.add('hidden');
+    if (typeof closeHeaderMoreMenu === 'function') closeHeaderMoreMenu();
 }
-
-// 与原头部按钮（今天/计划/顺延）的显隐状态保持同步
-function _syncMobileMoreMenu() {
-    const pairs = [
-        ['today-btn', 'mobile-more-today'],
-        ['plan-btn', 'mobile-more-plan'],
-        ['postpone-btn', 'mobile-more-postpone'],
-        ['toggle-all-groups-btn', 'mobile-more-toggle-groups'],
-        ['batch-select-btn', 'mobile-more-multi-select'] // FR-03 批量管理（桌面头部按钮在移动端隐藏，映射进「更多」）
-    ];
-    pairs.forEach(([srcId, dstId]) => {
-        const src = document.getElementById(srcId);
-        const dst = document.getElementById(dstId);
-        if (src && dst) dst.classList.toggle('hidden', src.classList.contains('hidden'));
-    });
-}
-
-// 点击菜单外部关闭
-document.addEventListener('click', function (e) {
-    const menu = document.getElementById('mobile-more-menu');
-    if (!menu || menu.classList.contains('hidden')) return;
-    if (!e.target.closest('#mobile-more-menu') && !e.target.closest('#mobile-more-btn')) {
-        menu.classList.add('hidden');
-    }
-});
 
 // ==================== 3. 添加任务 FAB ====================
 let _fabScrollTimer = null;
@@ -189,7 +156,8 @@ function updateMobileFabVisibility() {
     const pomodoroOpen = pomodoroPage && !pomodoroPage.classList.contains('hidden');
     const keyboardOpen = document.activeElement && document.activeElement.matches &&
         document.activeElement.matches('input, textarea, select');
-    fab.classList.toggle('fab-hidden', !!(pomodoroOpen || keyboardOpen));
+    const managePage = (typeof currentView !== 'undefined' && currentView === 'templates');
+    fab.classList.toggle('fab-hidden', !!(pomodoroOpen || keyboardOpen || managePage));
 }
 
 // 监听视图内部滚动（scroll 不冒泡，用捕获阶段监听）

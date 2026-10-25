@@ -390,6 +390,8 @@ function permanentlyDeleteTrashTask(taskId) {
     if (i === -1 || !tasks[i].deletedAt) return;
     const title = tasks[i].title || '任务';
     tasks.splice(i, 1);
+    // FR-06（C6-3）：永久删除任务时级联清理 attachments/<taskId>/，否则磁盘持续增长
+    if (typeof cascadeDeleteAttachments === 'function') cascadeDeleteAttachments(taskId);
     saveData();
     if (currentView === 'trash') renderView(); else renderLists();
     showToast('已永久删除「' + title + '」', 'success');
@@ -448,6 +450,10 @@ function emptyTrash() {
     if (n === 0) {
         showToast('回收站是空的', 'info');
         return;
+    }
+    // FR-06（C6-3）：清空回收站同样级联清理附件目录
+    if (typeof cascadeDeleteAttachments === 'function') {
+        _getTrashedTasks().forEach(function (t) { cascadeDeleteAttachments(t.id); });
     }
     tasks = tasks.filter(function (t) { return !t.deletedAt; });
     saveData();

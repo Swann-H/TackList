@@ -68,9 +68,13 @@ function _fmtLastSync(sub) {
 
 // ==================== 独立视图(仿节假日视图) ====================
 
-// 切换到外部日历订阅管理视图：关闭设置弹窗 + switchView('calendarsync')
-function switchToCalendarSyncPage(source) {
+// 配置页子页签：'webdav' | 'ics'（默认 WebDAV 第 1 页；侧边栏 ICS 齿轮入口可指定 ICS）
+let calSyncTab = 'webdav';
+
+// 切换到外部日历同步配置视图：关闭设置弹窗 + switchView('calendarsync')
+function switchToCalendarSyncPage(source, tab) {
     calSyncReturnSource = source || 'settings';
+    calSyncTab = (tab === 'ics') ? 'ics' : 'webdav';
     calSyncPrevView = (typeof currentView !== 'undefined') ? currentView : 'task';
     // 侧边栏入口：设置面板本就未打开，直接切视图（避免 closeSettingsModal 触发"瞬间跳出设置面板"动画）
     if (calSyncReturnSource === 'settings') {
@@ -88,51 +92,93 @@ function switchToCalendarSyncPage(source) {
     if (typeof switchView === 'function') switchView('calendarsync');
 }
 
-// 渲染整个外部日历订阅视图(渲染进 #view-container，与节假日视图同机制)
-// 布局分两部分：
-//   部分1（.calsync-section-main）：标题 + 说明 + 订阅卡片区 + 立即同步按钮；
-//        占满剩余空间（flex-1），卡片区内容超出时内部滚动；帮助区收起时本部分自动变高。
-//   间隔（.calsync-section-gap）：纯透明留白，壁纸模式下连同容器毛玻璃一起取消 → 直接透出壁纸。
-//   部分2（.calsync-section-help）：各订阅源 ICS 链接获取方式，固定在最底部，可折叠（默认收起）。
+function _calsyncTabClass(tab) {
+    return tab === calSyncTab
+        ? 'px-4 py-2 rounded-lg bg-accent text-white shadow-md text-sm transition'
+        : 'px-4 py-2 rounded-lg text-theme-primary hover:bg-theme-tertiary text-sm transition';
+}
+
+// 切换配置页子页签：仅切换 DOM 显隐，保留 ICS 编辑态不丢输入
+function switchCalendarSyncTab(tab) {
+    calSyncTab = (tab === 'ics') ? 'ics' : 'webdav';
+    const icsPanel = document.getElementById('calsync-panel-ics');
+    const webdavPanel = document.getElementById('calsync-panel-webdav');
+    if (icsPanel) icsPanel.classList.toggle('hidden', calSyncTab !== 'ics');
+    if (webdavPanel) webdavPanel.classList.toggle('hidden', calSyncTab !== 'webdav');
+    document.querySelectorAll('#calsync-tabs [data-tab]').forEach(function (btn) {
+        btn.className = _calsyncTabClass(btn.dataset.tab);
+    });
+    if (typeof updateWebdavHeaderActions === 'function') updateWebdavHeaderActions();
+    if (calSyncTab === 'webdav' && typeof loadWebdavStatus === 'function') loadWebdavStatus();
+}
+
+// 渲染整个「外部日历同步」视图：标题 + 子页签 + ICS / WebDAV 两个面板
 function renderCalendarSyncView(container) {
-    const helpHidden = calSyncHelpCollapsed ? 'hidden' : '';
-    const chevRotate = calSyncHelpCollapsed ? '' : 'rotate-180';
+    const isWebdav = calSyncTab === 'webdav';
     container.innerHTML =
         '<div class="holiday-view-container calendarsync-view">' +
             '<div class="h-full flex flex-col">' +
-                '<div class="calsync-section-main flex-1 min-h-0 flex flex-col">' +
-                    '<div class="flex items-center justify-between p-4 pb-2 flex-shrink-0">' +
-                        '<h1 class="text-2xl font-bold text-theme-primary">外部日历订阅</h1>' +
+                '<div class="flex items-center justify-between p-4 pb-2 flex-shrink-0">' +
+                    '<h1 class="text-2xl font-bold text-theme-primary">外部日历同步</h1>' +
+                    '<div class="flex items-center gap-2">' +
+                        '<div id="webdav-header-actions" class="hidden items-center gap-2">' +
+                            '<button onclick="webdavPush()" class="w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white active:bg-cyan-600 active:scale-95 transition" title="上传到云端"><i class="fas fa-cloud-arrow-up"></i></button>' +
+                            '<button onclick="webdavPull()" class="w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white active:bg-cyan-600 active:scale-95 transition" title="从云端下载"><i class="fas fa-cloud-arrow-down"></i></button>' +
+                        '</div>' +
                         '<button onclick="closeCalendarSyncView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
                     '</div>' +
-                    '<div class="px-4 flex flex-col min-h-0 flex-1">' +
-                        '<p class="text-sm text-theme-secondary mb-4 flex-shrink-0">添加外部日历的 .ics 订阅链接，将外部日程任务拉取到本系统中作为只读任务展示。支持滴答清单、Outlook日历、Google日历、iCloud日历等主流日程管理软件的订阅源。</p>' +
-                        '<div class="holiday-list-wrap flex-1 min-h-0 overflow-y-auto">' +
-                            '<div id="calendarsync-list"></div>' +
-                        '</div>' +
-                        '<div class="flex justify-center pt-4 flex-shrink-0">' +
-                            '<button onclick="triggerCalendarSync(true)" id="calsync-view-sync-btn" class="px-6 py-2.5 border-2 border-cyan-500 text-cyan-500 rounded-lg hover:bg-cyan-500 hover:text-white transition flex items-center gap-2 text-sm font-medium" title="立即同步所有已启用的订阅">' +
-                                '<i class="fas fa-cloud-arrow-down"></i><span id="calsync-view-sync-label">立即同步</span>' +
-                            '</button>' +
-                        '</div>' +
+                '</div>' +
+                '<div class="px-4 pb-3 flex-shrink-0">' +
+                    '<div id="calsync-tabs" class="inline-flex gap-2 bg-theme-secondary rounded-lg p-1">' +
+                        '<button type="button" data-tab="webdav" onclick="switchCalendarSyncTab(\'webdav\')" class="' + _calsyncTabClass('webdav') + '">WebDAV 云同步</button>' +
+                        '<button type="button" data-tab="ics" onclick="switchCalendarSyncTab(\'ics\')" class="' + _calsyncTabClass('ics') + '">ICS 订阅</button>' +
                     '</div>' +
                 '</div>' +
-                '<div class="calsync-section-gap flex-shrink-0" aria-hidden="true"></div>' +
-                '<div class="calsync-section-help flex-shrink-0 px-4 pb-4">' +
-                    '<div class="calsync-help-panel rounded-lg border border-theme">' +
-                        '<button id="calsync-help-toggle" onclick="toggleCalendarSyncHelp()" class="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-theme-tertiary transition" title="展开 / 收起">' +
-                            '<span class="text-xs font-medium text-theme-muted">各订阅源 ICS 链接获取方式</span>' +
-                            '<i id="calsync-help-chevron" class="fas fa-chevron-down text-xs text-theme-muted transition-transform duration-200 ' + chevRotate + '"></i>' +
-                        '</button>' +
-                        '<div id="calsync-help-body" class="' + helpHidden + ' px-3 pb-3">' +
-                            '<div id="calsync-help-cols" class="holiday-cols"></div>' +
-                        '</div>' +
-                    '</div>' +
+                '<div id="calsync-panel-webdav" class="flex-1 min-h-0 flex flex-col' + (isWebdav ? '' : ' hidden') + '">' +
+                    (typeof renderWebdavSyncPanel === 'function' ? renderWebdavSyncPanel() : '') +
+                '</div>' +
+                '<div id="calsync-panel-ics" class="flex-1 min-h-0 flex flex-col' + (isWebdav ? ' hidden' : '') + '">' +
+                    _renderCalendarSyncIcsPanel() +
                 '</div>' +
             '</div>' +
         '</div>';
     renderCalendarSubscriptions();
     _renderHelpSteps();
+    if (typeof updateWebdavHeaderActions === 'function') updateWebdavHeaderActions();
+    if (typeof updateWebdavResetState === 'function') updateWebdavResetState();
+    if (typeof applyWebdavStatusState === 'function') applyWebdavStatusState('loading');
+    if (isWebdav && typeof loadWebdavStatus === 'function') loadWebdavStatus();
+}
+
+// ICS 子页：说明 + 订阅卡片区 + 立即同步 + 底部帮助面板（原布局保持不变）
+function _renderCalendarSyncIcsPanel() {
+    const helpHidden = calSyncHelpCollapsed ? 'hidden' : '';
+    const chevRotate = calSyncHelpCollapsed ? '' : 'rotate-180';
+    return '<div class="calsync-section-main flex-1 min-h-0 flex flex-col">' +
+        '<div class="px-4 flex flex-col min-h-0 flex-1">' +
+            '<p class="text-sm text-theme-secondary mb-4 flex-shrink-0">添加外部日历的 .ics 订阅链接，将外部日程任务拉取到本系统中作为只读任务展示。支持滴答清单、Outlook日历、Google日历、iCloud日历等主流日程管理软件的订阅源。</p>' +
+            '<div class="holiday-list-wrap flex-1 min-h-0 overflow-y-auto">' +
+                '<div id="calendarsync-list"></div>' +
+            '</div>' +
+            '<div class="flex justify-center pt-4 flex-shrink-0">' +
+                '<button onclick="triggerCalendarSync(true)" id="calsync-view-sync-btn" class="px-6 py-2.5 border-2 border-cyan-500 text-cyan-500 rounded-lg hover:bg-cyan-500 hover:text-white transition flex items-center gap-2 text-sm font-medium" title="立即同步所有已启用的订阅">' +
+                    '<i class="fas fa-cloud-arrow-down"></i><span id="calsync-view-sync-label">立即同步</span>' +
+                '</button>' +
+            '</div>' +
+        '</div>' +
+    '</div>' +
+    '<div class="calsync-section-gap flex-shrink-0" aria-hidden="true"></div>' +
+    '<div class="calsync-section-help flex-shrink-0 px-4 pb-20 sm:pb-4">' +
+        '<div class="calsync-help-panel rounded-lg border border-theme">' +
+            '<button id="calsync-help-toggle" onclick="toggleCalendarSyncHelp()" class="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-theme-tertiary transition" title="展开 / 收起">' +
+                '<span class="text-xs font-medium text-theme-muted">各订阅源 ICS 链接获取方式</span>' +
+                '<i id="calsync-help-chevron" class="fas fa-chevron-down text-xs text-theme-muted transition-transform duration-200 ' + chevRotate + '"></i>' +
+            '</button>' +
+            '<div id="calsync-help-body" class="' + helpHidden + ' px-3 pb-3 max-h-[40vh] overflow-y-auto">' +
+                '<div id="calsync-help-cols" class="holiday-cols"></div>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
 }
 
 // 展开 / 收起「各订阅源 ICS 链接获取方式」（仅切换 DOM，不重绘，避免闪烁）
@@ -650,6 +696,8 @@ function updateCalendarSyncBtnVisibility() {
     if (!btn) return;
     const hasEnabled = _calSubs().some(s => s.enabled);
     btn.classList.toggle('hidden', !hasEnabled);
+    // 同步按钮显隐变化会影响右上角溢出结果
+    if (typeof applyHeaderActionOverflow === 'function') applyHeaderActionOverflow();
 }
 
 // 触发同步（3.1）；fromSettings 区分入口用于 toast 文案

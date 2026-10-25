@@ -161,6 +161,7 @@ function resetScheduleViewConfig() {
 
 // 任务视图内任务排序（供各分组桶复用）。completed 始终置底（分组已先行切分，桶内基本同态，保留兼容）。
 function sortTaskListTasks(arr, cfg) {
+    // FR-05（C5-3）：手动排序下 sortDir 无意义，固定升序，避免用户此前选的「降序」把手工顺序整体翻转
     const dir = cfg.sortDir === 'desc' ? -1 : 1;
     const getVal = (t) => {
         switch (cfg.sortBy) {
@@ -618,7 +619,6 @@ function buildTaskListItemHtml(task, useShortTime) {
     const leftControl = batchMode
         ? renderBatchSelectIndicator(task)
         : renderTaskCheckbox(task, { taskId: task.id, extraClass: 'flex-shrink-0' });
-
     return `
         <div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
              data-list-id="${task.listId || 'default'}"
@@ -633,6 +633,7 @@ function buildTaskListItemHtml(task, useShortTime) {
             </div>
             ${batchMode ? '' : renderFocusButton(task.id, getTaskViewConfig().showFocusButton)}
             <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
+                ${(typeof renderAttachmentBadge === 'function') ? renderAttachmentBadge(task) : ''}
                 ${tagCapsules}
                 ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
                 ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
@@ -808,11 +809,12 @@ function renderTaskListView(container) {
                 <p class="text-lg text-theme-primary">欢迎使用TackList日程管理！</p>
                 <div class="flex flex-wrap items-center justify-center gap-3 mt-6">
                     <button onclick="openAddTaskModal()" class="px-4 py-2 rounded-lg border-2 border-purple-500 text-purple-500 hover:bg-purple-500 hover:text-white transition text-sm font-medium">＋ 添加第一个任务</button>
+                    <button onclick="openTaskTemplatePicker()" class="px-4 py-2 rounded-lg border border-purple-500 text-purple-500 hover:bg-purple-500 hover:text-white transition text-sm font-medium"><i class="fas fa-layer-group mr-1"></i>从模板开始</button>
                     <button onclick="openCommandPalette()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">命令面板快速添加</button>
                     <button onclick="event.stopPropagation(); showAddListInput()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">新建清单</button>
                     <button onclick="if (typeof startOnboarding === 'function') startOnboarding(true)" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">重看新手引导</button>
                 </div>
-                <p class="text-xs mt-5">可使用Ctrl + Alt + N 呼出命令面板，一句话创建任务。</p>
+                <p class="text-xs mt-5">Ctrl + Alt + N 新建任务，Ctrl + Alt + K 打开命令面板；也可输入 * 调用模板。</p>
             </div>
         `;
         updateToggleAllGroupsButton(groups);
@@ -835,7 +837,7 @@ function renderTaskListView(container) {
                 <div class="flex items-center justify-between mb-2 cursor-pointer select-none task-list-group-header"
                      onclick="toggleTaskListGroup('${group.key}')">
                     <div class="flex items-center gap-2">
-                        <i class="fas fa-chevron-${isCollapsed ? 'right' : 'down'} text-xs text-theme-muted mr-1"></i>
+                        <i class="fas fa-chevron-${isCollapsed ? 'right' : 'down'} w-3 text-center text-xs text-theme-muted mr-1"></i>
                         ${batchMode ? renderBatchGroupIndicator(group.key) : ''}
                         <h3 class="text-base font-semibold ${group.overdue ? 'text-red-500' : 'text-theme-primary'}">${group.labelHtml}</h3>
                     </div>
@@ -1079,7 +1081,7 @@ function toggleTaskListGroup(groupKey, opts) {
     if (groupWrapper) {
         const icon = groupWrapper.querySelector('.task-list-group-header i.fa-chevron-down, .task-list-group-header i.fa-chevron-right');
         if (icon) {
-            icon.className = `fas fa-chevron-${nowCollapsed ? 'right' : 'down'} text-xs text-theme-muted mr-1`;
+            icon.className = `fas fa-chevron-${nowCollapsed ? 'right' : 'down'} w-3 text-center text-xs text-theme-muted mr-1`;
         }
     }
 
@@ -1119,10 +1121,13 @@ function updateToggleAllGroupsButton(groups) {
     const icon = btn.querySelector('i');
     if (icon) icon.className = 'fas ' + iconName;
     btn.title = label;
-    // 同步移动端"更多"菜单中的按钮
-    const mobileBtn = document.getElementById('mobile-more-toggle-groups');
-    if (mobileBtn) {
-        mobileBtn.innerHTML = '<i class="fas ' + iconName + ' w-5"></i>' + label;
+    // 同步「更多」面板中同一操作的文案与图标（不重建节点，避免打断正在进行的点击）
+    const menuItem = document.querySelector('#mobile-more-menu .header-more-item[data-action-id="toggle-all-groups-btn"]');
+    if (menuItem) {
+        const menuIcon = menuItem.querySelector('.header-more-icon i');
+        if (menuIcon) menuIcon.className = 'fas ' + iconName;
+        const menuLabel = menuItem.querySelector('.header-more-label');
+        if (menuLabel) menuLabel.textContent = label;
     }
 }
 

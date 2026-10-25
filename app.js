@@ -1,5 +1,9 @@
 async function init() {
     await loadData();
+    // FR-09：预置模板（3 个，随 TEMPLATE_PRESET_VERSION 变化整体重建；用户删空后不再自动恢复）
+    if (typeof seedTaskTemplatesIfNeeded === 'function') seedTaskTemplatesIfNeeded();
+    // FR-06：探测附件能力（有服务端才展示上传入口；失败静默降级为不支持）
+    if (typeof probeAttachmentSupport === 'function') probeAttachmentSupport();
     easterEgg_init();
     applyTheme();
     // 先拉取轮播状态再应用背景图：避免先渲染单张图又立刻换成轮播图造成闪变
@@ -15,6 +19,7 @@ async function init() {
     initTaskTitleHandler();
     setupDetailPanelCloseHandler();
     setupDetailPickerCloseHandler();
+    if (typeof setupDetailPickerHover === 'function') setupDetailPickerHover();
     initScrollbarHandler();
 
     performAutoBackup();
@@ -42,25 +47,34 @@ async function init() {
 
     // 首次使用引导：未看过且当前无任务时自动启动
     if (typeof maybeStartOnboarding === 'function') maybeStartOnboarding();
-    setInterval(function () {
-        checkBrowserNotifications();
-        // 背景轮播状态轮询与通知同拍（5s）：switchId 变化时被动应用新图
-        checkBgCarouselUpdate();
-    }, 5000);
+    // ⚠️ init() 会被「导入数据」重复调用（data.js:importData → init()），
+    // 5s 轮询与 visibilitychange 监听必须只注册一次，否则每导入一次就多一路轮询
+    // （回归：tmp/ui_check_import_export.js 第 6 节）。
+    if (!_appWatchersStarted) {
+        _appWatchersStarted = true;
+        setInterval(function () {
+            checkBrowserNotifications();
+            // 背景轮播状态轮询与通知同拍（5s）：switchId 变化时被动应用新图
+            checkBgCarouselUpdate();
+        }, 5000);
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                refreshDataFromServer();
+                syncPomodoroFromServer();
+                checkBrowserNotifications();
+                checkBgCarouselUpdate();
+                flushPendingNotifications();
+            }
+        });
+    }
 
     // 网页模式处理：离线版入口检测是否需要跳转到在线版
     initWebMode();
-
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            refreshDataFromServer();
-            syncPomodoroFromServer();
-            checkBrowserNotifications();
-            checkBgCarouselUpdate();
-            flushPendingNotifications();
-        }
-    });
 }
+
+// init() 的全局监听/轮询只注册一次的守卫（见 init 内注释）
+let _appWatchersStarted = false;
 
 // ==================== 视图自定义（设置面板） ====================
 // 延迟保存：所有操作在临时状态上修改并即时刷新 UI 反馈，点「保存设置」后才应用到 settings 并持久化，
@@ -76,6 +90,12 @@ let _vcPointerDown = null;  // pointerdown 状态：{ id, startX, startY, el }
 let _vcDragging = false;    // 是否已进入拖拽模式（移动距离超过阈值后置 true）
 let _vcSuppressClick = false; // 拖拽松手后阻止同次操作的 click 事件
 let _vcDocListenersBound = false;
+
+// 视图右上角操作按钮顺序（仅排序，所有按钮固定启用）
+let _vaTempOrder = null;      // 临时顺序（设置面板打开时创建）
+let _vaPointerDown = null;    // { id, startX, startY, el }
+let _vaDragging = false;
+let _vaDocListenersBound = false;
 
 // 注入拖拽指示器样式（仅注入一次），颜色跟随主题 --accent-color
 function _vcEnsureStyle() {
@@ -299,6 +319,160 @@ function onVCDblClick(id) {
     renderViewCustomize();
 }
 
+// ==================== 视图操作按钮顺序（设置面板） ====================
+// 所有操作按钮固定启用，仅支持拖拽排序；与视图自定义共用芯片样式、拖拽阈值与落点指示器。
+function initVATemp() {
+    const order = (typeof getViewActionOrder === 'function') ? getViewActionOrder() : [];
+    _vaTempOrder = order.slice();
+    _vaPointerDown = null;
+    _vaDragging = false;
+}
+
+function discardVATemp() {
+    _vaTempOrder = null;
+    _vaPointerDown = null;
+    _vaDragging = false;
+}
+
+function applyVAFromTemp() {
+    if (!_vaTempOrder) return;
+    settings.viewActionOrder = _vaTempOrder.slice();
+    _vaTempOrder = null;
+}
+
+function _vaEnsureDocListeners() {
+    if (_vaDocListenersBound) return;
+    _vaDocListenersBound = true;
+    document.addEventListener('pointermove', _vaDocPointerMove);
+    document.addEventListener('pointerup', _vaDocPointerUp);
+    document.addEventListener('pointercancel', _vaDocPointerUp);
+}
+
+// 设置面板预览用数量：优先当前输入值（未保存也能实时区分「更多」）
+function _getViewActionPreviewLimit() {
+    const el = document.getElementById('settings-view-action-limit');
+    const n = el ? parseInt(el.value, 10) : NaN;
+    const fallback = (typeof getViewActionLimit === 'function') ? getViewActionLimit() : 8;
+    return isNaN(n) ? fallback : Math.max(1, Math.min(10, n));
+}
+
+// 当前视图下将收进「更多」的操作 id 集合（窄屏固定全部收进「更多」）
+function _getViewActionOverflowIds(order) {
+    const available = order.filter(function (id) {
+        if (typeof headerActionExists === 'function' && !headerActionExists(id)) return false;
+        return (typeof headerActionAvailable !== 'function') || headerActionAvailable(id);
+    });
+    const overflow = new Set();
+    if (typeof _headerIsNarrow === 'function' && _headerIsNarrow()) {
+        available.forEach(function (id) { overflow.add(id); });
+        return overflow;
+    }
+    const limit = _getViewActionPreviewLimit();
+    if (available.length > limit) {
+        const keep = Math.max(0, limit - 1);
+        available.slice(0, available.length - keep).forEach(function (id) { overflow.add(id); });
+    }
+    return overflow;
+}
+
+function renderViewActionOrder() {
+    const box = document.getElementById('view-actions-order');
+    if (!box) return;
+    _vcEnsureStyle();
+    _vaEnsureDocListeners();
+    if (!_vaTempOrder) initVATemp();
+    _vcClearDropHint();
+
+    const overflowIds = _getViewActionOverflowIds(_vaTempOrder);
+    box.innerHTML = '';
+    _vaTempOrder.forEach(function (id) {
+        // 当前入口不存在的操作不展示（如离线版没有「外部日历同步」）
+        if (typeof headerActionExists === 'function' && !headerActionExists(id)) return;
+        const def = (typeof VIEW_ACTION_DEFS === 'object' && VIEW_ACTION_DEFS[id]) || { label: id, icon: 'fas fa-circle', color: '' };
+        const inMore = overflowIds.has(id);
+        const color = inMore
+            ? 'var(--text-muted)'
+            : ((typeof VIEW_ACTION_COLOR_HEX === 'object' && VIEW_ACTION_COLOR_HEX[def.color]) || 'var(--text-secondary)');
+        const label = def.label + (inMore ? '（将收进「更多」）' : '');
+
+        const chip = document.createElement('div');
+        chip.className = 'va-order-chip';
+        chip.setAttribute('data-va-id', id);
+        chip.setAttribute('title', label);
+        chip.setAttribute('aria-label', label);
+        chip.style.setProperty('--va-color', color);
+        chip.setAttribute('onpointerdown', "onVAPointerDown(event, '" + id + "')");
+
+        const icon = document.createElement('i');
+        icon.className = def.icon || 'fas fa-circle';
+        icon.setAttribute('aria-hidden', 'true');
+        chip.appendChild(icon);
+        box.appendChild(chip);
+    });
+}
+
+function onVAPointerDown(e, id) {
+    if (e.button !== 0) return;
+    _vaPointerDown = { id: id, startX: e.clientX, startY: e.clientY, el: e.currentTarget };
+    _vaDragging = false;
+}
+
+function _vaDocPointerMove(e) {
+    if (!_vaPointerDown) return;
+    const dx = e.clientX - _vaPointerDown.startX;
+    const dy = e.clientY - _vaPointerDown.startY;
+    if (!_vaDragging) {
+        if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+        _vaDragging = true;
+        _vaPointerDown.el.style.opacity = '0.4';
+    }
+    _vaPointerDown.el.style.pointerEvents = 'none';
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    _vaPointerDown.el.style.pointerEvents = '';
+    const chip = target ? target.closest('[data-va-id]') : null;
+    if (chip && chip !== _vaPointerDown.el && chip.parentElement && chip.parentElement.id === 'view-actions-order') {
+        _vcUpdateDropHint(chip, e.clientX);
+    } else {
+        _vcClearDropHint();
+    }
+}
+
+function _vaDocPointerUp(e) {
+    if (!_vaPointerDown) return;
+    const dragEl = _vaPointerDown.el;
+    const dragId = _vaPointerDown.id;
+    if (_vaDragging) {
+        dragEl.style.pointerEvents = 'none';
+        const target = document.elementFromPoint(e.clientX, e.clientY);
+        dragEl.style.pointerEvents = '';
+        const chip = target ? target.closest('[data-va-id]') : null;
+        if (chip && chip !== dragEl && chip.parentElement && chip.parentElement.id === 'view-actions-order') {
+            _vaPerformReorder(dragId, chip.getAttribute('data-va-id'), e.clientX);
+        }
+        dragEl.style.opacity = '';
+    }
+    _vaPointerDown = null;
+    _vaDragging = false;
+    _vcClearDropHint();
+}
+
+function _vaPerformReorder(fromId, toId, clientX) {
+    if (!_vaTempOrder) return;
+    const from = _vaTempOrder.indexOf(fromId);
+    const to = _vaTempOrder.indexOf(toId);
+    if (from < 0 || to < 0) return;
+    const chip = document.querySelector('#view-actions-order > [data-va-id="' + toId + '"]');
+    if (!chip) return;
+    const rect = chip.getBoundingClientRect();
+    const isAfter = (clientX - rect.left) > rect.width / 2;
+    const moved = _vaTempOrder.splice(from, 1)[0];
+    const insertAt = (from < to)
+        ? (isAfter ? to : to - 1)
+        : (isAfter ? to + 1 : to);
+    _vaTempOrder.splice(insertAt, 0, moved);
+    renderViewActionOrder();
+}
+
 // ==================== 侧边栏清单配置（设置面板） ====================
 // 与「新建任务默认值」等配置项一致：打开面板时回填，点「保存设置」时才写入 settings
 const SIDEBAR_ITEM_SETTING_IDS = {
@@ -310,7 +484,8 @@ const SIDEBAR_ITEM_SETTING_IDS = {
     summary: 'settings-sidebar-summary',
     tags: 'settings-sidebar-tags',
     filters: 'settings-sidebar-filters',
-    trash: 'settings-sidebar-trash'
+    trash: 'settings-sidebar-trash',
+    externalCalendar: 'settings-sidebar-external-calendar'
 };
 
 function _sidebarItemDefaultOf(key) {
@@ -329,7 +504,8 @@ function loadSidebarItemsSettings() {
 }
 
 function saveSidebarItemsSettings() {
-    const cfg = {};
+    // 保留当前页面不存在的键（如离线版没有「外部日历」行），避免另一入口保存时把其配置抹掉
+    const cfg = Object.assign({}, settings.sidebarItems || {});
     Object.keys(SIDEBAR_ITEM_SETTING_IDS).forEach(function (key) {
         const el = document.getElementById(SIDEBAR_ITEM_SETTING_IDS[key]);
         if (!el) return;
@@ -513,7 +689,6 @@ function openSettingsModal() {
     document.getElementById('settings-default-list').value = settings.defaultListId || 'default';
     document.getElementById('settings-default-important').checked = settings.defaultImportant || false;
     document.getElementById('settings-default-urgent').checked = settings.defaultUrgent || false;
-    document.getElementById('settings-default-duration').value = settings.defaultDuration !== undefined ? settings.defaultDuration : 30;
     document.getElementById('settings-week-start').value = settings.weekStart || 'monday';
     // 书写态正文宽度（standard 720 / wide 以右下停靠区左边界为限 / full 拉满），默认 standard
     const _wWidth = document.getElementById('settings-write-mode-width');
@@ -556,6 +731,14 @@ function openSettingsModal() {
         updateFuzzyGranVisibility();
     })();
     document.getElementById('settings-priority-display-mode').value = getPriorityDisplayMode();
+    const _viewActionLimitEl = document.getElementById('settings-view-action-limit');
+    if (_viewActionLimitEl) {
+        const _n = parseInt(settings.viewActionLimit, 10);
+        _viewActionLimitEl.value = isNaN(_n) ? 8 : Math.max(1, Math.min(10, _n));
+        _viewActionLimitEl.oninput = function () {
+            if (typeof renderViewActionOrder === 'function') renderViewActionOrder();
+        };
+    }
     // 注：原「全局默认」（显示已完成/农历/专注按钮/无日期位置）已移至各视图配置面板，
     // 旧数据由 applySettings 内的迁移逻辑无感升级到各视图配置
     // 默认任务日期仅保留「无日期/今天」两项，历史遗留值（明天/下周一）回退为今天
@@ -636,11 +819,17 @@ function openSettingsModal() {
     updateSettingsListSelect();
     initVCTemp();
     renderViewCustomize();
+    initVATemp();
+    renderViewActionOrder();
     updateThemeButtons();
     
     // 初始化快捷键设置
     if (typeof renderShortcutsSettings === 'function') {
         renderShortcutsSettings();
+    }
+    // FR-09：任务模板管理入口
+    if (typeof renderTaskTemplatesSettingsEntry === 'function') {
+        renderTaskTemplatesSettingsEntry();
     }
 
     // 页面切换过渡动画：中性浮现（fx-feature 开启时播放，与番茄专注等页面共用开关）
@@ -664,6 +853,7 @@ function closeSettingsModal() {
     }
     // 丢弃视图自定义临时状态（未保存的修改不生效）
     discardVCTemp();
+    discardVATemp();
     // 页面切换过渡动画：反向收起后再隐藏
     _fxCloseModal('settings-modal');
 }
@@ -1156,6 +1346,9 @@ function doResetData() {
     lists = [{ id: 'default', name: '默认', color: '#6366f1' }];
     pomodoroHistory = [];
     settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+    // FR-09：任务模板独立存于 data.json 顶层键 taskTemplates，不在 settings 里，
+    // 必须显式还原为内置 3 个预置（周报 / 会议纪要 / 项目复盘），否则重置后旧模板仍在
+    if (typeof resetTaskTemplatesToPresets === 'function') resetTaskTemplatesToPresets();
     quadrantOrder = ['urgent-important', 'important-not-urgent', 'urgent-not-important', 'not-urgent-not-important'];
     saveDataImmediate();
     // 背景轮播配置独立持久化于服务端 bg_carousel.json（不随 data.json 重置），
@@ -1170,7 +1363,14 @@ function doResetData() {
     _bgCarouselAppliedKey = null;
     // 清除 IndexedDB 缓存
     if (typeof cacheToIndexedDB === 'function') {
-        cacheToIndexedDB({ tasks: [], lists: [{ id: 'default', name: '默认', color: '#6366f1' }], settings: {}, pomodoroHistory: [] });
+        cacheToIndexedDB({
+            tasks: [],
+            lists: [{ id: 'default', name: '默认', color: '#6366f1' }],
+            settings: {},
+            pomodoroHistory: [],
+            // 模板一并写入缓存快照，避免服务端不可用时从旧缓存恢复出重置前的模板
+            taskTemplates: taskTemplates
+        });
     }
     // 停止番茄计时器并重置到初始状态
     if (pomodoroState.timerId) {
@@ -1299,7 +1499,6 @@ function saveSettings(silent) {
     settings.defaultListId = document.getElementById('settings-default-list').value;
     settings.defaultImportant = document.getElementById('settings-default-important').checked;
     settings.defaultUrgent = document.getElementById('settings-default-urgent').checked;
-    settings.defaultDuration = parseInt(document.getElementById('settings-default-duration').value) || 30;
     settings.weekStart = document.getElementById('settings-week-start').value;
     const _wWidthEl = document.getElementById('settings-write-mode-width');
     if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'standard';
@@ -1329,6 +1528,12 @@ function saveSettings(silent) {
         settings.commandTimePrefs.timeGranularity = granEl ? Math.max(1, Math.min(120, parseInt(granEl.value) || 30)) : 30;
     })();
     settings.priorityDisplayMode = document.getElementById('settings-priority-display-mode').value;
+    const _viewActionLimitEl = document.getElementById('settings-view-action-limit');
+    if (_viewActionLimitEl) {
+        const _n = parseInt(_viewActionLimitEl.value, 10);
+        settings.viewActionLimit = isNaN(_n) ? 8 : Math.max(1, Math.min(10, _n));
+        _viewActionLimitEl.value = settings.viewActionLimit;
+    }
     // 注：原「全局默认」4 项已移至各视图配置面板，此处不再读写
     settings.defaultTaskDate = document.getElementById('settings-default-task-date').value;
     saveSidebarItemsSettings();
@@ -1392,6 +1597,9 @@ function saveSettings(silent) {
     
     // 应用视图自定义临时状态（完全延迟保存：点保存时才生效）
     applyVCFromTemp();
+    applyVAFromTemp();
+    // 视图操作按钮数量可能已变更，立即重算右上角溢出
+    if (typeof applyHeaderActionOverflow === 'function') applyHeaderActionOverflow();
     saveData();
     // FR-01-4：settings 变更保存后撤销栈失效（结构性变更使旧撤销上下文不可靠）
     if (typeof clearUndoStack === 'function') clearUndoStack();
@@ -1409,6 +1617,7 @@ function saveSettings(silent) {
         _originalBindAddress = newBindAddress;
         _originalPort = newPort;
         closeSettingsModal();
+        if (typeof renderLists === 'function') renderLists(true);
         renderView();
         if (!silent) {
             setTimeout(() => {
@@ -1424,6 +1633,8 @@ function saveSettings(silent) {
 
     closeSettingsModal();
     applyDisplaySettings();
+    // 侧边栏配置可能增删了分组（如外部日历），需重建列表后重新判断激活项
+    if (typeof renderLists === 'function') renderLists(true);
     // 侧边栏清单配置：若当前激活项被隐藏（或「有内容时显示」但无内容），自动切回「所有任务」
     if (typeof redirectIfActiveSidebarItemHidden === 'function') redirectIfActiveSidebarItemHidden();
     renderView();

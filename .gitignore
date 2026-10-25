@@ -10,6 +10,11 @@ bg_carousel.json
 
 # User data
 data.json
+# Task attachments (FR-06): user files, must never enter the repo
+attachments/
+# WebDAV credentials (server-local, never commit)
+webdav_config.json
+webdav_config.json.tmp
 
 # Python
 __pycache__/

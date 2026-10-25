@@ -590,6 +590,12 @@ function _fallbackRightPaneOnTaskLost() {
 }
 
 function switchToPomodoroPage() {
+    // 模板管理页：先让模板面板把草稿落盘；失败（如重名）则留在页面，避免静默丢改动
+    if (typeof currentView !== 'undefined' && currentView === 'templates'
+        && typeof guardLeaveTaskTemplates === 'function'
+        && !guardLeaveTaskTemplates('pomodoro')) {
+        return;
+    }
     // 关闭任务详情栏（避免在番茄页面上显示）。
     // 若此前面板处于展开状态，先记录其任务 id 与只读标志，
     // 返回主视图（closePomodoroPage）时按记录恢复展开，保持进入前的界面状态

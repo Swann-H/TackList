@@ -12,7 +12,7 @@
 function _playViewSwitchTransition(fxCtx, prevView, newView) {
     const order = (typeof getViewOrder === 'function'
         ? getViewOrder().map(v => v.id)
-        : VIEW_ORDER_DEFAULT.slice()).concat(['summary', 'countdown', 'holiday']);
+        : VIEW_ORDER_DEFAULT.slice()).concat(['summary', 'countdown', 'holiday', 'templates']);
     const fromIdx = order.indexOf(prevView);
     const toIdx = order.indexOf(newView);
     if (fromIdx === -1 || toIdx === -1) return;
@@ -47,6 +47,11 @@ function _playViewSwitchTransition(fxCtx, prevView, newView) {
 
 function switchView(view) {
     const prevView = currentView;
+    // 模板管理页有未保存草稿时，先确认再离开
+    if (currentView === 'templates' && view !== 'templates'
+        && typeof guardLeaveTaskTemplates === 'function' && !guardLeaveTaskTemplates(view)) {
+        return;
+    }
     // FR-01-4：视图切换后撤销栈失效
     if (typeof clearUndoStack === 'function') clearUndoStack();
     if (currentDetailTaskId) {
@@ -68,7 +73,7 @@ function switchView(view) {
     currentView = view;
     const mainHeader = document.querySelector('#main-content > header');
     if (mainHeader) {
-        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync' || view === 'trash') {
+        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync' || view === 'trash' || view === 'templates') {
             mainHeader.classList.add('hidden');
         } else {
             mainHeader.classList.remove('hidden');
@@ -105,6 +110,7 @@ function switchView(view) {
     }
     renderLists();
     updateViewButtons();
+    if (typeof updateMobileFabVisibility === 'function') updateMobileFabVisibility();
     updateSidebarHighlight();
 }
 
@@ -253,6 +259,8 @@ function updateViewButtons() {
 
     // 移动端底部导航栏激活状态同步
     if (typeof updateMobileBottomNav === 'function') updateMobileBottomNav();
+    // 重算右上角操作按钮溢出（「更多」内容随当前视图可用按钮变化）
+    if (typeof applyHeaderActionOverflow === 'function') applyHeaderActionOverflow();
 }
 
 function renderView() {
@@ -318,6 +326,13 @@ function renderView() {
             // FR-02：回收站视图（自带工具栏与返回按钮，主头部已隐藏）
             if (typeof renderTrashView === 'function') {
                 renderTrashView(container);
+            } else {
+                renderTaskListView(container);
+            }
+            break;
+        case 'templates':
+            if (typeof renderTaskTemplatesView === 'function') {
+                renderTaskTemplatesView(container);
             } else {
                 renderTaskListView(container);
             }
