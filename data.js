@@ -651,74 +651,148 @@ function _mergeServerData(serverData) {
     if (typeof invalidateWeekViewCache === 'function') invalidateWeekViewCache();
 }
 
-function importData(file) {
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-        try {
-            const data = JSON.parse(e.target.result);
+// ==================== 导入 / 导出 ====================
+// 导出为 zip：data.json（结构化数据）+ attachments/（任务附件二进制）。
+// 旧版纯 JSON 导入仍然支持，但包内没有附件文件。
+// 导入是破坏性全量覆盖，流程固定为：选文件 → 二次确认 → 服务端自动备份 → 覆盖。
 
-            const hasLists = data.taskLists || data.lists;
-            const hasTasks = data.tasks;
-
-            if (data.version && hasLists && hasTasks) {
-                // 应用导入的数据（使用 DEFAULT_SETTINGS 确保所有字段都有默认值）
-                lists = data.taskLists || data.lists;
-                tasks = data.tasks;
-                // FR-01-4：数据导入后撤销栈整体失效
-                if (typeof clearUndoStack === 'function') clearUndoStack();
-                settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
-
-                quadrantOrder = data.quadrantOrder || quadrantOrder;
-                // 旧版备份把超出保留上限的专注记录存于 pomodoroArchive 扩展字段（按月），
-                // 导入时并入主列表，保证历史记录/专注概况可见；离线回退路径同样生效
-                const archiveMonths = (data.pomodoroArchive && typeof data.pomodoroArchive === 'object') ? data.pomodoroArchive : {};
-                const archiveRecords = [].concat(...Object.values(archiveMonths).filter(Array.isArray));
-                pomodoroHistory = deduplicatePomodoroHistory([...(data.pomodoroHistory || []), ...archiveRecords]);
-                // FR-09：模板随导入恢复；旧备份无此键时清空为 []（不残留上一个数据集的模板）
-                taskTemplates = Array.isArray(data.taskTemplates) ? data.taskTemplates : [];
-
-                applySettings(settings);
-                // 先确保数据写入服务端，再重新初始化（避免 init 的 loadData 读到旧数据）
-                // /api/import 会把主体写入 data.json，并还原扩展字段：
-                // pomodoroArchive（归档专注历史，按 startedAt+taskId 去重合并进主列表）
-                // holidayData（节假日数据，写入 holiday_data.json）
-                try {
-                    const importPayload = Object.assign({}, data, { taskLists: lists, tasks: tasks, settings: settings });
-                    await fetch('/api/import', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(importPayload)
-                    });
-                } catch (err) {
-                    console.error('Import extended data to server error:', err);
-                    // 回退：仍走全量保存，保证主数据不丢（归档/节假日扩展字段在离线模式下无法还原）
-                    await saveDataImmediate();
-                }
-                // 导入的节假日数据同步到本地缓存（loadHolidayData 优先读 localStorage）
-                if (data.holidayData && typeof data.holidayData === 'object' && Object.keys(data.holidayData).length > 0) {
-                    holidayData = data.holidayData;
-                    try {
-                        localStorage.setItem('holidayData', JSON.stringify(data.holidayData));
-                    } catch (err) {
-                        console.error('Cache imported holiday data error:', err);
-                    }
-                }
-                await init();
-
-                if (typeof closeSettingsModal === 'function') {
-                    closeSettingsModal();
-                }
-
-                showToast('已导入数据', 'success');
-            } else {
-                showToast('数据格式无效', 'error');
-            }
-        } catch (error) {
-            showToast('无法解析数据', 'error');
-        }
-    };
-    reader.readAsText(file);
+function exportData() {
+    const a = document.createElement('a');
+    a.href = '/api/export?format=zip';
+    a.download = 'schedule-backup-' + new Date().toISOString().split('T')[0] + '.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('已导出数据（含附件）', 'success');
 }
+
+function importData(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        const buf = e.target.result;
+        const bytes = new Uint8Array(buf);
+        // 按魔数判定而非扩展名：PK\x03\x04（常规）/ PK\x05\x06（空包）/ PK\x07\x08（跨卷）
+        const isZip = bytes.length > 3 && bytes[0] === 0x50 && bytes[1] === 0x4B &&
+            (bytes[2] === 3 || bytes[2] === 5 || bytes[2] === 7);
+        const name = file.name || (isZip ? '备份.zip' : '备份.json');
+        const msg = isZip
+            ? '「' + name + '」将覆盖当前全部任务、清单与附件。导入前会自动备份一份，确定继续？'
+            : '「' + name + '」是旧版 JSON 备份，不含附件文件，导入后原有附件将无法打开。该操作会覆盖当前全部数据，导入前会自动备份一份，确定继续？';
+        showConfirmToast(msg, function () { _runImport(buf, isZip); });
+    };
+    reader.onerror = function () { showToast('无法读取文件', 'error'); };
+    reader.readAsArrayBuffer(file);
+}
+
+async function _runImport(buf, isZip) {
+    // 前置快照：导入会整体覆盖数据与附件，先留一份可回退的备份
+    try {
+        await fetch('/api/backup', { method: 'POST' });
+    } catch (err) {
+        console.warn('Import pre-backup failed:', err);
+    }
+    if (isZip) await _importZipBuffer(buf);
+    else await _importJsonBuffer(buf);
+}
+
+// 导入成功后的统一收尾：节假日以服务端文件为准重新拉取（zip 包内的
+// holidayData 已由服务端还原到 holiday_data.json），再整体重新初始化。
+async function _afterImport(message) {
+    try { localStorage.removeItem('holidayData'); } catch (e) { /* 隐私模式忽略 */ }
+    if (typeof loadHolidayData === 'function') {
+        try { await loadHolidayData(); } catch (e) { console.error('Reload holiday data error:', e); }
+    }
+    await init();
+    if (typeof closeSettingsModal === 'function') closeSettingsModal();
+    showToast(message, 'success');
+}
+
+async function _importZipBuffer(buf) {
+    try {
+        const res = await fetch('/api/import/zip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/zip' },
+            body: buf
+        });
+        if (!res.ok) {
+            const r = await res.json().catch(function () { return {}; });
+            throw new Error(r.error || ('HTTP ' + res.status));
+        }
+        await _afterImport('已导入数据（含附件）');
+    } catch (err) {
+        console.error('Import zip error:', err);
+        showToast('导入失败：' + (err.message || '未知错误'), 'error');
+    }
+}
+
+async function _importJsonBuffer(buf) {
+    let data;
+    try {
+        data = JSON.parse(new TextDecoder('utf-8').decode(buf));
+    } catch (err) {
+        showToast('无法解析数据', 'error');
+        return;
+    }
+    // 空任务集 / 空清单同样是合法备份 —— 必须用 Array.isArray 判断，
+    // 用数组真值判断会把「清空任务后导出的备份」判成无效格式
+    const hasLists = Array.isArray(data.taskLists) || Array.isArray(data.lists);
+    const hasTasks = Array.isArray(data.tasks);
+    if (!data.version || !(hasLists || hasTasks)) {
+        showToast('数据格式无效', 'error');
+        return;
+    }
+
+    // 网络配置属设备级：导入包里的 port / bindAddress 不覆盖本机值
+    const localPort = settings.port;
+    const localBind = settings.bindAddress;
+
+    const importedLists = (Array.isArray(data.taskLists) && data.taskLists.length) ? data.taskLists
+        : (Array.isArray(data.lists) && data.lists.length ? data.lists : null);
+    lists = importedLists || [{ id: 'default', name: '默认', color: '#6366f1' }];
+    tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    // FR-01-4：数据导入后撤销栈整体失效
+    if (typeof clearUndoStack === 'function') clearUndoStack();
+    settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
+    settings.port = localPort;
+    settings.bindAddress = localBind;
+    // 「距上次备份 N 天」按本机时间算：带入源机器的 _lastBackupDate 会让换机后
+    // 长期不再自动备份；删掉最多多备份一次。_backupEnabledDate 保留原值。
+    delete settings._lastBackupDate;
+
+    quadrantOrder = data.quadrantOrder || quadrantOrder;
+    // 旧版备份把超出保留上限的专注记录存于 pomodoroArchive 扩展字段（按月），
+    // 导入时并入主列表，保证历史记录/专注概况可见；离线回退路径同样生效
+    const archiveMonths = (data.pomodoroArchive && typeof data.pomodoroArchive === 'object') ? data.pomodoroArchive : {};
+    const archiveRecords = [].concat(...Object.values(archiveMonths).filter(Array.isArray));
+    pomodoroHistory = deduplicatePomodoroHistory([...(data.pomodoroHistory || []), ...archiveRecords]);
+    // FR-09：模板随导入恢复；旧备份无此键时清空为 []（不残留上一个数据集的模板）
+    taskTemplates = Array.isArray(data.taskTemplates) ? data.taskTemplates : [];
+
+    applySettings(settings);
+    // 先确保数据写入服务端，再重新初始化（避免 init 的 loadData 读到旧数据）
+    // /api/import 会把主体写入 data.json，并还原扩展字段：
+    // pomodoroArchive（归档专注历史，按 startedAt+taskId 去重合并进主列表）
+    // holidayData（节假日数据，写入 holiday_data.json）
+    try {
+        const importPayload = Object.assign({}, data, { taskLists: lists, tasks: tasks, settings: settings });
+        const res = await fetch('/api/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(importPayload)
+        });
+        if (!res.ok) {
+            const r = await res.json().catch(function () { return {}; });
+            throw new Error(r.error || ('HTTP ' + res.status));
+        }
+    } catch (err) {
+        console.error('Import extended data to server error:', err);
+        // 回退：仍走全量保存，保证主数据不丢（归档/节假日扩展字段在离线模式下无法还原）
+        await saveDataImmediate();
+    }
+    await _afterImport('已导入数据');
+}
+
 
 // 自动备份功能
 function performAutoBackup() {
@@ -795,30 +869,24 @@ function skipBackup() {
 function toggleAutoBackup() {
     const enabled = document.getElementById('backup-enabled').checked;
     settings.backupEnabled = enabled;
-    
-    if (enabled) {
-        settings._backupEnabledDate = new Date().toISOString();
-        showToast('自动备份已启用', 'success');
-    } else {
-        showToast('自动备份已关闭', 'success');
-    }
+    if (enabled) settings._backupEnabledDate = new Date().toISOString();
     saveData();
 }
 
 function updateBackupSettings() {
-    const interval = parseInt(document.getElementById('backup-interval').value) || 7;
-    const retention = parseInt(document.getElementById('retention-period').value) || 30;
-    
-    settings.backupInterval = interval;
-    settings.retentionPeriod = retention;
-    saveData();
-}
+    const ivEl = document.getElementById('backup-interval');
+    const rtEl = document.getElementById('retention-period');
+    // ⚠️ 不能用 `parseInt(v) || 30`：0 是「永久保留」的合法值，会被 falsy 吞掉
+    let iv = parseInt(ivEl.value, 10);
+    let rt = parseInt(rtEl.value, 10);
+    if (isNaN(iv) || iv < 1) iv = 7;
+    if (isNaN(rt) || rt < 0) rt = 30;
+    ivEl.value = iv;
+    rtEl.value = rt;
 
-function setRetentionToForever() {
-    document.getElementById('retention-period').value = 0;
-    settings.retentionPeriod = 0;
+    settings.backupInterval = iv;
+    settings.retentionPeriod = rt;
     saveData();
-    showToast('已设为永久保存', 'success');
 }
 
 // FR-02：回收站保留天数（独立设置项，与备份保留期语义解耦，见 C2-4）
@@ -830,15 +898,6 @@ function updateTrashRetentionSettings() {
     el.value = v;
     settings.trashRetentionDays = v;
     saveData();
-    showToast(v > 0 ? '回收站保留期已更新为 ' + v + ' 天' : '回收站已设为永久保留', 'success');
-}
-
-function setTrashRetentionToForever() {
-    const el = document.getElementById('trash-retention-days');
-    if (el) el.value = 0;
-    settings.trashRetentionDays = 0;
-    saveData();
-    showToast('回收站已设为永久保留', 'success');
 }
 
 function cleanupOldBackups() {
@@ -877,17 +936,6 @@ function serverBackup() {
             console.error('备份失败:', err);
             showToast('无法备份：' + (err.message || '网络错误'), 'error');
         });
-}
-
-function exportData() {
-    const a = document.createElement('a');
-    a.href = '/api/export';
-    a.download = 'schedule-backup-' + new Date().toISOString().split('T')[0] + '.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    
-    showToast('已导出数据', 'success');
 }
 
 const DEFAULT_SETTINGS = {
@@ -968,8 +1016,7 @@ const DEFAULT_SETTINGS = {
         summary: 'show',       // 摘要
         tags: 'show',          // 标签分组
         filters: 'show',       // 过滤器分组
-        trash: 'show',         // 回收站（FR-02）
-        externalCalendar: 'show' // 外部日历分组（仅在线版有配置入口）
+        trash: 'show'          // 回收站（FR-02）
     },
     // 回收站保留天数（FR-02，C2-4：与备份保留期 retentionPeriod 语义解耦）：0 = 永久保留
     trashRetentionDays: 30,

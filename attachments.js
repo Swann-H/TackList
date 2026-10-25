@@ -2,7 +2,9 @@
 // 设计约束（《需求说明书_任务操作增强》FR-06）：
 //   · 二进制只落盘（attachments/<taskId>/<fileId>_<name>），data.json 只存元数据 —— 全量 PUT + 5MB PATCH 上限
 //     决定了 base64 内联不可行；
-//   · 附件不随 data.json 备份/导出（C6-1），UI 必须明示；
+//   · 附件不进 data.json（二进制太大），但会随「导出 / 服务端备份」的 ZIP 包
+//     一并打包（attachments/<taskId>/<fileId>_<name>），导入 ZIP 时整体还原；
+//     旧版纯 JSON 备份不含附件文件，导入后附件条目降级为占位（见 V6-6）；
 //   · 永久删除任务时级联删除附件目录（C6-3）；
 //   · 离线版（无服务端）隐藏上传入口：两个入口都由本地服务提供，故用 /api/attachments/capabilities 实测（C6-1 之外的必要修正）。
 // 依赖（运行时解析）：tasks / settings / saveData / renderView / escapeHtml / showToast / isAnyOverlayOpen

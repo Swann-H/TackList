@@ -10,8 +10,10 @@ let _headerOverflowResizeTimer = null;
 // 头部按钮的语义色与图标由 utils.js 的 VIEW_ACTION_COLOR_HEX / VIEW_ACTION_DEFS 统一维护，设置面板与「更多」面板保持一致。
 
 // 逻辑操作 id → 头部实际元素。「视图配置」聚合 6 个视图各自的配置按钮，占同一个排序槽位。
+// 「同步」聚合外部日历订阅同步与 WebDAV 云同步，按钮本体包在 #header-sync-group 内（含悬浮面板），
+// 因此按整组计为一个操作单位。
 const _HEADER_ACTION_SELECTORS = {
-    sync: ['calendar-sync-btn'],
+    sync: ['header-sync-group'],
     today: ['today-btn'],
     plan: ['plan-btn'],
     postpone: ['postpone-btn'],
@@ -59,12 +61,12 @@ function applyHeaderActionOrder() {
     // 兜底：未来新增但未登记的操作按钮仍保持可用，追加在末尾
     Array.prototype.forEach.call(host.children, function (el) {
         if (el === more) return;
-        if (!el.matches || !el.matches('button, .add-task-group')) return;
+        if (!el.matches || !el.matches('button, .add-task-group, .header-sync-group')) return;
         if (desired.indexOf(el) === -1) desired.push(el);
     });
 
     const current = Array.prototype.filter.call(host.children, function (el) {
-        return el !== more && el.matches && el.matches('button, .add-task-group');
+        return el !== more && el.matches && el.matches('button, .add-task-group, .header-sync-group');
     });
     const same = current.length === desired.length && current.every(function (el, i) { return el === desired[i]; });
     if (same && host.firstElementChild === more) return;
@@ -85,12 +87,12 @@ function getViewActionLimit() {
     return isNaN(n) ? 8 : Math.max(1, Math.min(10, n));
 }
 
-// 头部可收纳的操作元素：header-actions 的直接子按钮 + 添加任务组（批量工具条等容器不计）
+// 头部可收纳的操作元素：header-actions 的直接子按钮 + 添加任务组 + 同步组（批量工具条等容器不计）
 function _headerActionEls() {
     const host = document.getElementById('header-actions');
     if (!host) return [];
     return Array.prototype.filter.call(host.children, function (el) {
-        return el.matches && el.matches('button, .add-task-group');
+        return el.matches && el.matches('button, .add-task-group, .header-sync-group');
     });
 }
 
@@ -149,6 +151,20 @@ function _appendHeaderMoreEntries(frag, el) {
         frag.appendChild(_makeHeaderMoreItem('fas fa-layer-group', '从模板添加', 'purple', false, function () {
             if (typeof openTaskTemplatePicker === 'function') openTaskTemplatePicker();
         }));
+        return;
+    }
+
+    // 同步组：被收进「更多」时面板无法锚定，改为直达配置页（窄屏与桌面溢出均走这里）
+    if (el.id === 'header-sync-group') {
+        frag.appendChild(_makeHeaderMoreItem(
+            'fas fa-cloud-arrow-down',
+            '外部日历同步',
+            el.dataset.syncColor || 'cyan',
+            false,
+            function () {
+                if (typeof gotoSyncSettingsFromHeader === 'function') gotoSyncSettingsFromHeader();
+            }
+        ));
         return;
     }
 
@@ -249,6 +265,8 @@ function _syncHeaderMoreAria() {
 function toggleHeaderMoreMenu() {
     const group = document.getElementById('header-more-group');
     if (!group || !group.classList.contains('overflow-active')) return;
+    // 与同步面板互斥：两个浮层同层叠放，同时展开会互相遮挡
+    if (!group.classList.contains('more-open') && typeof closeSyncMenu === 'function') closeSyncMenu();
     const open = group.classList.toggle('more-open');
     if (open) renderHeaderMoreMenu();
     _syncHeaderMoreAria();
@@ -276,8 +294,12 @@ function closeHeaderMoreMenu() {
 
     // 桌面端悬浮展开不经过 click，需要单独同步 aria-expanded
     group.addEventListener('pointerenter', function (e) {
-        if (e.pointerType === 'mouse' && group.classList.contains('overflow-active')) {
-            _setHeaderMoreExpanded(true);
+        if (e.pointerType === 'mouse') {
+            // 悬浮展开「更多」时收起已固定展开的同步面板
+            if (typeof closeSyncMenu === 'function') closeSyncMenu();
+            if (group.classList.contains('overflow-active')) {
+                _setHeaderMoreExpanded(true);
+            }
         }
     });
     group.addEventListener('pointerleave', function (e) {

@@ -126,16 +126,7 @@ function renderLists(force) {
     }
     appendListGap(container, null, topLevel.length);
 
-    // 外部日历同步为在线版独有：在线版固定入口（与摘要/回收站同级），离线版无此入口。
-    // 在线版显隐由「侧边栏配置 → 外部日历同步」控制（show/auto/hide）
-    const _subs = (settings && Array.isArray(settings.calendarSubscriptions)) ? settings.calendarSubscriptions : [];
-    const _extCalMode = window._WEB_VERSION === 'online' && typeof getSidebarItemVisibility === 'function'
-        ? getSidebarItemVisibility('externalCalendar') : 'show';
-    const extCalBtn = document.getElementById('sidebar-external-calendar-btn');
-    if (extCalBtn) {
-        const showEntry = _extCalMode === 'show' || (_extCalMode === 'auto' && _subs.length > 0);
-        extCalBtn.style.display = showEntry ? '' : 'none';
-    }
+    // 注：外部日历同步已改为右上角「外部日历同步」按钮入口，侧边栏不再提供该入口
 
     // 已归档清单入口（放在清单分组末位，"新建清单"按钮之前）
     const archivedLists = lists.filter(l => l.archived);
@@ -1083,7 +1074,7 @@ function updateSidebarHighlight() {
 
     // 清除所有侧边栏按钮的高亮
     const sidebarBtns = ['sidebar-all-tasks-btn', 'sidebar-today-btn', 'sidebar-tomorrow-btn',
-        'sidebar-recent3days-btn', 'sidebar-next7days-btn', 'sidebar-external-calendar-btn',
+        'sidebar-recent3days-btn', 'sidebar-next7days-btn',
         'sidebar-summary-btn', 'sidebar-trash-btn'];
     sidebarBtns.forEach(id => {
         const btn = document.getElementById(id);
@@ -1113,9 +1104,7 @@ function updateSidebarHighlight() {
 
     // 高亮当前视图对应的按钮
     if (currentView === 'calendarsync') {
-        // 外部日历同步是独立视图：优先于残留的清单/标签/时间筛选高亮
-        const btn = document.getElementById('sidebar-external-calendar-btn');
-        if (btn) btn.classList.add('sidebar-active');
+        // 外部日历同步是独立视图（入口在右上角按钮）：不继承残留的清单/标签/时间筛选高亮
     } else if (currentFilterId) {
         // 自定义过滤器激活时
         const btn = document.getElementById(`sidebar-filter-${currentFilterId}`);

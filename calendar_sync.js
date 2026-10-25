@@ -72,11 +72,13 @@ function _fmtLastSync(sub) {
 let calSyncTab = 'webdav';
 
 // 切换到外部日历同步配置视图：关闭设置弹窗 + switchView('calendarsync')
+// source='settings' 表示从设置面板进入（返回时要回到设置面板）；其它值（右上角「外部日历同步」按钮）直接返回原视图
 function switchToCalendarSyncPage(source, tab) {
     calSyncReturnSource = source || 'settings';
     calSyncTab = (tab === 'ics') ? 'ics' : 'webdav';
     calSyncPrevView = (typeof currentView !== 'undefined') ? currentView : 'task';
-    // 侧边栏入口：设置面板本就未打开，直接切视图（避免 closeSettingsModal 触发"瞬间跳出设置面板"动画）
+    // 非设置面板入口（右上角同步按钮）：设置面板本就未打开，直接切视图
+    // （避免 closeSettingsModal 触发"瞬间跳出设置面板"动画）
     if (calSyncReturnSource === 'settings') {
         if (typeof closeSettingsModal === 'function') closeSettingsModal();
     }
@@ -690,12 +692,16 @@ function closeCalendarSyncBlacklist() {
     if (overlay) overlay.remove();
 }
 
-// 右上角同步按钮显隐：至少一个启用订阅时显示（3.1）
+// 右上角「同步」入口显隐：至少一个启用的 ICS 订阅，或已配置 WebDAV 云同步（3.1）
+// 显隐挂在 #header-sync-group 上（按钮与悬浮面板同属一组），配色由 webdav.js/updateSyncBtnState 决定
 function updateCalendarSyncBtnVisibility() {
-    const btn = document.getElementById('calendar-sync-btn');
-    if (!btn) return;
-    const hasEnabled = _calSubs().some(s => s.enabled);
-    btn.classList.toggle('hidden', !hasEnabled);
+    const group = document.getElementById('header-sync-group');
+    if (!group) return;
+    const hasIcs = _calSubs().some(s => s.enabled);
+    const hasWebdav = (typeof _webdavConfigured !== 'undefined') && _webdavConfigured;
+    group.classList.toggle('hidden', !(hasIcs || hasWebdav));
+    if (!hasIcs && !hasWebdav && typeof closeSyncMenu === 'function') closeSyncMenu();
+    if (typeof updateSyncBtnState === 'function') updateSyncBtnState();
     // 同步按钮显隐变化会影响右上角溢出结果
     if (typeof applyHeaderActionOverflow === 'function') applyHeaderActionOverflow();
 }
@@ -703,6 +709,7 @@ function updateCalendarSyncBtnVisibility() {
 // 触发同步（3.1）；fromSettings 区分入口用于 toast 文案
 // 视图内「立即同步」按钮：图标保持不变，文字切换为「同步中…」，完成后恢复；右上角图标按钮用放大缩小脉动反馈
 async function triggerCalendarSync(fromSettings) {
+    if (typeof closeSyncMenu === 'function') closeSyncMenu();
     const btn = document.getElementById('calendar-sync-btn');
     const viewBtn = document.getElementById('calsync-view-sync-btn');
     const allBtn = document.getElementById('calendarsync-sync-all-btn');
@@ -753,10 +760,12 @@ async function triggerCalendarSync(fromSettings) {
         if (r && typeof r.then === 'function') {
             r.then(() => {
                 updateCalendarSyncBtnVisibility();
+                if (typeof fetchWebdavSummary === 'function') fetchWebdavSummary();
                 if (document.getElementById('calendarsync-list')) renderCalendarSubscriptions();
             }).catch(() => {});
         } else {
             updateCalendarSyncBtnVisibility();
+            if (typeof fetchWebdavSummary === 'function') fetchWebdavSummary();
         }
         return r;
     };

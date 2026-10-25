@@ -58,8 +58,7 @@ const SIDEBAR_ITEM_DEFAULTS = {
     summary: 'show',
     tags: 'show',
     filters: 'show',
-    trash: 'show',
-    externalCalendar: 'show'
+    trash: 'show'
 };
 
 // 当前（或给定）筛选是否为侧边栏特殊时间筛选

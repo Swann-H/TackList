@@ -2546,7 +2546,8 @@
         .header-more-group.overflow-active { display: flex; }
         .header-more-group.overflow-active #mobile-more-btn { display: flex; }
         .header-action-collapsed { display: none !important; }
-        .header-more-pop {
+        .header-more-pop,
+        .header-sync-pop {
             position: absolute;
             top: 100%;
             left: 0;
@@ -2646,10 +2647,94 @@
                 transform: translateY(0);
                 pointer-events: auto;
             }
+            .header-sync-group:hover .header-sync-pop {
+                opacity: 0;
+                visibility: hidden;
+                transform: translateY(-4px);
+                pointer-events: none;
+            }
+            .header-sync-group.sync-open .header-sync-pop {
+                opacity: 1;
+                visibility: visible;
+                transform: translateY(0);
+                pointer-events: auto;
+            }
         }
         @media (prefers-reduced-motion: reduce) {
-            .header-more-pop { transition: opacity .01ms linear, visibility 0s; transform: none; }
+            .header-more-pop,
+            .header-sync-pop { transition: opacity .01ms linear, visibility 0s; transform: none; }
         }
+
+        /* ===== 主视图「同步」入口：面板样式与展开规则全部复用「更多」面板 ===== */
+        .header-sync-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        .header-sync-group.hidden { display: none !important; }
+        /* 「更多」面板左对齐，同步面板固定贴按钮右缘向左展开 */
+        .header-sync-pop { left: auto; right: 0; }
+        .header-sync-group:hover .header-sync-pop,
+        .header-sync-group.sync-open .header-sync-pop {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+            transition-delay: .15s, .15s, 0s;
+        }
+        .header-sync-group.sync-open .header-sync-pop { transition-delay: 0s, 0s, 0s; }
+        #sync-menu {
+            min-width: 212px;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
+            padding: 8px;
+            border-radius: 12px;
+            background: rgba(var(--bg-secondary-rgb, 255, 255, 255), 0.78);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        html[data-blur="off"] #sync-menu {
+            background: rgba(var(--bg-secondary-rgb, 255, 255, 255), 0.95);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        /* 条目右侧的时间勋章：沿用任务列表的相对时间词（今天 / 昨天） */
+        .sync-menu-time {
+            flex-shrink: 0;
+            font-size: 11px;
+            line-height: 1.6;
+            padding: 0 7px;
+            border-radius: 9999px;
+            color: var(--text-muted);
+            background: rgba(var(--bg-tertiary-rgb, 243, 244, 246), 0.85);
+            white-space: nowrap;
+        }
+        .header-more-item.is-attention .sync-menu-time {
+            color: #b45309;
+            background: rgba(245, 158, 11, 0.16);
+        }
+        html[data-theme="dark"] .header-more-item.is-attention .sync-menu-time { color: #fbbf24; }
+        .sync-menu-sep {
+            flex-shrink: 0;
+            height: 1px;
+            margin: 4px 8px;
+            background: var(--border-color);
+        }
+        /* 按钮圆圈与图标同色：绿=已同步，橙=有待同步，红=异常，青=正常 / 未探测 */
+        #calendar-sync-btn.sync-state-cyan { border-color: #06b6d4; color: #06b6d4; }
+        #calendar-sync-btn.sync-state-cyan:hover:not(:disabled) { background-color: #06b6d4; color: #fff; }
+        #calendar-sync-btn.sync-state-green { border-color: #10b981; color: #10b981; }
+        #calendar-sync-btn.sync-state-green:hover:not(:disabled) { background-color: #10b981; color: #fff; }
+        #calendar-sync-btn.sync-state-amber { border-color: #f59e0b; color: #f59e0b; }
+        #calendar-sync-btn.sync-state-amber:hover:not(:disabled) { background-color: #f59e0b; color: #fff; }
+        #calendar-sync-btn.sync-state-red { border-color: #ef4444; color: #ef4444; }
+        #calendar-sync-btn.sync-state-red:hover:not(:disabled) { background-color: #ef4444; color: #fff; }
+        #calendar-sync-btn:disabled { cursor: default; }
 
         /* ===== FR-09 任务模板入口：详情标题行 ===== */
         .detail-title-template-btn {
@@ -4095,6 +4180,8 @@
                 white-space: nowrap;
             }
             #today-btn, #plan-btn, #postpone-btn, #add-task-group, #add-task-btn, #toggle-all-groups-btn, #batch-select-btn { display: none !important; }
+            /* 窄屏同步入口收进「更多」列表：点它直接进配置页，面板在此宽度下不展开 */
+            .header-sync-group { display: none !important; }
             .header-more-group { display: flex !important; }
             .header-more-pop { left: auto; right: 0; }
             #mobile-more-btn { display: flex !important; flex-shrink: 0; }
@@ -4505,12 +4592,6 @@
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-next7days-count" data-page-node-id="SVyFMgIqsEs27yPi4PnF1H"></span>
                     </button>
                     
-                    <!-- 外部日历同步入口（在线版；位于最近7天与摘要之间） -->
-                    <button onclick="if(typeof switchToCalendarSyncPage==='function') switchToCalendarSyncPage('sidebar')" id="sidebar-external-calendar-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" style="display:none;">
-                        <i class="fas fa-calendar-plus w-5"></i>
-                        <span class="sidebar-text flex-1">外部日历同步</span>
-                    </button>
-
                     <!-- 摘要 -->
                     <button onclick="currentListId=null;currentFilter=null;currentTagIds=[];currentFilterId=null;switchView('summary')" id="sidebar-summary-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="uguGjPOeoSPyJMLFrpkkB9">
                         <i class="fas fa-file-text w-5" data-page-node-id="OREXc9XtWGcxirbDsAseNy"></i>
@@ -4641,9 +4722,14 @@
                             <div id="mobile-more-menu" role="menu" aria-label="更多视图操作" data-page-node-id="JxVJg2uLoYX3qs6Z9x980A"></div>
                         </div>
                     </div>
-                    <button onclick="triggerCalendarSync()" id="calendar-sync-btn" class="hidden w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white transition" title="同步外部日历" data-page-node-id="cWHb8uEG3Vz2FjkwBWLD5i">
-                        <i class="fas fa-cloud-arrow-down" data-page-node-id="EZegmHRJHGxgRhYhpMvXoH"></i>
-                    </button>
+                    <div class="relative header-sync-group hidden" id="header-sync-group">
+                        <button onclick="toggleSyncMenu(event)" id="calendar-sync-btn" class="w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white transition sync-state-cyan" title="外部日历同步" aria-haspopup="menu" aria-expanded="false" data-page-node-id="cWHb8uEG3Vz2FjkwBWLD5i">
+                            <i class="fas fa-cloud-arrow-down" data-page-node-id="EZegmHRJHGxgRhYhpMvXoH"></i>
+                        </button>
+                        <div class="header-sync-pop">
+                            <div id="sync-menu" role="menu" aria-label="外部日历同步操作"></div>
+                        </div>
+                    </div>
                     <button onclick="goToToday()" id="today-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition group relative" title="今天" data-page-node-id="07WJKduhz9QoysNELY9oKV">
                         <i class="fas fa-bullseye" data-page-node-id="GuUzlUmEnmsp4CwnNpRVN6"></i>
                     </button>
@@ -5773,7 +5859,7 @@
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="0sqiGAgW6OzQuoZuQCXNxl">主题设置</h3>
                         <div class="space-y-4" data-page-node-id="14zKzld2qHGowJOmbgnVwc">
                             <div data-page-node-id="gm5gAZLHNzMOiQjznXvaCr">
-                                <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="wrKja87SKAc9YYmh3FGLL8">主题</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="wrKja87SKAc9YYmh3FGLL8">主题</label>
                                 <div class="flex gap-3" data-page-node-id="jQCpWUkgRWUw7LynhaPrOO">
                                     <button onclick="setTheme('light')" id="theme-light-btn" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary" data-page-node-id="YIQr1l2VlAhwgfk6XPHDfG">
                                         <i class="fas fa-sun mr-2" data-page-node-id="StCb2B9FNlgWBKRHc0YaH2"></i>浅色
@@ -5785,7 +5871,7 @@
                             </div>
                             
                             <div data-page-node-id="zU9XIo7B8nS20xLwGAPSCt">
-                                <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="OAtSfVDUekOU7mIsrRENN1">背景图片</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="OAtSfVDUekOU7mIsrRENN1">背景图片</label>
                                 <div class="flex gap-2 mb-3">
                                     <button type="button" id="bg-mode-single-btn" onclick="switchBgImageMode('single')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">
                                         <i class="fas fa-image mr-1"></i>单张图片
@@ -5796,7 +5882,7 @@
                                 </div>
                                 <div id="bg-single-section">
                                     <div class="flex gap-2" data-page-node-id="mXS8PrdPxBZ7J0lPLneYoJ">
-                                        <label for="bg-image-upload" class="flex-1 px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary cursor-pointer hover:bg-theme-secondary transition text-center" data-page-node-id="kem5SBa5jJ6Jl8pjdmU4ur">
+                                        <label for="bg-image-upload" class="flex-1 px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary cursor-pointer hover:bg-theme-secondary transition text-center" title="支持 JPG / PNG / GIF" data-page-node-id="kem5SBa5jJ6Jl8pjdmU4ur">
                                             <i class="fas fa-upload mr-2" data-page-node-id="B5Zkptc6XVFTRiTA5dnErx"></i>选择图片
                                         </label>
                                         <input type="file" id="bg-image-upload" accept="image/*" class="hidden" onchange="handleBgImageUpload(event)" data-page-node-id="kKTS4zKFTUwpwSrw7uMe1s">
@@ -5804,7 +5890,6 @@
                                             <i class="fas fa-trash" data-page-node-id="IOsYaH0EXOkpYL5unzYToS"></i>
                                         </button>
                                     </div>
-                                    <p class="text-xs text-theme-muted mt-2" data-page-node-id="xc1jIGKMDtR2QikO3r7rKE">支持 JPG、PNG、GIF 等图片格式</p>
                                     <div id="bg-image-preview" class="mt-3 hidden" data-page-node-id="T7j1qQHim48qW1w5coJORg">
                                         <img id="bg-preview-img" class="max-h-32 w-full object-contain rounded-lg border border-theme" data-page-node-id="sa0yjFGHA3Rr2TBmHxCEAl" />
                                     </div>
@@ -5821,7 +5906,7 @@
                                     </div>
                                     <div class="grid grid-cols-2 gap-2">
                                         <div>
-                                            <label class="block text-xs text-theme-muted mb-1">切换间隔</label>
+                                            <label class="block text-sm font-medium text-theme-primary mb-2">切换间隔</label>
                                             <div class="flex">
                                                 <input type="number" id="bg-carousel-interval-input" min="1" max="365" value="30" onchange="onBgCarouselIntervalChange()" class="w-full min-w-0 px-2 py-1.5 text-sm border border-theme rounded-l-lg bg-theme-tertiary text-theme-primary">
                                                 <select id="bg-carousel-interval-unit" onchange="onBgCarouselIntervalChange()" class="border border-l-0 border-theme rounded-r-lg bg-theme-tertiary text-theme-primary text-sm px-1">
@@ -5832,7 +5917,7 @@
                                             </div>
                                         </div>
                                         <div>
-                                            <label class="block text-xs text-theme-muted mb-1">切换顺序</label>
+                                            <label class="block text-sm font-medium text-theme-primary mb-2">切换顺序</label>
                                             <select id="bg-carousel-order-select" onchange="onBgCarouselOrderChange()" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
                                                 <option value="sequential">顺序循环</option>
                                                 <option value="random">随机抽取</option>
@@ -5852,7 +5937,7 @@
                                     <p id="bg-carousel-empty-hint" class="hidden text-xs text-theme-muted">目录为空或目录中没有有效图片（支持 JPG / PNG / GIF / WebP）</p>
                                 </div>
                                 <div class="mt-3">
-                                    <label class="block text-xs text-theme-muted mb-1">背景填充方式</label>
+                                    <label class="block text-sm font-medium text-theme-primary mb-2">背景填充方式</label>
                                     <div class="flex gap-2">
                                         <button type="button" id="bg-fill-cover" onclick="setBgFillMode('cover')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">铺满</button>
                                         <button type="button" id="bg-fill-contain" onclick="setBgFillMode('contain')" class="flex-1 px-3 py-1.5 text-sm rounded-lg border-2 border-theme text-theme-secondary hover:bg-theme-secondary transition">完整显示</button>
@@ -5863,20 +5948,20 @@
                             </div>
                             
                             <div data-page-node-id="krB0sSyWBBMf6Ydskcf2ea">
-                                <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="h1ygd7zA9gPxBVDtySrDkn">背景透明度: <span id="bg-opacity-value" data-page-node-id="cA5G9FdDZNvO2ZkksSFA3U">30</span>%</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="h1ygd7zA9gPxBVDtySrDkn">背景透明度: <span id="bg-opacity-value" data-page-node-id="cA5G9FdDZNvO2ZkksSFA3U">30</span>%</label>
                                 <input type="range" id="settings-bg-opacity" min="0" max="100" value="30" class="w-full" onchange="updateBgOpacity()" data-page-node-id="t8w5eKdcZoo8HtIz1CduzI">
                             </div>
                             
                             <div data-page-node-id="F6j5S5ObRKE0tkbhCLNSYd">
-                                <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="OipQ3rUTeEq5haKBf37kS9">毛玻璃强度: <span id="bg-blur-value" data-page-node-id="amX9OCtrok7TbvvQDiZbkC">12</span>px</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="OipQ3rUTeEq5haKBf37kS9">毛玻璃强度: <span id="bg-blur-value" data-page-node-id="amX9OCtrok7TbvvQDiZbkC">12</span>px</label>
                                 <input type="range" id="settings-bg-blur" min="0" max="30" value="12" class="w-full" onchange="updateBgBlur()" data-page-node-id="1sMEhaKoGnT3fj6eAvJF4u">
                             </div>
 
                             <div data-page-node-id="mhYImQSQFMoc5JFXk4j9RO">
-                                <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="3oh05myEW63Xy0DOpxiNhB">主题配色</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="3oh05myEW63Xy0DOpxiNhB">主题配色</label>
 
                                 <!-- 内置配色（适配深色/浅色模式） -->
-                                <p class="text-xs text-theme-muted mb-1" data-page-node-id="bBXchLXdqw84VyPHa7J3XW">内置配色</p>
+                                <p class="text-xs font-semibold text-theme-secondary mb-1" data-page-node-id="bBXchLXdqw84VyPHa7J3XW">内置配色</p>
                                 <div class="grid grid-cols-3 gap-2 mb-3" data-page-node-id="tidjp8RKuB2oxFn9JtAp04">
                                     <button onmousedown="startPalettePreview('builtin:blue')" onmouseleave="cancelPalettePreview()" onclick="onPaletteCardClick(this.dataset.paletteKey)" data-palette-key="builtin:blue" class="palette-card relative border-2 border-theme rounded-lg p-2 hover:border-accent transition text-left select-none cursor-pointer" data-page-node-id="WYKojEA2KC6L8dYhLgeVp2">
                                         <div class="palette-color-bar mb-1" data-palette="builtin-blue" data-page-node-id="FmwTYFL3g1t7YFlS2KqUFF"></div>
@@ -5900,10 +5985,10 @@
                                         </div>
                                     </button>
                                 </div>
-                                <p class="text-xs text-theme-muted mb-3">点击色块可单独调整颜色。修改强调色后，点击重新配色按钮即可自动生成整套配色。</p>
+                                <p class="text-xs text-theme-muted mb-3">点击色块可单独调色；修改强调色后，点击重新配色按钮自动生成整套配色。</p>
 
                                 <!-- 背景图取色 -->
-                                <p class="text-xs text-theme-muted mb-1" data-page-node-id="cKThzDAGUF6CNB6U2etYAH">背景图取色</p>
+                                <p class="text-xs font-semibold text-theme-secondary mb-1" data-page-node-id="cKThzDAGUF6CNB6U2etYAH">背景图取色</p>
                                 <div class="flex gap-2 mb-2" data-page-node-id="CPnqOnoys531VudzlzHVhl">
                                     <button onclick="generatePalettePreview()" class="px-3 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition" data-page-node-id="jEZC6sCFSrWbxObuWIRTmt">
                                         <i class="fas fa-magic mr-1" data-page-node-id="UZrtuPxL2sDFYLH3BD5jHA"></i>提取调色板
@@ -5942,7 +6027,7 @@
                             </div>
 
                             <div data-page-node-id="6K2vNoAbHpOzzvNQxk8S8n">
-                                <label class="block text-sm font-medium text-theme-secondary mb-2" data-page-node-id="0etJbnGFxOdn3zrXEkYGjK">字体</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="0etJbnGFxOdn3zrXEkYGjK">字体</label>
                                 <div class="flex gap-2 items-start" data-page-node-id="V1ouX9F2BfRyPCaqyA6Eb7">
                                     <div class="flex-1 relative" id="font-combobox-wrapper" data-page-node-id="SrET2J8D0US5UBrzB6YYZ1">
                                         <input type="text" id="settings-font-family-input" placeholder="点击选择或输入字体名" autocomplete="off" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" data-page-node-id="oIcp2u2sri3LgZthuRhblW">
@@ -5959,7 +6044,6 @@
                                         <i class="fas fa-times" data-page-node-id="0l5uvn0eFDnBexbo6RbU6K"></i>
                                     </button>
                                 </div>
-                                <p class="text-xs text-theme-muted mt-2" id="font-hint-text" data-page-node-id="28NPHmYsLtIUvj86VBlKbF">可手动输入或点击右侧箭头选择已安装字体；也可上传 TTF 字体文件</p>
                             </div>
                         </div>
                     </div>
@@ -5968,7 +6052,7 @@
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="xSAIOVldDfCYMNBfpLpVE3">视图与外观</h3>
                         <div class="space-y-4" data-page-node-id="DjP7jDuv5GPwzENPm7D1OB">
                             <div data-page-node-id="zCClmPlpZprSuWumXbB5Bn">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="f2vAhAtEG7efotbm9aHbnZ">视图自定义</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="f2vAhAtEG7efotbm9aHbnZ">视图自定义</label>
                                 <p class="text-xs text-theme-muted mb-2" data-page-node-id="y4xWikEzEnhlLv4hYxHJeK">单击启用/禁用视图，双击设置默认视图；可拖拽调整已启用视图顺序。</p>
                                 <div class="rounded-lg border border-dashed border-theme p-3 bg-theme-secondary space-y-3" data-page-node-id="cpxiOnmBdCJlEmEiAglKje">
                                     <div data-page-node-id="Vwk8vdDlAYlEGBPQJZv90Y">
@@ -5984,35 +6068,33 @@
                             <div class="flex items-center justify-between">
                                 <div class="min-w-0 pr-3">
                                     <label class="text-sm font-medium text-theme-primary">视图操作按钮显示数量</label>
-                                    <p class="text-xs text-theme-secondary">视图右上角最多显示的按钮数量。其他按钮将被收至「更多」按钮中</p>
+                                    <p class="text-xs text-theme-muted">视图右上角最多显示的按钮数量。其他按钮将被收至「更多」按钮中</p>
                                 </div>
                                 <div class="flex items-center gap-2 flex-shrink-0">
                                     <input type="number" id="settings-view-action-limit" min="1" max="10" value="8" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center">
-                                    <span class="text-sm text-theme-secondary">个</span>
+                                    <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">个</span>
                                 </div>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-theme-primary mb-1">视图操作按钮顺序</label>
-                                <p class="text-xs text-theme-muted mb-2">拖动按钮排序</p>
+                                <label class="block text-sm font-medium text-theme-primary mb-2">视图操作按钮顺序</label>
                                 <div class="rounded-lg border border-dashed border-theme p-3 bg-theme-secondary">
                                     <div id="view-actions-order"></div>
                                 </div>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="ODwfIN5YrYWu8OGjHjHued">
-                                <label class="text-sm font-medium text-theme-secondary" data-page-node-id="fPQqHYD4UHTtY3LyNETKuM">周开始于</label>
+                                <label class="text-sm font-medium text-theme-primary" data-page-node-id="fPQqHYD4UHTtY3LyNETKuM">周开始于</label>
                                 <input type="hidden" id="settings-week-start" value="monday" data-page-node-id="r3XPV70CCWzgsVSDr7aRX0"><div class="seg" data-seg-for="settings-week-start"><button type="button" data-value="monday">周一</button><button type="button" data-value="sunday">周日</button></div>
                             </div>
                             <div class="flex items-center justify-between">
                                 <div>
                                     <label class="text-sm font-medium text-theme-primary">书写态正文宽度</label>
-                                    <p class="text-xs text-theme-secondary">沉浸书写态下正文的可读宽度，顶栏图标可随时循环切换</p>
+                                    <p class="text-xs text-theme-muted">沉浸书写态下正文的可读宽度，顶栏图标可随时循环切换</p>
                                 </div>
                                 <input type="hidden" id="settings-write-mode-width" value="standard"><div class="seg" data-seg-for="settings-write-mode-width"><button type="button" data-value="standard">标准</button><button type="button" data-value="wide">宽</button><button type="button" data-value="full">全屏</button></div>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="3yCkNuvfMFyTlnYBLTncnP">
                                 <div data-page-node-id="d9flfaFQHQfCsAtNNK4flT">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="D20NaykkWX0Y2BEZ8QGBBF">侧边栏节假日倒计时</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="Wsb48KL12KnUtwZwUMaK0k">在侧边栏显示距下个假期的倒计时</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="r6W5g2weY5U6o2ttGwGVVz">
                                     <input type="checkbox" id="settings-show-holiday-countdown" class="sr-only peer" checked data-page-node-id="WzNfXb8tH2GUJ0fhTTRUYr">
@@ -6022,7 +6104,7 @@
                             <div class="flex items-center justify-between" data-page-node-id="LiK3QaN8wKutA19n5D3khK">
                                 <div data-page-node-id="ZrO0h4JICBdPkLrBYWRJY5">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="DiDKAMBEEsDClXpEr6rHjm">侧边栏功能按钮</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="P55JmmpR4bAnwbdmonhlsd">显示「正念小事」和「答案之书」按钮</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="P55JmmpR4bAnwbdmonhlsd">显示「正念小事」和「答案之书」按钮</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="q463MT8bFZ6ohYFvzGxFW0">
                                     <input type="checkbox" id="settings-show-sidebar-extras" class="sr-only peer" checked data-page-node-id="RTuCFygrrvyDSA87jb4cLh">
@@ -6032,7 +6114,6 @@
                             <div class="flex items-center justify-between" data-page-node-id="RnSCLVV5uRX9AP2ZWkl4uT">
                                 <div data-page-node-id="c6OrADJPuEcnROcnSCak5T">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="T0qPrKH4dD0L5rJ1LWwTNF">彩蛋效果</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="wOwNI1bSe03B9FxNLe9kTT">达成条件时显示趣味彩蛋提示与动画</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="2c3zWKcoi5hySlqLNXPOtI">
                                     <input type="checkbox" id="settings-easter-egg" class="sr-only peer" checked data-page-node-id="DEJVRyl9ID094BbSAF2wpo">
@@ -6042,7 +6123,7 @@
                             <div class="flex items-center justify-between" data-page-node-id="vvDb8SvW56QnIqxsnYA0VH">
                                 <div data-page-node-id="4O8PVvJIxraJ9MU9hH6IYf">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="JxOsaCsJNhyiPnxt6GVUAh">界面交互动效</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="tKGFeyOqKjyw4IxjuV82mG">任务加载、详情展开、视图切换等交互播放平滑动效</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="tKGFeyOqKjyw4IxjuV82mG">任务加载、详情展开、视图切换时提供交互动效。</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="5g76p4ArWWXxJWQoF6yANj">
                                     <input type="checkbox" id="settings-smooth-animations" class="sr-only peer" data-page-node-id="2uIdOryVFiGBOk1cU8yuRG">
@@ -6052,7 +6133,7 @@
                             <div class="flex items-center justify-between" data-page-node-id="PbaQ5Uu387a1xsWBhZApSY">
                                 <div data-page-node-id="mRM0XAMF3hRBU5cp5QNMqb">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="PZvPoxWYrY5KxBosqqGFNX">场景过渡动效</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="32rE5U5WZECaEoAQj4nzpK">进入与返回番茄专注、答案之书等场景播放主题化过渡；含四象限展开/收起动效（性能消耗较高）</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="32rE5U5WZECaEoAQj4nzpK">番茄专注、答案之书等场景过渡、四象限展开/收起过渡。（性能消耗较高）</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="Xj9C2QwYVX2JTCgOXhdpPS">
                                     <input type="checkbox" id="settings-feature-animations" class="sr-only peer" data-page-node-id="MTMnTAHiPjDd38KT3UAPA9">
@@ -6062,7 +6143,6 @@
                             <div class="flex items-center justify-between" data-page-node-id="Vp0DEGYx3RDAV0dWsS2h6D">
                                 <div class="min-w-0 pr-3" data-page-node-id="9BBVveuUOuqCyxrEadpWYW">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="jDWcBbDpNzoZSLu2387RtC">优先级显示方式</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="QQx34wqHUoKuknsHiDupGH">选择任务优先级在视图中的呈现方式</p>
                                 </div>
                                 <input type="hidden" id="settings-priority-display-mode" value="checkbox" data-page-node-id="ptjFWISnj5dn6NZzwUjCON"><div class="seg" data-seg-for="settings-priority-display-mode"><button type="button" data-value="checkbox">勾选框</button><button type="button" data-value="bg">底色</button><button type="button" data-value="bar">色条</button><button type="button" data-value="none">不显示</button></div>
                             </div>
@@ -6073,19 +6153,19 @@
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="dYNejthIKLcq07lauuWGyA">新建任务默认值</h3>
                         <div class="space-y-4" data-page-node-id="lrq2MaD4XvbeQM01FeI6s3">
                             <div class="flex items-center justify-between" data-page-node-id="LQ80730tI3ROUdhssnNMd0">
-                                <label class="text-sm font-medium text-theme-secondary" data-page-node-id="DRspnT0jxC4AlZYXnFdZ7q">默认清单分组</label>
+                                <label class="text-sm font-medium text-theme-primary" data-page-node-id="DRspnT0jxC4AlZYXnFdZ7q">默认清单分组</label>
                                 <select id="settings-default-list" class="w-1/4 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary" data-page-node-id="Ls6sOMM66XJramebBXBIfF">
                                 </select>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="nr2FjqNFLJiZV8NxLEEIWU">
-                                <span class="text-sm text-theme-secondary" data-page-node-id="CDXmhoiRD57SAUvGsA7GcZ">默认重要</span>
+                                <label class="text-sm font-medium text-theme-primary" data-page-node-id="CDXmhoiRD57SAUvGsA7GcZ">默认重要</label>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="pePYCxEFiRNMoKgRsk7rqs">
                                     <input type="checkbox" id="settings-default-important" class="sr-only peer" data-page-node-id="uTmWrVc9aTlCmkwg9oNMaz">
                                     <div class="ui-switch switch-on-yellow" data-page-node-id="FnqxH7PHdG2IOjl83Fw3Nt"></div>
                                 </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="dYC12bIvBmwZhNTd3wKhl6">
-                                <span class="text-sm text-theme-secondary" data-page-node-id="NaBH8XEEFDXo9dswMZ3Dns">默认紧急</span>
+                                <label class="text-sm font-medium text-theme-primary" data-page-node-id="NaBH8XEEFDXo9dswMZ3Dns">默认紧急</label>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="fS1T7vF6PfC8TzidJyy3dK">
                                     <input type="checkbox" id="settings-default-urgent" class="sr-only peer" data-page-node-id="cTUsZhMEYb6eRF2pVIY05T">
                                     <div class="ui-switch switch-on-red" data-page-node-id="UcQyBesvlcEHIiMXor3snr"></div>
@@ -6093,8 +6173,7 @@
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="lRVsGBTeMswCr6bRIBxAPh">
                                 <div class="min-w-0 pr-3" data-page-node-id="H8xdqeooYWLXjf6DP22E6q">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="sEheuXGp5SVzp2bnbp2tid">默认任务日期</label>
-                                    <p class="text-xs text-theme-muted" data-page-node-id="rtIV8cPz655g1Y0ug5mtnY">新建任务时设置的默认日期</p>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="sEheuXGp5SVzp2bnbp2tid">默认任务日期</label>
                                 </div>
                                 <input type="hidden" id="settings-default-task-date" value="none" data-page-node-id="33YTPtowqFgEWbCqS9CIP7"><div class="seg" data-seg-for="settings-default-task-date"><button type="button" data-value="none">无日期</button><button type="button" data-value="today">今天</button></div>
                             </div>
@@ -6107,45 +6186,41 @@
                         <div class="space-y-4" data-page-node-id="CphMVhcNEUTkFshHj2NAvg">
                             <div class="space-y-3" data-page-node-id="79UvP3QGPWC9mMtcGfveVG">
                                 <div class="flex items-center justify-between" data-page-node-id="Vsj1c9kw5qHl2EGof1u0Jz">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="PLUUpoFXKydSktBmi4dFva">所有任务</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="PLUUpoFXKydSktBmi4dFva">所有任务</label>
                                     <input type="hidden" id="settings-sidebar-all-tasks" value="show" data-page-node-id="rTek5WHhc8P5XNglfXW6ib"><div class="seg" data-seg-for="settings-sidebar-all-tasks"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="8NUgVomWgCdgwSwdGnQJr5">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="gwAQzZkE57veZ5gLJFQ3AN">今天</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="gwAQzZkE57veZ5gLJFQ3AN">今天</label>
                                     <input type="hidden" id="settings-sidebar-today" value="show" data-page-node-id="t3c1uUQKI2KehHyvf8I83V"><div class="seg" data-seg-for="settings-sidebar-today"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="g1hgv8sJwtsjpEEMpeClTU">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="asrFP2LY2afDVEgM7AIggG">明天</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="asrFP2LY2afDVEgM7AIggG">明天</label>
                                     <input type="hidden" id="settings-sidebar-tomorrow" value="show" data-page-node-id="s0cnWZWdQs9rRjc2CUVXVD"><div class="seg" data-seg-for="settings-sidebar-tomorrow"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="XRxNGlUNWoU9SPnPPxQmVQ">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="SbL54nfl7WJVY27C5H1EUM">最近3天</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="SbL54nfl7WJVY27C5H1EUM">最近3天</label>
                                     <input type="hidden" id="settings-sidebar-recent3days" value="show" data-page-node-id="ivFAQgj0XEQrUWxRGUfsvg"><div class="seg" data-seg-for="settings-sidebar-recent3days"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="3JZHndFNdVLl5v8kcsQNEg">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="D9XiPZSovUuUqT5Ek4XKdg">最近7天</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="D9XiPZSovUuUqT5Ek4XKdg">最近7天</label>
                                     <input type="hidden" id="settings-sidebar-recent7days" value="show" data-page-node-id="MTe4pFQZnAWS2IMRgFFHKe"><div class="seg" data-seg-for="settings-sidebar-recent7days"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
-                                <div class="flex items-center justify-between">
-                                    <label class="text-sm font-medium text-theme-secondary">外部日历同步</label>
-                                    <input type="hidden" id="settings-sidebar-external-calendar" value="show"><div class="seg" data-seg-for="settings-sidebar-external-calendar"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
-                                </div>
                                 <div class="flex items-center justify-between" data-page-node-id="Yt6dGa2lMxPvRhKq9Wn4ZC">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Ne8vJc5sQzLwTbFm3Xr7DH">摘要</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="Ne8vJc5sQzLwTbFm3Xr7DH">摘要</label>
                                     <input type="hidden" id="settings-sidebar-summary" value="show" data-page-node-id="Kb2mRd7xTnVyZcAh6Pq9WJ"><div class="seg" data-seg-for="settings-sidebar-summary"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between">
-                                    <label class="text-sm font-medium text-theme-secondary">回收站</label>
+                                    <label class="text-sm font-medium text-theme-primary">回收站</label>
                                     <input type="hidden" id="settings-sidebar-trash" value="show"><div class="seg" data-seg-for="settings-sidebar-trash"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                             </div>
                             <div class="space-y-3" data-page-node-id="Rt7yDn3wXsZcJjPm6Vu5QL">
                                 <div class="flex items-center justify-between" data-page-node-id="Cn5vHm2sTbZfGgQk7Wy3PM">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Vq8wJd4xLcAbIiRl9Zu6SN">标签</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="Vq8wJd4xLcAbIiRl9Zu6SN">标签</label>
                                     <input type="hidden" id="settings-sidebar-tags" value="show" data-page-node-id="Xs3nGf7yPvCdKkMm5Qt2RL"><div class="seg" data-seg-for="settings-sidebar-tags"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                                 <div class="flex items-center justify-between" data-page-node-id="Ld9sQn6yWcHhTtUu1Xv8RN">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="Mj3wRp7zXdKkVvWw0Yt5SM">过滤器</label>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="Mj3wRp7zXdKkVvWw0Yt5SM">过滤器</label>
                                     <input type="hidden" id="settings-sidebar-filters" value="show" data-page-node-id="Nk5yTs9vZfLlXxYy2Wq7QL"><div class="seg" data-seg-for="settings-sidebar-filters"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
                             </div>
@@ -6159,7 +6234,7 @@
                             <div class="flex items-center justify-between" data-page-node-id="H2BsYOh6lEWMGQM39BoM3x">
                                 <div data-page-node-id="Cy1eVG5nB0EKAM28EQSa3U">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="V0Jp2vzpIrS7RUCoxuGkOy">创建任务时移除时间文本</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="tp8A8nwzDYzcONpHjRXbW9">从标题中删去已解析的日期/时间文字（如"7月7日 下午2点"）</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="tp8A8nwzDYzcONpHjRXbW9">从标题中删去已解析的日期/时间文字（如"7月7日 下午2点"）</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="ilY0FCAXPfxwI5qgXl2ZeL">
                                     <input type="checkbox" id="settings-cmd-remove-time" class="sr-only peer" checked data-page-node-id="HflQAhoSjof0ILotqouIyf">
@@ -6170,39 +6245,39 @@
                             <div class="pt-1 space-y-3">
                                 <div>
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="fzTPgLbl01">模糊时间偏好</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="fzTPgDesc01">命令面板输入"上午/中午/下午/晚上"等模糊时段词时的偏好时间，及"稍后/等等/一会儿"等相对词的默认时长</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="fzTPgDesc01">模糊时段词的偏好时间，及「稍后」类词的默认时长</p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-3" data-page-node-id="fzTPgGrid01">
                                     <div data-page-node-id="fzMornWrap">
-                                        <label class="block text-xs text-theme-secondary mb-1" data-page-node-id="fzMornLbl">上午</label>
+                                        <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="fzMornLbl">上午</label>
                                         <div class="relative">
                                             <input type="time" id="settings-fuzzy-morning" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" data-page-node-id="fzMornInp" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-morning-picker', 'morning')">
                                             <div id="settings-fuzzy-morning-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
                                         </div>
                                     </div>
                                     <div data-page-node-id="fzNoonWrap">
-                                        <label class="block text-xs text-theme-secondary mb-1" data-page-node-id="fzNoonLbl">中午</label>
+                                        <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="fzNoonLbl">中午</label>
                                         <div class="relative">
                                             <input type="time" id="settings-fuzzy-noon" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" data-page-node-id="fzNoonInp" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-noon-picker', 'noon')">
                                             <div id="settings-fuzzy-noon-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
                                         </div>
                                     </div>
                                     <div data-page-node-id="fzAftWrap">
-                                        <label class="block text-xs text-theme-secondary mb-1" data-page-node-id="fzAftLbl">下午</label>
+                                        <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="fzAftLbl">下午</label>
                                         <div class="relative">
                                             <input type="time" id="settings-fuzzy-afternoon" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" data-page-node-id="fzAftInp" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-afternoon-picker', 'afternoon')">
                                             <div id="settings-fuzzy-afternoon-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
                                         </div>
                                     </div>
                                     <div data-page-node-id="fzEveWrap">
-                                        <label class="block text-xs text-theme-secondary mb-1" data-page-node-id="fzEveLbl">晚上</label>
+                                        <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="fzEveLbl">晚上</label>
                                         <div class="relative">
                                             <input type="time" id="settings-fuzzy-evening" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm cursor-pointer" data-page-node-id="fzEveInp" onclick="openFuzzyTimePicker(this, 'settings-fuzzy-evening-picker', 'evening')">
                                             <div id="settings-fuzzy-evening-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-30 shadow-lg max-h-48 overflow-y-auto"></div>
                                         </div>
                                     </div>
                                     <div data-page-node-id="fzLaterWrap">
-                                        <label class="block text-xs text-theme-secondary mb-1" data-page-node-id="fzLaterLbl">稍后/等等/一会儿</label>
+                                        <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="fzLaterLbl">稍后/等等/一会儿</label>
                                         <div class="flex items-center gap-2" data-page-node-id="fzLaterInpWrap">
                                             <input type="number" id="settings-fuzzy-later" min="5" max="120" step="5" value="15" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="fzLaterInp">
                                             <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="fzLaterUnit">分钟</span>
@@ -6212,8 +6287,8 @@
                                 <!-- 智能计划时间开关 -->
                                 <div class="flex items-center justify-between" data-page-node-id="fzSmartWrap">
                                     <div class="min-w-0 pr-3" data-page-node-id="fzSmartTxt">
-                                        <label class="text-sm font-medium text-theme-primary" data-page-node-id="fzSmartLbl">模糊时间任务智能计划时间</label>
-                                        <p class="text-xs text-theme-secondary" data-page-node-id="fzSmartDesc">开启后，模糊时段词会结合当前时间与已有任务自动排程：指定时间过时，则顺延至最近的有效时段。与已有任务冲突时，按任务时间粒度顺延到空闲时段。时段全满时，选择任务量最少的时段。关闭后仅按偏好时间寻找最近有效时间排程，不检测任务冲突情况。</p>
+                                        <label class="text-sm font-medium text-theme-primary" data-page-node-id="fzSmartLbl">模糊时间任务智能计划时间<i class="fas fa-info-circle text-theme-muted text-xs ml-1 cursor-help" title="开启后，模糊时段词会结合当前时间与已有任务自动排程：指定时间过时，则顺延至最近的有效时段。与已有任务冲突时，按任务时间粒度顺延到空闲时段。时段全满时，选择任务量最少的时段。关闭后仅按偏好时间寻找最近有效时间排程，不检测任务冲突情况。"></i></label>
+                                        <p class="text-xs text-theme-muted" data-page-node-id="fzSmartDesc">结合当前时间与已有任务排程，自动避开冲突</p>
                                     </div>
                                     <label class="relative inline-flex items-center cursor-pointer flex-shrink-0" data-page-node-id="fzSmartTgl">
                                         <input type="checkbox" id="settings-fuzzy-smart" class="sr-only peer" checked data-page-node-id="fzSmartInp">
@@ -6224,7 +6299,7 @@
                                 <div id="settings-fuzzy-gran-row" class="flex items-center justify-between" data-page-node-id="fzGranWrap">
                                     <div class="min-w-0 pr-3" data-page-node-id="fzGranTxt">
                                         <label class="text-sm font-medium text-theme-primary" data-page-node-id="fzGranLbl">任务时间粒度</label>
-                                        <p class="text-xs text-theme-secondary" data-page-node-id="fzGranDesc">自动顺延时划分时间块的粒度，可选 1-120</p>
+                                        <p class="text-xs text-theme-muted" data-page-node-id="fzGranDesc">自动顺延的时间块粒度</p>
                                     </div>
                                     <div class="flex items-center gap-2 flex-shrink-0" data-page-node-id="fzGranInpWrap">
                                         <input type="number" id="settings-fuzzy-granularity" min="1" max="120" step="1" value="30" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="fzGranInp">
@@ -6258,28 +6333,28 @@
                         <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="Nsfktw0kDO1ApD07cqSMz3">番茄计时设置</h3>
                         <div class="grid grid-cols-2 gap-4 mb-4" data-page-node-id="Gc3TwXtN8YxnAQcFB9yCH8">
                             <div data-page-node-id="ipaWLWc5Y2FjVO7HybQ8q1">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="ayxagzmCKp3cdChKDEFlyn">专注时长</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="ayxagzmCKp3cdChKDEFlyn">专注时长</label>
                                 <div class="flex items-center gap-2" data-page-node-id="pomFocusWrap">
                                     <input type="number" id="settings-focus-duration" min="1" max="60" value="25" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="8tFi5HOGdXvxWMNkzfp6LF">
                                     <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="pomFocusUnit">分钟</span>
                                 </div>
                             </div>
                             <div data-page-node-id="i7Gj00RdDpAe1ZFFFADzBY">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="MlA6LhY8GTF9aDGkddWY2R">短休息时长</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="MlA6LhY8GTF9aDGkddWY2R">短休息时长</label>
                                 <div class="flex items-center gap-2" data-page-node-id="pomShortWrap">
                                     <input type="number" id="settings-short-break-duration" min="1" max="30" value="5" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="G5C6EqrFrsDWe67nK7oq5l">
                                     <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="pomShortUnit">分钟</span>
                                 </div>
                             </div>
                             <div data-page-node-id="I2fMFCm8NjjbpJHsLRJSF2">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="c0JwHIzQr4kDu1KwtPCbkl">长休息时长</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="c0JwHIzQr4kDu1KwtPCbkl">长休息时长</label>
                                 <div class="flex items-center gap-2" data-page-node-id="pomLongWrap">
                                     <input type="number" id="settings-long-break-duration" min="1" max="60" value="15" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="wtC0xxn5RqK8XuXp1I3V1p">
                                     <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="pomLongUnit">分钟</span>
                                 </div>
                             </div>
                             <div data-page-node-id="Wj8gzgseiDSaJiPIZYM11j">
-                                <label class="block text-sm font-medium text-theme-secondary mb-1" data-page-node-id="kZQCq3Gu4yUzdynS09idmU">长休息间隔</label>
+                                <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="kZQCq3Gu4yUzdynS09idmU">长休息间隔</label>
                                 <div class="flex items-center gap-2" data-page-node-id="pomIntervalWrap">
                                     <input type="number" id="settings-long-break-interval" min="2" max="10" value="4" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="ss2yZNyHUTA8BE5PHM1Y6T">
                                     <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0" data-page-node-id="pomIntervalUnit">个</span>
@@ -6290,7 +6365,7 @@
                             <div class="flex items-center justify-between" data-page-node-id="HyN5pzAP3ksg1S1fGL8FCo">
                                 <div data-page-node-id="OxU0M8beAquDbIwLq8NSxr">
                                     <label class="block text-sm font-medium text-theme-primary" data-page-node-id="h4mZInT3xbhbUGfwv2hfe2">状态背景色</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="GSjB2UkZsqHDljZGGoYz9S">番茄专注与休息时，视图背景色随之变化以区分当前状态</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="GSjB2UkZsqHDljZGGoYz9S">专注 / 休息时切换视图背景色</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="5mwMlcOUjIbBypZCYVETjE">
                                     <input type="checkbox" id="settings-pomodoro-state-bg" class="sr-only peer" data-page-node-id="Q7XQmeZTzTXsrHVdZXGdIm">
@@ -6300,7 +6375,6 @@
                             <div class="flex items-center justify-between" data-page-node-id="tlv3jkt3vCs6ovg2ylGXpy">
                                 <div data-page-node-id="CUiRIHLXngNwuKqWdRk5Hw">
                                     <label class="block text-sm font-medium text-theme-primary" data-page-node-id="IOeAzE1jNWgitJ965SKe2R">完成提示音</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="wS6bTBKPei78LYebeLsUwA">专注或休息倒计时结束时播放提示音（本地合成，无需联网）</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="O3vSkSBduOWMW4FeuhBexq">
                                     <input type="checkbox" id="settings-pomodoro-sound" class="sr-only peer" data-page-node-id="1LreqfFO1mxFz44VH9TJWw">
@@ -6310,7 +6384,6 @@
                             <div class="flex items-center justify-between" data-page-node-id="QuGCKbMU7ffavYSURUDfG1">
                                 <div data-page-node-id="X4U6N8w4eG4JgutmmicxzE">
                                     <label class="block text-sm font-medium text-theme-primary" data-page-node-id="pl2x1FGNsIm3G4kTXxRFlb">自动休息</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="R10rLeGNToWlDPBCwFu07F">专注倒计时结束后，自动进入休息倒计时</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="8mVxT8bqaw2YhbpOiaML5R">
                                     <input type="checkbox" id="settings-auto-break" class="sr-only peer" data-page-node-id="0BCLgV3gSI6WBbPlRYWBWS">
@@ -6320,7 +6393,6 @@
                             <div class="flex items-center justify-between" data-page-node-id="csr4l7gelwDaysd0J9AHjG">
                                 <div data-page-node-id="dyVU5Oi3Rbgr0sviBRcFW5">
                                     <label class="block text-sm font-medium text-theme-primary" data-page-node-id="JetEX0iwWQPz6mggDudxRf">自动专注</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="wOafZbGjjSAyzAhEkdNaep">休息倒计时结束后，自动开始专注倒计时</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="p69rG85zj1qRvOObqfjbwd">
                                     <input type="checkbox" id="settings-auto-focus" class="sr-only peer" data-page-node-id="xMcPw58ozGOAHZX2zAbz38">
@@ -6330,7 +6402,6 @@
                             <div class="flex items-center justify-between" data-page-node-id="Jgz03OVE0P6EHbrJjgv8ye">
                                 <div data-page-node-id="T4OFDtfLuyBEXQQ7QAq37d">
                                     <label class="block text-sm font-medium text-theme-primary" data-page-node-id="fX53GXgF9VWrQCNnHb19wA">背景流动效果</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="3BtIdIyfRjkfoe0cQaWUVv">开启后使用更强的背景渐变流动动画</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="TcuRGTDzs0NISBlmrZl8Yn">
                                     <input type="checkbox" id="settings-bg-flow-effect" class="sr-only peer" data-page-node-id="ofspuxnidv7TFOx0YxHi6a">
@@ -6340,7 +6411,7 @@
                             <div class="flex items-center justify-between" data-page-node-id="LDqxZPYTvnXu8WTFyN5gKN">
                                 <div data-page-node-id="hweYadaM0lVCjFzB7cZEHD">
                                     <label class="block text-sm font-medium text-theme-primary" data-page-node-id="cdkvm4mFnBnptvQaV3snIA">高级粒子动画</label>
-                                    <p class="text-xs text-theme-secondary" data-page-node-id="lnVbNmwR9TJxyIRJW2DOv6">显示粒子、星云、光束、气泡、萤火虫等附加动画效果</p>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="lnVbNmwR9TJxyIRJW2DOv6">显示粒子、星云、光束、气泡、萤火虫等附加动画效果</p>
                                 </div>
                                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="TRC870ZhhAxds0Us6rWmQD">
                                     <input type="checkbox" id="settings-advanced-particle" class="sr-only peer" data-page-node-id="BaPiGwxjSWcT9z7VQJm0Lo">
@@ -6359,8 +6430,8 @@
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="uhIZhB2pgfcRkaUETegdUO">
                                 <div class="min-w-0 pr-3" data-page-node-id="cyGvU7j6K58uLQQob8U3Rq">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="K7qMAsa1P9uu1A3LQNXobA">稍后提醒延迟</label>
-                                    <p class="text-xs text-theme-muted" data-page-node-id="0u4caKrLB0FazanBgZxHKH">点击"稍后提醒"后，间隔多少分钟再次弹出提醒</p>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="K7qMAsa1P9uu1A3LQNXobA">稍后提醒延迟</label>
+                                    <p class="text-xs text-theme-muted" data-page-node-id="0u4caKrLB0FazanBgZxHKH">任务提醒卡片中单击「Later」后再次提醒的时间间隔</p>
                                 </div>
                                 <div class="flex items-center gap-2 flex-shrink-0" data-page-node-id="snoozeWrap">
                                     <input type="number" id="settings-snooze-delay" min="1" max="120" value="15" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="USJgKlyf2o218VkdXPzqYQ">
@@ -6389,7 +6460,7 @@
 
                             <div class="mt-3" data-page-node-id="jdF9HFPXSlYwMhAhkm9NbJ">
                                 <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="Gt03euNaecIRjH4pwMhuRY">自动抓取调休数据</label>
-                                <p class="text-xs text-theme-muted mb-2" data-page-node-id="dvOfNCvANecvGZ50rPWs7B">从在线 API 抓取当年调休安排并自动写入 holiday_data.json（需互联网）</p>
+                                <p class="text-xs text-theme-muted mb-2" data-page-node-id="dvOfNCvANecvGZ50rPWs7B">从在线 API 抓取当年调休安排</p>
                                 <div class="flex gap-2 mb-2" data-page-node-id="QG5lFLqHHeCs6KauHp6SEN">
                                     <input type="number" id="settings-holiday-fetch-year" min="2020" max="2099" class="w-24 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" placeholder="年份" data-page-node-id="4rdyfA1lIEvAoktuBBiL7W">
                                     <button onclick="fetchHolidayData()" id="holiday-fetch-btn" class="px-4 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-secondary hover:bg-theme-secondary transition text-sm" data-page-node-id="fJYdjeUBmbUJBsvwPtTHe9">
@@ -6397,8 +6468,8 @@
                                     </button>
                                 </div>
                                 <div data-page-node-id="RKlTLMQbsr3bX3Oqh7jg10">
-                                    <label class="block text-xs text-theme-muted mb-1" data-page-node-id="3jUt1ywLrDPv6bVT3hSS9I">自定义 API 地址（留空则使用 timor.tech → jiejiari 顺序）</label>
-                                    <input type="text" id="settings-holiday-api-url" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm" placeholder="https://your-api.example.com/holidays" data-page-node-id="rFJVLDal8jiYiA3f5WR2V9">
+                                    <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="3jUt1ywLrDPv6bVT3hSS9I">自定义 API 地址</label>
+                                    <input type="text" id="settings-holiday-api-url" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm" placeholder="留空则依次尝试 timor.tech、jiejiari" data-page-node-id="rFJVLDal8jiYiA3f5WR2V9">
                                 </div>
                             </div>
                         </div>
@@ -6406,8 +6477,7 @@
                     
                     <!-- 外部日历同步（WebDAV 云同步 + ICS 外部日历订阅） -->
                     <div id="settings-section-calendarsync" data-page-node-id="IwvU5U3yx7IH00U0lOgofb">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-2" data-page-node-id="wZKvCV7yF7a41Y2eXlhsbc">外部日历同步</h3>
-                        <p class="text-xs text-theme-muted mb-4">配置WebDAV 云同步、ICS外部日历订阅功能</p>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="wZKvCV7yF7a41Y2eXlhsbc">外部日历同步</h3>
                         <button onclick="switchToCalendarSyncPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm" data-page-node-id="32IzHBwlTbJ9nB0vvgyNeX">
                             <i class="fas fa-sliders-h" data-page-node-id="3KsbgiybP6v211O3T1AQKz"></i>打开外部日历同步设置
                         </button>
@@ -6418,8 +6488,7 @@
                         <div class="space-y-4" data-page-node-id="8WUzltnwaoLZNjqOCaye0Q">
                             <div class="flex items-center justify-between" data-page-node-id="1muqJJA3zAPfmDpyrA9aTy">
                                 <div class="min-w-0 pr-3" data-page-node-id="YD5nAxGfZTwm05y20N2pjd">
-                                    <label class="text-sm font-medium text-theme-secondary" data-page-node-id="sJl9cp6O5bOKEDb7GicpT4">数据刷新间隔</label>
-                                    <p class="text-xs text-theme-muted" data-page-node-id="1de4Qp9fRraj4evrGLz8Us">从服务器同步数据的间隔时间</p>
+                                    <label class="text-sm font-medium text-theme-primary" data-page-node-id="sJl9cp6O5bOKEDb7GicpT4">数据刷新间隔</label>
                                 </div>
                                 <div class="flex items-center gap-2 flex-shrink-0" data-page-node-id="refreshWrap">
                                     <input type="number" id="settings-refresh-interval" min="5" max="300" value="30" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" data-page-node-id="FUj6ROMsZh9SCzxXJiqJJn">
@@ -6482,7 +6551,7 @@
                     
                     <!-- 数据管理 -->
                     <div id="settings-section-data" data-page-node-id="LndKU91pPkuWtBTQhrBEt2">
-                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="smINfwpKA2fsbGb4A7oVZG">数据管理</h3>
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4 flex items-center" data-page-node-id="smINfwpKA2fsbGb4A7oVZG">数据管理<i class="fas fa-info-circle text-theme-muted text-xs ml-1 cursor-help" title="导出为 ZIP 压缩包，包含：任务、清单、任务模板、专注记录、全部设置项、节假日数据、背景轮播配置，以及任务附件文件。不包含：WebDAV 账号与密码、背景轮播的图片本体（只记录目录路径）、服务端历史备份文件。自定义背景图与上传字体会以 base64 内嵌，附件按原文件打包，因此包体可能较大。导入会整体覆盖现有数据与附件，执行前会自动备份一份。"></i></h3>
                         <div class="space-y-4" data-page-node-id="YbQaYu3UWRPjqsMptnpn1c">
                             <div class="flex gap-3" data-page-node-id="GxWGJeXJraSa6zagLCCKZn">
                                 <label for="import-data" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 cursor-pointer" data-page-node-id="B01HEMFhEATmZyCLYUmb5S">
@@ -6491,7 +6560,7 @@
                                 <button onclick="exportData()" class="flex-1 px-4 py-3 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="CpHfhIAl327Ysfe8AsbGVO">
                                     <i class="fas fa-upload" data-page-node-id="WjFNUH1VsUHykJzmyGDiyu"></i>导出数据
                                 </button>
-                                <input type="file" id="import-data" accept=".json" class="hidden" onchange="importData(this.files[0])" data-page-node-id="zZyZOhvIGIqEvLPhmR2l9m">
+                                <input type="file" id="import-data" accept=".zip,.json" class="hidden" onchange="importData(this.files[0])" data-page-node-id="zZyZOhvIGIqEvLPhmR2l9m">
                             </div>
                             
                             <div class="pt-1" data-page-node-id="qZY8XignZEC8ivwFVJgxTp">
@@ -6502,31 +6571,44 @@
                                     </label>
                                 </div>
                                 <div class="space-y-3" data-page-node-id="Nka250n5324CiQfiVRudUq">
-                                    <div data-page-node-id="D3fORJ8N9Kp0TxkhzUuk4w">
-                                        <label class="block text-sm text-theme-secondary mb-1" data-page-node-id="ggAYR66kEDkzYrezoBdVA9">备份周期（天）</label>
-                                        <input type="number" id="backup-interval" min="1" max="365" value="7" class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" onchange="updateBackupSettings()" data-page-node-id="c7BP3ovcvCjcARc3Nlgtep">
+                                    <div class="flex items-center justify-between" data-page-node-id="D3fORJ8N9Kp0TxkhzUuk4w">
+                                        <div class="min-w-0 pr-3">
+                                            <label class="text-sm font-medium text-theme-primary" data-page-node-id="ggAYR66kEDkzYrezoBdVA9">备份周期</label>
+                                        </div>
+                                        <div class="flex items-center gap-2 flex-shrink-0">
+                                            <input type="number" id="backup-interval" min="1" max="365" value="7" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" onchange="updateBackupSettings()" data-page-node-id="c7BP3ovcvCjcARc3Nlgtep">
+                                            <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">天</span>
+                                        </div>
                                     </div>
-                                    <div data-page-node-id="vfoIwROyvzkZs6XesBzXDH">
-                                        <label class="block text-sm text-theme-secondary mb-1" data-page-node-id="IRchhtO6R9aNAQCHp8U3qZ">数据保留周期（天）</label>
-                                        <div class="flex gap-3" data-page-node-id="2yhuicllPoi5HMHToijNMa">
-                                            <input type="number" id="retention-period" min="0" max="365" value="30" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" onchange="updateBackupSettings()" data-page-node-id="QFL3SP5APWfQHj66HISxSU">
-                                            <button onclick="setRetentionToForever()" class="px-4 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm" data-page-node-id="v5WBj8YEnBCcv8xBUzm9uE">永久保存</button>
+                                    <div class="flex items-center justify-between" data-page-node-id="vfoIwROyvzkZs6XesBzXDH">
+                                        <div class="min-w-0 pr-3">
+                                            <label class="text-sm font-medium text-theme-primary" data-page-node-id="IRchhtO6R9aNAQCHp8U3qZ">数据保留周期</label>
+                                            <p class="text-xs text-theme-muted">填写 0 时为永久保留</p>
+                                        </div>
+                                        <div class="flex items-center gap-2 flex-shrink-0">
+                                            <input type="number" id="retention-period" min="0" max="365" value="30" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" onchange="updateBackupSettings()" data-page-node-id="QFL3SP5APWfQHj66HISxSU">
+                                            <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">天</span>
                                         </div>
                                     </div>
                                 </div>
-                                <p class="text-xs text-theme-muted mt-1" data-page-node-id="1uX4BaTRabRwVCFoKLSM2R">备份目录：<span id="backup-dir-path" data-page-node-id="IrKGZyq3LymECPtr36A2x8">加载中...</span></p>
+                                <p class="text-xs text-theme-muted mt-3" data-page-node-id="1uX4BaTRabRwVCFoKLSM2R">备份目录：<span id="backup-dir-path" data-page-node-id="IrKGZyq3LymECPtr36A2x8">加载中...</span></p>
                             </div>
 
                             <!-- 回收站（FR-02）：保留时长独立设置。新增节点刻意不带 data-page-node-id -->
                             <div class="pt-1">
-                                <label class="block text-sm text-theme-secondary mb-1">回收站保留时长（天）</label>
-                                <div class="flex gap-3">
-                                    <input type="number" id="trash-retention-days" min="0" max="365" value="30" class="flex-1 px-3 py-2 border-2 border-theme rounded-lg bg-theme-tertiary text-theme-primary focus:outline-none focus:border-accent" onchange="updateTrashRetentionSettings()">
-                                    <button onclick="setTrashRetentionToForever()" class="px-4 py-2 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-secondary text-sm">永久保留</button>
+                                <div class="flex items-center justify-between">
+                                    <div class="min-w-0 pr-3">
+                                        <label class="text-sm font-medium text-theme-primary">回收站保留时长</label>
+                                        <p class="text-xs text-theme-muted">填写 0 时为永久保留</p>
+                                    </div>
+                                    <div class="flex items-center gap-2 flex-shrink-0">
+                                        <input type="number" id="trash-retention-days" min="0" max="365" value="30" class="w-20 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-center" onchange="updateTrashRetentionSettings()">
+                                        <span class="text-sm text-theme-secondary inline-block w-12 text-left flex-shrink-0">天</span>
+                                    </div>
                                 </div>
                             </div>
                             
-                            <p class="text-xs text-theme-muted" data-page-node-id="craWiizOcoMUe6aOjPnwGn">数据将导出为 JSON 格式文件，包含所有任务、清单和配置信息。导入时请选择之前导出的 JSON 文件。</p>
+                            <p class="text-xs text-theme-muted" data-page-node-id="craWiizOcoMUe6aOjPnwGn">数据将导出为 ZIP 压缩包（含任务附件）。导入时请选择此前导出的 ZIP 文件，也兼容旧版 JSON 备份。</p>
                             
                             <div class="mt-4" data-page-node-id="cCRFhS8rDSKqO7027S7IwZ">
                                 <div class="flex items-center justify-between" data-page-node-id="52YPPzXHyCTUGo5fSZb7tj">

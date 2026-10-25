@@ -22,6 +22,8 @@ import socket
 import re
 import uuid
 import mimetypes
+import tempfile
+import zipfile
 
 import urllib.parse
 import urllib.request
@@ -547,6 +549,263 @@ def restore_extended_backup_fields(data):
         except Exception as e:
             print("Restore bg carousel config error: %s" % str(e))
 
+# ==================== 导出 / 备份（单一内容来源 + zip 打包附件） ====================
+# 背景：导出（用户主动下载）与服务端备份（自动/重置前）曾是两套实现，
+# POST /api/backup 漏掉了扩展字段，导致"自动备份恢复后归档专注历史/节假日/
+# 轮播配置丢失"。现统一由 build_export_payload() 构造内容，export 与 backup
+# 只是"投递方式"不同。
+# 附件（FR-06）二进制不在 data.json 内，此前完全不进备份包；现改为 zip：
+#   schedule-backup-YYYY-MM-DD.zip
+#   ├── data.json                 （与 JSON 导出内容完全一致）
+#   └── attachments/<taskId>/<fileId>_<name>
+EXPORT_FORMAT_VERSION = '4.0'
+# 导入包体积上限：附件单文件 20MB，留足多任务空间；同时避免异常包耗尽内存
+IMPORT_MAX_BYTES = 512 * 1024 * 1024
+EXPORT_ZIP_NAME = 'schedule-backup-%s.zip'
+
+
+def build_export_payload():
+    """构造导出/备份的完整数据对象 —— 唯一来源，export 与 backup 不得各自拼装。"""
+    export_data = dict(load_data_from_file())
+    export_data.update(collect_extended_backup_fields())
+    export_data['version'] = EXPORT_FORMAT_VERSION
+    export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    return export_data
+
+
+def iter_attachment_files():
+    """遍历附件目录，产出 (arcname, filepath)；arcname 固定 attachments/<taskId>/<file>。"""
+    if not os.path.isdir(ATTACHMENT_DIR):
+        return
+    for task_id in sorted(os.listdir(ATTACHMENT_DIR)):
+        folder = os.path.join(ATTACHMENT_DIR, task_id)
+        if not os.path.isdir(folder):
+            continue
+        safe_task = attachment_safe_id(task_id)
+        if not safe_task:
+            continue
+        for fname in sorted(os.listdir(folder)):
+            fp = os.path.join(folder, fname)
+            if os.path.isfile(fp):
+                yield 'attachments/%s/%s' % (safe_task, fname), fp
+
+
+def write_export_zip(zip_path, export_data):
+    """把导出数据与全部任务附件写成一个 zip。
+
+    附件一律 STORED（图片/PDF/office 本身已压缩，重复 deflate 只增加耗时）；
+    data.json 单独 DEFLATED。返回 (附件文件数, 附件原始字节数)。
+    """
+    count = 0
+    total = 0
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED, allowZip64=True) as zf:
+        zf.writestr('data.json', json.dumps(export_data, ensure_ascii=False, indent=2),
+                    compress_type=zipfile.ZIP_DEFLATED)
+        for arcname, fp in iter_attachment_files():
+            try:
+                zf.write(fp, arcname)
+                count += 1
+                total += os.path.getsize(fp)
+            except OSError as e:
+                # 单个附件读失败不阻断整包导出（例如被其他进程占用）
+                print("Skip attachment in export: %s (%s)" % (fp, str(e)))
+    return count, total
+
+
+def build_export_zip_tempfile(export_data):
+    """生成临时 zip 文件并返回路径；调用方负责 os.remove。"""
+    fd, path = tempfile.mkstemp(prefix='tacklist-export-', suffix='.zip')
+    os.close(fd)
+    try:
+        write_export_zip(path, export_data)
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def create_backup_file():
+    """生成一份完整备份（zip：data.json + attachments/），返回文件名。
+
+    GET /api/backup 与 POST /api/backup 共用 —— 两条路径曾各自实现，
+    POST 版漏了扩展字段，导致自动备份恢复后丢归档专注历史/节假日/轮播配置。
+    """
+    export_data = build_export_payload()
+    if not os.path.exists(BACKUP_DIR):
+        os.makedirs(BACKUP_DIR)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    filename = 'schedule-backup-%s.zip' % stamp
+    filepath = os.path.join(BACKUP_DIR, filename)
+    # 同一秒内重复触发（手动 + 自动备份撞车）时加序号，不覆盖既有备份
+    seq = 1
+    while os.path.exists(filepath):
+        filename = 'schedule-backup-%s-%d.zip' % (stamp, seq)
+        filepath = os.path.join(BACKUP_DIR, filename)
+        seq += 1
+    write_export_zip(filepath, export_data)
+    return filename
+
+
+# ==================== 导入（JSON / zip 共用核心） ====================
+# 导入是"全量还原"语义：data.json 整体覆盖，附件目录整体替换。
+# 破坏性操作的顺序刻意设计为：先在临时目录解压并校验 → 再替换，
+# 校验失败时磁盘上不产生任何改动。
+IMPORT_ATTACHMENT_PREFIX = 'attachments/'
+
+
+def sanitize_import_settings(settings_obj):
+    """导入时保留本机专属配置，避免跨机覆盖。
+
+    - port / bindAddress 属设备级：A 机的端口带过来会让设置面板与实际监听不一致；
+    - _lastBackupDate 属本机运行时状态：带过来会让「距上次备份 N 天」误判为刚备份过，
+      导致换机后长期不再自动备份（删掉最多多备份一次，代价远小于漏备份）。
+      `_backupEnabledDate` 只影响「启用当天不备份」一个判断，保留原值即可。
+    """
+    if not isinstance(settings_obj, dict):
+        return settings_obj
+    try:
+        current = (load_data_from_file().get('settings') or {})
+    except Exception:
+        current = {}
+    for key in ('port', 'bindAddress'):
+        if key in current:
+            settings_obj[key] = current[key]
+        else:
+            settings_obj.pop(key, None)
+    settings_obj.pop('_lastBackupDate', None)
+    return settings_obj
+
+
+def validate_import_payload(data):
+    """结构校验：tasks / taskLists 允许为空数组（空数据集的备份同样合法）。"""
+    if not isinstance(data, dict):
+        return False, 'Invalid data format'
+    has_tasks = isinstance(data.get('tasks'), list)
+    has_lists = isinstance(data.get('taskLists'), list) or isinstance(data.get('lists'), list)
+    if not (has_tasks or has_lists):
+        return False, 'Invalid data format'
+    return True, None
+
+
+def apply_import_payload(data):
+    """把导入数据落到 data.json 与各扩展文件；返回 (ok, error)。"""
+    ok, err = validate_import_payload(data)
+    if not ok:
+        return False, err
+    # 剥离扩展字段后写入 data.json；扩展字段单独还原到各自文件/目录。
+    # 同时剔除导出时附加的元数据键（version/exportDate），避免污染 data.json
+    main_data = {k: v for k, v in data.items()
+                 if k not in ('pomodoroArchive', 'holidayData', 'bgCarousel',
+                              'version', 'exportDate')}
+    if isinstance(main_data.get('settings'), dict):
+        sanitize_import_settings(main_data['settings'])
+    # 持锁写盘并抬高版本号：与其他标签页的版本检查互斥，防止导入后
+    # 被携带旧版本号的全量 PUT 覆盖（与 PUT /api data 的锁序一致）
+    with data_lock:
+        save_data_to_file(main_data)
+        _bump_data_version()
+    # 服务端内存番茄配置同步：PUT /api/data 有此逻辑，导入此前遗漏，
+    # 会让后台 tick 继续按旧时长判断 autoBreak / autoFocus
+    s = main_data.get('settings') or {}
+    with pomodoro_lock:
+        pomodoro_state['focusDuration'] = s.get('focusDuration', pomodoro_state.get('focusDuration', 25))
+        pomodoro_state['shortBreakDuration'] = s.get('shortBreakDuration', pomodoro_state.get('shortBreakDuration', 5))
+        pomodoro_state['longBreakDuration'] = s.get('longBreakDuration', pomodoro_state.get('longBreakDuration', 15))
+        pomodoro_state['longBreakInterval'] = s.get('longBreakInterval', pomodoro_state.get('longBreakInterval', 4))
+        pomodoro_state['autoBreak'] = s.get('autoBreak', pomodoro_state.get('autoBreak', False))
+        pomodoro_state['autoFocus'] = s.get('autoFocus', pomodoro_state.get('autoFocus', False))
+    restore_extended_backup_fields(data)
+    return True, None
+
+
+def replace_attachment_dir(new_dir):
+    """用 new_dir 整体替换 ATTACHMENT_DIR（先备份旧目录，失败回滚）。"""
+    backup_dir = ATTACHMENT_DIR + '.bak'
+    if os.path.isdir(backup_dir):
+        shutil.rmtree(backup_dir, ignore_errors=True)
+    had_old = os.path.isdir(ATTACHMENT_DIR)
+    if had_old:
+        os.replace(ATTACHMENT_DIR, backup_dir)
+    try:
+        os.replace(new_dir, ATTACHMENT_DIR)
+    except Exception:
+        # 替换失败：把旧目录放回去，避免导入半途丢失全部附件
+        if had_old and not os.path.isdir(ATTACHMENT_DIR):
+            try:
+                os.replace(backup_dir, ATTACHMENT_DIR)
+            except Exception:
+                pass
+        raise
+    if had_old:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def import_from_zip(zip_path):
+    """解析导入 zip（data.json + attachments/），返回 (ok, error)。
+
+    安全性：只接受根目录 data.json 与 attachments/<safeId>/<file> 三类成员，
+    其余（__MACOSX、绝对路径、.. 穿越、多级目录）一律忽略，绝不按成员名拼盘符。
+    """
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+            if 'data.json' not in names:
+                return False, 'data.json not found in zip'
+            att_members = []
+            for name in names:
+                norm = name.replace('\\', '/')
+                if norm == 'data.json' or norm.endswith('/'):
+                    continue
+                parts = norm.split('/')
+                if len(parts) != 3 or parts[0] != 'attachments':
+                    continue
+                task_id = attachment_safe_id(parts[1])
+                fname = attachment_safe_name(parts[2])
+                if not task_id or not fname or parts[2] in ('.', '..'):
+                    continue
+                att_members.append((name, task_id, fname))
+            try:
+                data = json.loads(zf.read('data.json').decode('utf-8'))
+            except Exception:
+                return False, 'Invalid data.json in zip'
+            ok, err = validate_import_payload(data)
+            if not ok:
+                return False, err
+            # 解压到临时目录（与 attachments 同盘，os.replace 才是原子 rename）
+            tmp_root = tempfile.mkdtemp(prefix='.import-attachments-', dir=DIRECTORY)
+            tmp_att = os.path.join(tmp_root, 'attachments')
+            os.makedirs(tmp_att, exist_ok=True)
+            try:
+                for name, task_id, fname in att_members:
+                    folder = os.path.join(tmp_att, task_id)
+                    os.makedirs(folder, exist_ok=True)
+                    with zf.open(name) as src, open(os.path.join(folder, fname), 'wb') as dst:
+                        shutil.copyfileobj(src, dst, 256 * 1024)
+            except Exception as e:
+                shutil.rmtree(tmp_root, ignore_errors=True)
+                return False, 'Extract attachments failed: %s' % str(e)
+    except zipfile.BadZipFile:
+        return False, 'Not a valid zip file'
+    except Exception as e:
+        return False, 'Read zip failed: %s' % str(e)
+
+    try:
+        ok, err = apply_import_payload(data)
+        if not ok:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            return False, err
+        # 数据已落盘，再替换附件目录（顺序不可颠倒：数据失败时不毁附件）
+        replace_attachment_dir(tmp_att)
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        return True, None
+    except Exception as e:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        return False, 'Import failed: %s' % str(e)
+
+
 # ==================== WebDAV 手动同步 ====================
 # 使用场景：电脑与手机各自运行一份本系统，两端配置同一个 WebDAV 地址（坚果云、
 # Nextcloud 等），在设置面板手动「上传到云端 / 从云端下载」即可完成数据同步。
@@ -710,16 +969,37 @@ def webdav_probe_cloud(cfg):
         return False, None, None, str(e)
 
 
-def _webdav_touch_sync_state(key):
-    """记录最近一次上传/下载时间，便于在设置面板展示同步状态。"""
+def _webdav_touch_sync_state(key, probe_state=None):
+    """记录最近一次上传/下载时间，便于在设置面板展示同步状态。
+
+    probe_state 用于顺手刷新主视图「同步」入口的配色缓存：刚完成上传/下载后
+    两端即视为已同步，避免下次打开页面仍显示「待上传 / 待下载」。
+    """
     try:
         cfg = load_webdav_config()
         if not cfg:
             return
         cfg[key] = datetime.now().astimezone().isoformat(timespec='seconds')
+        if probe_state:
+            cfg['lastProbeState'] = probe_state
+            cfg['lastProbeAt'] = cfg[key]
         save_webdav_config(cfg)
     except Exception as e:
         print("Webdav sync state error: %s" % str(e))
+
+
+def _webdav_cache_probe_state(state):
+    """缓存最近一次联网探测结果，供主视图「同步」入口在不联网时显示配色。"""
+    try:
+        with webdav_lock:
+            cfg = load_webdav_config()
+            if not cfg or cfg.get('lastProbeState') == state:
+                return
+            cfg['lastProbeState'] = state
+            cfg['lastProbeAt'] = datetime.now().astimezone().isoformat(timespec='seconds')
+            save_webdav_config(cfg)
+    except Exception as e:
+        print("Cache webdav probe state error: %s" % str(e))
 
 
 def _webdav_parse_time(value, http_date=False):
@@ -810,6 +1090,10 @@ def webdav_status():
             elif exists is True:
                 state = _webdav_sync_state(local_modified, cloud_modified, cfg)
 
+    if configured:
+        # 缓存探测结果，供主视图「同步」入口免联网显示配色
+        _webdav_cache_probe_state(state)
+
     return {
         'configured': configured,
         'config': {'url': url, 'username': username, 'hasPassword': has_password,
@@ -822,6 +1106,27 @@ def webdav_status():
         'lastPullAt': cfg.get('lastPullAt'),
         'message': err,
         'state': state,
+    }
+
+
+def webdav_config_summary():
+    """主视图「同步」入口使用的轻量状态：只读本地配置，不联网探测。
+
+    与 webdav_status 的区别：不访问云端，响应在毫秒级，可随页面加载调用；
+    颜色所需的 state 取自上次探测的缓存值，真正联网探测由展开面板时另行触发。
+    """
+    with webdav_lock:
+        cfg = load_webdav_config()
+    url = (cfg.get('url') or '').strip()
+    username = (cfg.get('username') or '').strip()
+    has_password = bool(cfg.get('password'))
+    configured = bool(url and username and has_password)
+    return {
+        'configured': configured,
+        'lastPushAt': cfg.get('lastPushAt'),
+        'lastPullAt': cfg.get('lastPullAt'),
+        'cachedState': (cfg.get('lastProbeState') or '') if configured else 'unconfigured',
+        'lastProbeAt': cfg.get('lastProbeAt'),
     }
 
 
@@ -1035,7 +1340,7 @@ def webdav_push_data(cfg):
             return {'ok': False, 'message': '上传失败：%s（%s）' % (str(e), type(e).__name__)}
         if not (200 <= status < 300):
             return {'ok': False, 'message': '上传失败（HTTP %d）' % status}
-        _webdav_touch_sync_state('lastPushAt')
+        _webdav_touch_sync_state('lastPushAt', 'in-sync')
         ics_ok, ics_msg = webdav_push_ics(cfg)
         msg = '上传成功，云端数据已更新（%d 个任务）' % len(export_data.get('tasks') or [])
         msg += '；' + (ics_msg if ics_ok else '但提醒日历同步失败：%s' % ics_msg)
@@ -1116,7 +1421,7 @@ def webdav_pull_data(cfg):
             pomodoro_state['autoBreak'] = s.get('autoBreak', pomodoro_state.get('autoBreak', False))
             pomodoro_state['autoFocus'] = s.get('autoFocus', pomodoro_state.get('autoFocus', False))
 
-        _webdav_touch_sync_state('lastPullAt')
+        _webdav_touch_sync_state('lastPullAt', 'in-sync')
         msg = '下载成功，已用云端数据覆盖本地（%d 个任务）' % len(main_data.get('tasks') or [])
         if backup_name:
             msg += '；覆盖前的本地数据已备份为 backups/%s' % backup_name
@@ -1493,7 +1798,12 @@ def _safe_iana(tzid):
 
 def _resolve_ical_dt(prop):
     """icalendar 的 vDDDTypes 属性 → (iso_string, is_all_day)。
-    全天事件返回 (date 的本地 00:00 iso, True)；带时间事件返回 (本地时区 iso, False)。"""
+
+    返回值恒为**带时区的本地时间** ISO（如 2026-11-22T00:00:00+08:00）：
+    - 带时间事件 → 本地时区 iso，is_all_day=False
+    - 全天事件 → 本地 00:00 的 iso，is_all_day=True
+    调用方因此可以安全地与 aware 的同步窗口比较。
+    """
     import datetime as _dt
     if prop is None:
         return None, True
@@ -1515,11 +1825,15 @@ def _resolve_ical_dt(prop):
                 except Exception:
                     pass
     if isinstance(dt, _dt.datetime):
-        local = dt.astimezone() if dt.tzinfo else dt
+        # 浮动时间（无 TZID、无 Z）按 RFC 5545 视为「观察者本地时间」，
+        # 必须补上本地时区：否则产出 naive ISO，与同步窗口的 aware 边界比较时会抛
+        # TypeError: can't compare offset-naive and offset-aware datetimes。
+        local = dt.astimezone()
         return local.isoformat(), False
     elif isinstance(dt, _dt.date):
         from datetime import datetime as _dtt
-        local = _dtt(dt.year, dt.month, dt.day)
+        # 全天事件取本地 00:00，同样补上本地时区（同一原因）
+        local = _dtt(dt.year, dt.month, dt.day).astimezone()
         return local.isoformat(), True
     return None, True
 
@@ -1647,22 +1961,26 @@ def _do_calendar_sync():
             continue
 
         # 解析所有 VEVENT（含黑名单跳过、CANCELLED 跳过、时间窗口过滤）
+        # 单条事件解析异常（异常 TZID、损坏属性等）只跳过该条，不影响整源与其它订阅
         events = []
         for comp in cal.walk('VEVENT'):
-            status = str(comp.get('STATUS', '') or '').upper()
-            if status == 'CANCELLED':
-                continue
-            ev_uid = str(comp.get('UID', '') or '')
-            if ev_uid in deleted_uids:
-                continue
-            start_iso, _is_all_day = _resolve_ical_dt(comp.get('DTSTART'))
-            if not start_iso:
-                continue
             try:
+                status = str(comp.get('STATUS', '') or '').upper()
+                if status == 'CANCELLED':
+                    continue
+                ev_uid = str(comp.get('UID', '') or '')
+                if ev_uid in deleted_uids:
+                    continue
+                start_iso, _is_all_day = _resolve_ical_dt(comp.get('DTSTART'))
+                if not start_iso:
+                    continue
                 start_dt = parse_iso_datetime(start_iso)
+                # 兜底：任何来源的 naive 时间都按本地时区补齐，避免窗口比较抛 TypeError
+                if start_dt.tzinfo is None:
+                    start_dt = start_dt.astimezone()
+                if start_dt < window_start or start_dt > window_end:
+                    continue
             except Exception:
-                continue
-            if start_dt < window_start or start_dt > window_end:
                 continue
             events.append(comp)
 
@@ -2734,6 +3052,25 @@ class TodoHandler(BaseHTTPRequestHandler):
     def send_error_json(self, message, status=400):
         self.send_json_response({"error": message}, status)
 
+    def send_file_download(self, filepath, download_name, content_type):
+        """分块下发文件（导出 zip / 备份下载），避免整包读进内存。
+
+        Content-Length 用 ascii 安全的 filename* 兜底：备份文件名目前都是 ASCII，
+        但导出的中文文件名一旦出现，裸 filename= 在部分浏览器会乱码。
+        """
+        size = os.path.getsize(filepath)
+        safe_name = urllib.parse.quote(download_name, safe='')
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Disposition',
+                         "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (download_name, safe_name))
+        self.send_header('Content-Length', str(size))
+        self.send_cors_headers()
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.end_headers()
+        with open(filepath, 'rb') as f:
+            shutil.copyfileobj(f, self.wfile, 256 * 1024)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_cors_headers()
@@ -2926,39 +3263,46 @@ class TodoHandler(BaseHTTPRequestHandler):
             self.send_json_response(webdav_status())
             return
 
-        if path == '/api/export':
-            data = load_data_from_file()
-            export_data = dict(data)
-            # 聚合扩展数据：归档专注历史 + 节假日数据（不在 data.json 内，需单独收集）
-            export_data.update(collect_extended_backup_fields())
-            export_data['version'] = '4.0'
-            export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-            body = json.dumps(export_data, ensure_ascii=False, indent=2).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="schedule-backup-%s.json"' % datetime.now(timezone.utc).strftime('%Y-%m-%d'))
-            self.send_header('Content-Length', str(len(body)))
-            self.send_cors_headers()
-            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-            self.end_headers()
-            self.wfile.write(body)
+        # WebDAV 轻量状态：主视图「同步」入口用，只读本地配置、不联网
+        if path == '/api/webdav/config/summary':
+            self.send_json_response(webdav_config_summary())
             return
 
-        # 服务端备份：保存到 backups 目录
+        if path == '/api/export':
+            export_data = build_export_payload()
+            fmt = (urllib.parse.parse_qs(parsed.query).get('format') or ['zip'])[0].lower()
+            if fmt == 'json':
+                # 兼容旧入口/脚本：只取结构化数据（不含附件二进制）
+                body = json.dumps(export_data, ensure_ascii=False, indent=2).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Disposition', 'attachment; filename="schedule-backup-%s.json"' % datetime.now(timezone.utc).strftime('%Y-%m-%d'))
+                self.send_header('Content-Length', str(len(body)))
+                self.send_cors_headers()
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            # 默认 zip：data.json + attachments/（附件此前完全不进导出包）
+            tmp_path = build_export_zip_tempfile(export_data)
+            try:
+                self.send_file_download(tmp_path, EXPORT_ZIP_NAME % datetime.now().strftime('%Y-%m-%d'),
+                                        'application/zip')
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            return
+
+        # 服务端备份：保存到 backups 目录（zip，含附件）
         if path == '/api/backup':
-            data = load_data_from_file()
-            export_data = dict(data)
-            # 与导出一致：备份同样包含归档专注历史与节假日数据
-            export_data.update(collect_extended_backup_fields())
-            export_data['version'] = '4.0'
-            export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-            if not os.path.exists(BACKUP_DIR):
-                os.makedirs(BACKUP_DIR)
-            filename = 'schedule-backup-%s.json' % datetime.now().strftime('%Y%m%d-%H%M%S')
-            filepath = os.path.join(BACKUP_DIR, filename)
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, ensure_ascii=False, indent=2)
-            self.send_json_response({'success': True, 'filename': filename})
+            try:
+                filename = create_backup_file()
+                self.send_json_response({'success': True, 'filename': filename})
+            except Exception as e:
+                print("Backup error: %s" % str(e))
+                self.send_json_response({'success': False, 'error': str(e)})
             return
 
         # 备份文件列表
@@ -2968,7 +3312,8 @@ class TodoHandler(BaseHTTPRequestHandler):
                 return
             files = []
             for f in sorted(os.listdir(BACKUP_DIR)):
-                if f.endswith('.json'):
+                # .zip = 当前格式（含附件）；.json = 历史备份，一并列出以便用户自行取用
+                if f.endswith('.json') or f.endswith('.zip'):
                     fp = os.path.join(BACKUP_DIR, f)
                     st = os.stat(fp)
                     files.append({
@@ -2988,16 +3333,8 @@ class TodoHandler(BaseHTTPRequestHandler):
             if not os.path.exists(filepath):
                 self.send_error_json("Backup not found", 404)
                 return
-            with open(filepath, 'rb') as f:
-                body = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Disposition', 'attachment; filename="%s"' % filename)
-            self.send_header('Content-Length', str(len(body)))
-            self.send_cors_headers()
-            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-            self.end_headers()
-            self.wfile.write(body)
+            ctype = 'application/zip' if filename.endswith('.zip') else 'application/json; charset=utf-8'
+            self.send_file_download(filepath, filename, ctype)
             return
 
         if path == '/' or path == '':
@@ -3177,11 +3514,18 @@ class TodoHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         # 任务附件删除（FR-06）：
-        #   DELETE /api/attachments/<taskId>/<fileId>  删单个文件
-        #   DELETE /api/attachments/task/<taskId>      删整个目录（任务被永久删除时级联，C6-3）
+        #   DELETE /api/attachments                      清空全部附件（重置数据时级联）
+        #   DELETE /api/attachments/<taskId>/<fileId>    删单个文件
+        #   DELETE /api/attachments/task/<taskId>        删整个目录（任务被永久删除时级联，C6-3）
         try:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
+            if path == '/api/attachments':
+                # 重置数据：任务集清空后附件目录里的文件已成孤儿，一并清掉
+                if os.path.isdir(ATTACHMENT_DIR):
+                    shutil.rmtree(ATTACHMENT_DIR, ignore_errors=True)
+                self.send_json_response({'success': True})
+                return
             if path.startswith('/api/attachments/task/'):
                 task_id = attachment_safe_id(urllib.parse.unquote(path[len('/api/attachments/task/'):]))
                 if not task_id:
@@ -3378,18 +3722,11 @@ class TodoHandler(BaseHTTPRequestHandler):
             # 服务端备份
             if path == '/api/backup':
                 try:
-                    data = load_data_from_file()
-                    export_data = dict(data)
-                    export_data['version'] = '4.0'
-                    export_data['exportDate'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-                    if not os.path.exists(BACKUP_DIR):
-                        os.makedirs(BACKUP_DIR)
-                    filename = 'schedule-backup-%s.json' % datetime.now().strftime('%Y%m%d-%H%M%S')
-                    filepath = os.path.join(BACKUP_DIR, filename)
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        json.dump(export_data, f, ensure_ascii=False, indent=2)
+                    # 与 GET /api/export 同一份内容来源（含扩展字段 + 附件 zip）
+                    filename = create_backup_file()
                     self.send_json_response({'success': True, 'filename': filename})
                 except Exception as e:
+                    print("Backup error: %s" % str(e))
                     self.send_json_response({'success': False, 'error': str(e)})
                 return
 
@@ -3413,7 +3750,7 @@ class TodoHandler(BaseHTTPRequestHandler):
                 cutoff = now.timestamp() - retention_days * 24 * 60 * 60
                 deleted = 0
                 for f in os.listdir(BACKUP_DIR):
-                    if f.endswith('.json'):
+                    if f.endswith('.json') or f.endswith('.zip'):
                         fp = os.path.join(BACKUP_DIR, f)
                         if os.path.getmtime(fp) < cutoff:
                             os.remove(fp)
@@ -4184,21 +4521,46 @@ class TodoHandler(BaseHTTPRequestHandler):
                 except Exception:
                     self.send_error_json("Invalid JSON", 400)
                     return
-                if not isinstance(data, dict) or not (data.get('tasks') or data.get('taskLists') or data.get('lists')):
-                    self.send_error_json("Invalid data format", 400)
+                ok, err = apply_import_payload(data)
+                if not ok:
+                    self.send_error_json(err or 'Invalid data format', 400)
                     return
-                # 剥离扩展字段后写入 data.json；扩展字段单独还原到各自文件/目录。
-                # 同时剔除导出时附加的元数据键（version/exportDate），避免污染 data.json
-                main_data = {k: v for k, v in data.items()
-                             if k not in ('pomodoroArchive', 'holidayData', 'bgCarousel',
-                                          'version', 'exportDate')}
-                # 持锁写盘并抬高版本号：与其他标签页的版本检查互斥，防止导入后
-                # 被携带旧版本号的全量 PUT 覆盖（与 PUT /api data 的锁序一致）
-                with data_lock:
-                    save_data_to_file(main_data)
-                    _bump_data_version()
-                restore_extended_backup_fields(data)
-                self.send_json_response({"status": "ok"})
+                # 纯 JSON 导入不含附件文件，提示调用方（前端据此提醒用户）
+                self.send_json_response({"status": "ok", "attachmentsIncluded": False})
+                return
+
+            # zip 导入（导出/备份包）：data.json + attachments/ 一并还原
+            if path == '/api/import/zip':
+                try:
+                    content_length = int(self.headers.get('Content-Length', 0))
+                except ValueError:
+                    content_length = 0
+                if content_length <= 0:
+                    self.send_error_json("Empty body", 400)
+                    return
+                if content_length > IMPORT_MAX_BYTES:
+                    self.send_error_json("File too large", 413)
+                    return
+                tmp_fd, tmp_zip = tempfile.mkstemp(prefix='tacklist-import-', suffix='.zip')
+                try:
+                    with os.fdopen(tmp_fd, 'wb') as f:
+                        remaining = content_length
+                        while remaining > 0:
+                            chunk = self.rfile.read(min(256 * 1024, remaining))
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            remaining -= len(chunk)
+                    ok, err = import_from_zip(tmp_zip)
+                finally:
+                    try:
+                        os.remove(tmp_zip)
+                    except OSError:
+                        pass
+                if not ok:
+                    self.send_error_json(err or 'Import failed', 400)
+                    return
+                self.send_json_response({"status": "ok", "attachmentsIncluded": True})
                 return
 
             if path == '/api/holiday-data':

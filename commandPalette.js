@@ -2373,8 +2373,11 @@ function createTaskFromNLP(parsed) {
 // ⚠️ 迁移后**不再保留任何无修饰键的默认键位**：单键在浏览界面时极易误触（敲一下就弹新建任务）。
 // ⚠️ 命名空间分两族（2026-10-17 最终方案，用户拍板）：
 //     · 动作类（newTask / searchTasks / editCurrentTask / filterToday / shortcutsHelp / commandPalette / togglePomodoro）
-//       → 统一 **Ctrl+Alt+字母**。其中命令面板从 Ctrl+Alt+N 挪到 **Ctrl+Alt+K**（沿用 GitHub 式
-//       「命令面板 = K」惯例），把 N 让给「新建任务」，避免二者在 Ctrl+Alt 命名空间撞车。
+//       → 统一 **Ctrl+Alt+字母**。
+//       ⚠️ 2026-10-25 调整：「新建任务」与「命令面板」默认键位**对调** ——
+//          命令面板 = **Ctrl+Alt+N**（N 视作「新建入口」：一句话新建任务的主通道），
+//          新建任务 = **Ctrl+Alt+K**。二者仍同处 Ctrl+Alt 命名空间，无冲突（Ctrl+Alt+K ≠ Alt+K 看板）。
+//          改这里就够了：帮助浮层、设置面板键位按钮、引导文案都从这里派生，不要再硬编码键位字母。
 //     · 视图类（viewTask~viewQuadrant + viewKanban + viewSummary）→ 统一 **Alt**（Alt+1~5 数字 + Alt+K 看板 + Alt+S 摘要）。
 //       Alt+K / Alt+S 在主流浏览器均非菜单栏加速键（危险的是 Alt+F/E/T/H/V/B，已被赶到 Ctrl+Alt 命名空间），
 //       故视图用裸 Alt+字母是安全的；而动作类一律 Ctrl+Alt，彻底避开浏览器菜单截胡。
@@ -2383,9 +2386,9 @@ function createTaskFromNLP(parsed) {
 //    关闭浮层 / 面板 Esc。二者只在帮助浮层里静态展示。
 // ⚠️ 「完成 / 取消完成当前任务」的 Space 快捷键已整体移除：完成态只能通过勾选框修改。
 const DEFAULT_SHORTCUTS = {
-    commandPalette:  { ctrl: true,  alt: true,  shift: false, key: 'k', label: '命令面板' },
+    commandPalette:  { ctrl: true,  alt: true,  shift: false, key: 'n', label: '命令面板' },
     togglePomodoro:  { ctrl: true,  alt: true,  shift: false, key: 'p', label: '番茄专注' },
-    newTask:         { ctrl: true,  alt: true,  shift: false, key: 'n', label: '新建任务' },
+    newTask:         { ctrl: true,  alt: true,  shift: false, key: 'k', label: '新建任务' },
     searchTasks:     { ctrl: true,  alt: true,  shift: false, key: 'f', label: '搜索任务' },
     editCurrentTask: { ctrl: true,  alt: true,  shift: false, key: 'e', label: '编辑当前任务' },
     filterToday:     { ctrl: true,  alt: true,  shift: false, key: 't', label: '今天' },
@@ -2537,7 +2540,7 @@ function _shortcutSwitchView(view) {
     switchView(view);
 }
 
-// `/` 键：打开命令面板并预填 /s 进入搜索态（FR-08 入口）
+// 搜索任务（默认 Ctrl+Alt+F，原 `/` 单键已移除）：打开命令面板并预填 /s 进入搜索态（FR-08 入口）
 function openCommandPaletteWithSearch() {
     openCommandPalette();
     const input = document.getElementById('command-palette-input');
@@ -2709,7 +2712,7 @@ function renderShortcutsSettings() {
         html += `
             <div class="flex flex-col gap-1 min-w-0" data-shortcut-key="${key}">
                 <div class="flex items-center gap-1 min-w-0">
-                    <span class="flex-1 min-w-0 truncate text-xs text-theme-secondary" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+                    <span class="flex-1 min-w-0 truncate text-xs font-medium text-theme-secondary" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
                     <span class="flex-shrink-0 w-5 inline-flex items-center justify-center ${isShortcutDefault(key) ? 'invisible' : ''}"><button class="p-0.5 text-theme-muted hover:text-theme-primary transition" onclick="resetShortcut('${key}')" title="重置为默认"><i class="fas fa-undo text-xs"></i></button></span>
                 </div>
                 <button class="shortcut-record-btn w-full px-2 py-1.5 text-xs border rounded-lg transition text-center truncate ${btnClass}"

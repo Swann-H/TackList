@@ -803,6 +803,15 @@ function renderTaskListView(container) {
 
     if (groups.length === 0) {
         _teardownTaskListVirtualScroll();
+        // 空态快捷键提示：键位从 commandPalette.js 的注册表派生（用户自定义过也跟随），
+        // 避免与帮助浮层 / 设置面板里的键位对不上。取不到才回落到写死的默认串。
+        const _scHint = (actionKey, fallback) => {
+            if (typeof getShortcutCombo === 'function' && typeof formatShortcut === 'function') {
+                const combo = getShortcutCombo(actionKey);
+                if (combo && combo.key) return formatShortcut(combo).replace(/\+/g, ' + ');
+            }
+            return fallback;
+        };
         container.innerHTML = `
             <div class="flex flex-col items-center justify-center py-16 text-theme-muted">
                 <i class="fas fa-clipboard-list text-6xl mb-4 opacity-30"></i>
@@ -814,7 +823,7 @@ function renderTaskListView(container) {
                     <button onclick="event.stopPropagation(); showAddListInput()" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">新建清单</button>
                     <button onclick="if (typeof startOnboarding === 'function') startOnboarding(true)" class="px-4 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm">重看新手引导</button>
                 </div>
-                <p class="text-xs mt-5">Ctrl + Alt + N 新建任务，Ctrl + Alt + K 打开命令面板；也可输入 * 调用模板。</p>
+                <p class="text-xs mt-5">${_scHint('newTask', 'Ctrl + Alt + K')} 新建任务，${_scHint('commandPalette', 'Ctrl + Alt + N')} 打开命令面板；也可输入 * 调用模板。</p>
             </div>
         `;
         updateToggleAllGroupsButton(groups);

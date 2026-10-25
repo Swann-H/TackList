@@ -146,6 +146,17 @@ function _obRemoveDemoData() {
 // —— 步骤定义 ——
 function _obBuildSteps() {
     const kbd = (k) => `<kbd class="px-1 py-0.5 bg-theme-tertiary text-theme-muted rounded text-[10px]">${k}</kbd>`;
+    // 键位徽标：从「设置 → 快捷键」的生效键位派生（commandPalette.js 的注册表是唯一来源），
+    // 用户改过键位时引导文案自动跟随；取不到（未加载 / 已停用）才回落到写死的默认串。
+    // ⚠️ 不要在步骤文案里硬编码键位字母，否则改了默认键位就会和帮助浮层、设置面板对不上。
+    const kbdCombo = (actionKey, fallback) => {
+        let text = fallback;
+        if (typeof getShortcutCombo === 'function') {
+            const combo = getShortcutCombo(actionKey);
+            if (combo && combo.key) text = formatShortcut(combo);
+        }
+        return String(text).split('+').map(kbd).join('+');
+    };
     const demoList = (typeof lists !== 'undefined') ? lists.find(l => !l.archived && !l.isFolder && l.name === '团队工作') : null;
     const demoFolder = (typeof lists !== 'undefined')
         ? (lists.find(l => l.isFolder && !l.archived && l.name === '生活') || lists.find(l => l.isFolder && !l.archived))
@@ -174,7 +185,7 @@ function _obBuildSteps() {
             delay: 380,
             title: '添加任务方式二：命令面板一句话创建',
             body: `
-                <p>按 ${kbd('Ctrl')}+${kbd('Alt')}+${kbd('K')} 呼出命令面板，一句话写完所有信息（各段之间用空格分隔）。上方输入框已自动填入示例：</p>
+                <p>按 ${kbdCombo('commandPalette', 'Ctrl+Alt+N')} 呼出命令面板，一句话写完所有信息（各段之间用空格分隔）。上方输入框已自动填入示例：</p>
                 <div class="ob-demo">
                     <span class="ob-seg bg-blue-500/10 text-blue-400 border-blue-500/40" title="日期时间：自动识别">明天下午5点</span><span class="ob-seg text-theme-primary font-medium" title="任务标题">团队会议</span><span class="ob-seg bg-purple-500/10 text-purple-400 border-purple-500/40" title="清单">~团队工作</span><span class="ob-seg bg-cyan-500/10 text-cyan-500 border-cyan-500/40" title="标签">#总结会</span><span class="ob-seg bg-red-500/10 text-red-500 border-red-500/40" title="优先级">!!!</span><span class="ob-seg bg-slate-500/10 text-theme-secondary border-slate-500/40" title="备注">|记得提前准备会议资料</span>
                 </div>
@@ -266,7 +277,7 @@ function _obBuildSteps() {
             title: '番茄专注',
             body: `
                 <p>通过此处进入番茄专注倒计时，或单击任务卡片中、任务详情面板中的「开始专注」按钮，指定任务开始专注倒计时。</p>
-                <p class="ob-tip text-xs">快捷键：${kbd('Ctrl')}+${kbd('Alt')}+${kbd('P')}</p>`
+                <p class="ob-tip text-xs">快捷键：${kbdCombo('togglePomodoro', 'Ctrl+Alt+P')}</p>`
         },
         // 第 4 组 · 任务提醒（Toast 四按钮静态示意）
         {

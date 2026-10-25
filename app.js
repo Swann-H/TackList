@@ -484,8 +484,7 @@ const SIDEBAR_ITEM_SETTING_IDS = {
     summary: 'settings-sidebar-summary',
     tags: 'settings-sidebar-tags',
     filters: 'settings-sidebar-filters',
-    trash: 'settings-sidebar-trash',
-    externalCalendar: 'settings-sidebar-external-calendar'
+    trash: 'settings-sidebar-trash'
 };
 
 function _sidebarItemDefaultOf(key) {
@@ -1011,11 +1010,7 @@ function applyBgCarouselDirectory(value) {
         showToast('请输入或选择图片目录', 'warning');
         return;
     }
-    bgCarouselUpdateConfig({ directory: dir }).then(state => {
-        if (state && state.success !== false) {
-            showToast('轮播目录已更新', 'success', 'short');
-        }
-    });
+    bgCarouselUpdateConfig({ directory: dir });
 }
 
 // 「选择目录」：优先服务端系统对话框（tkinter / Qt / zenity 等）；
@@ -1282,8 +1277,14 @@ function resetAllData() {
 
         // 先检查是否有今天的备份
         fetch('/api/backups').then(r => r.json()).then(data => {
-            const today = new Date().toISOString().split('T')[0];
-            const hasTodayBackup = data.backups && data.backups.some(b => b.filename && b.filename.includes(today));
+            // 用备份列表的 date（mtime）判断，不能拿文件名 includes('YYYY-MM-DD')：
+            // 文件名是紧凑格式 schedule-backup-20261025-151401.zip，永远匹配不上带横线的日期
+            const todayKey = new Date().toLocaleDateString('sv-SE');
+            const hasTodayBackup = (data.backups || []).some(b => {
+                if (!b || !b.date) return false;
+                const d = new Date(b.date);
+                return !isNaN(d.getTime()) && d.toLocaleDateString('sv-SE') === todayKey;
+            });
 
             if (!hasTodayBackup) {
                 // 没有今天的备份，询问用户是否先备份
@@ -1361,6 +1362,8 @@ function doResetData() {
     // 本地轮播缓存同步清空，让背景立即回退默认（页面稍后自动刷新兜底）
     bgCarouselState = null;
     _bgCarouselAppliedKey = null;
+    // 任务集已清空，附件目录里的文件全部成为孤儿 —— 一并清掉，避免磁盘长期累积
+    fetch('/api/attachments', { method: 'DELETE' }).catch(() => {});
     // 清除 IndexedDB 缓存
     if (typeof cacheToIndexedDB === 'function') {
         cacheToIndexedDB({
@@ -1738,9 +1741,8 @@ function toggleAutoStart() {
     })
     .then(r => r.json())
     .then(data => {
-        if (data.success) {
-            showToast(enabled ? '已开启开机自动启动' : '已关闭开机自动启动', 'success');
-        } else {
+        // 成功不弹 Toast：开关位置本身就是结果，只在失败时回滚并报错
+        if (!data.success) {
             checkbox.checked = !enabled;
             showToast('无法保存设置：' + (data.error || '未知错误'), 'error');
         }
@@ -2155,16 +2157,6 @@ let _fontDropdownOpen = false;
 function initFontFamilySelector() {
     const inputEl = document.getElementById('settings-font-family-input');
     if (!inputEl) return;
-
-    const isOnline = window._WEB_VERSION === 'online';
-
-    // 更新提示文案
-    const hintEl = document.getElementById('font-hint-text');
-    if (hintEl) {
-        hintEl.textContent = isOnline
-            ? '可手动输入或点击右侧箭头选择已安装字体；在线版还可选择 Google 字体；也可上传 TTF 字体文件'
-            : '可手动输入或点击右侧箭头选择已安装字体；也可上传 TTF 字体文件';
-    }
 
     // 回填当前字体名到输入框
     inputEl.value = settings.fontFamily || '';

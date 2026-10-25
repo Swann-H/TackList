@@ -11,6 +11,17 @@
 // 生命周期：clearUndoStack()（trash.js）统一收口退出——视图/筛选切换、导入、设置保存、
 // 服务端刷新、跨天等撤销上下文失效场景，多选态同步失效。
 
+// ==================== 提示口径 ====================
+// 批量管理是「快进快出」的连续操作场景：状态提示只需确认动作已被接收（守卫拦截 / 暂存已放弃 /
+// 无可应用项等），不必按全局默认的中档停留 5 秒，否则连点几下就堆一屏。
+// 统一走 short 档（随设置「消息显示时长」缩放：快速 1.5s / 标准 2.5s / 舒缓 4s）。
+// ⚠️ 只收口状态提示（showToast）。以下两类刻意不走本函数：
+//   撤销条 showUndoToast —— 本身已是 short 档，且必须留出点 UNDO 的时间；
+//   确认卡 showConfirmToast —— 30s 功能性时长，等用户二选一。
+function _batchToast(message, type) {
+    return showToast(message, type || 'info', 'short');
+}
+
 // ==================== 状态 ====================
 let _batchSelectActive = false;
 const _batchSelectedIds = new Set();
@@ -267,7 +278,7 @@ function enterBatchSelectMode(initialIds) {
     }
     // 仅任务视图（非归档）支持；从其他视图进入时先切换
     if (currentView !== 'task' || currentListId === '__archived__') {
-        if (currentListId === '__archived__') { showToast('归档清单不支持多选', 'warning'); return; }
+        if (currentListId === '__archived__') { _batchToast('归档清单不支持多选', 'warning'); return; }
         switchView('task'); // 内部 clearUndoStack → exitBatchSelectMode(false)，此时尚未激活，无副作用
     }
     // 与沉浸式书写态互斥：共用 #main-content transform 通道（wm-morph-in），同时触发会冲突
@@ -638,7 +649,7 @@ function onBatchExitClick() {
     _batchExitArmed = false;
     const hadPending = _batchHasPending();
     exitBatchSelectMode(true, true); // 主动退出：恢复进入前的详情栏
-    if (hadPending) showToast('已放弃未应用的修改', 'info');
+    if (hadPending) _batchToast('已放弃未应用的修改', 'info');
 }
 
 // 确认卡「应用并退出」：先写入全部暂存，随即退出（_commitBatchOperation 内部已退出多选）。
@@ -655,7 +666,7 @@ function _batchExitApplyPending() {
 // 确认卡「直接退出」：丢弃暂存（exitBatchSelectMode 内部 _batchResetPending），事后给一条确认
 function _batchExitDiscardPending() {
     exitBatchSelectMode(true, true);
-    showToast('已放弃未应用的修改', 'info');
+    _batchToast('已放弃未应用的修改', 'info');
 }
 
 function _renderBatchExitBtn() {
@@ -784,9 +795,9 @@ function _commitBatchOperation(label, undoFns) {
 // 外部任务守卫（双保险：按钮已禁用，此处再拦截）
 function _guardWritable(label) {
     const targets = _batchTargets();
-    if (targets.length === 0) { showToast('没有选中的任务', 'info'); return null; }
+    if (targets.length === 0) { _batchToast('没有选中的任务', 'info'); return null; }
     if (targets.some(function (t) { return !!t.extSourceId; })) {
-        showToast('选中包含外部订阅任务，' + (label || '该操作') + '不可用', 'warning');
+        _batchToast('选中包含外部订阅任务，' + (label || '该操作') + '不可用', 'warning');
         return null;
     }
     return targets;
@@ -830,7 +841,7 @@ function _batchSetCompleted(state) {
     const targets = _guardWritable('批量标记');
     if (!targets) return;
     const affected = targets.filter(function (t) { return t.completed !== state; });
-    if (affected.length === 0) { showToast('选中的任务已是该状态', 'info'); return; }
+    if (affected.length === 0) { _batchToast('选中的任务已是该状态', 'info'); return; }
     const undoFns = [];
     affected.forEach(function (task) {
         const pre = { completed: task.completed, completedAt: task.completedAt };
@@ -882,7 +893,7 @@ function batchMoveOpenPicker() {
     const available = lists.filter(function (l) {
         return !l.archived && !l.isFolder && !(typeof shouldHideExternalList === 'function' && shouldHideExternalList(l));
     });
-    if (available.length === 0) { showToast('没有可用的目标清单', 'info'); return; }
+    if (available.length === 0) { _batchToast('没有可用的目标清单', 'info'); return; }
     _openBatchPopover('移动 ' + targets.length + ' 项到清单', _batchListPillsHtml(available), 'move');
 }
 
@@ -1120,7 +1131,7 @@ function batchAddCustomReminder() {
     const reject = function (msg) {
         input.classList.add('border-red-500');
         setTimeout(function () { input.classList.remove('border-red-500'); }, 1200);
-        if (msg) showToast(msg, 'warning');
+        if (msg) _batchToast(msg, 'warning');
     };
     if (isNaN(val) || val < 1 || val > REMINDER_MAX_MINUTES) {
         reject('请输入 1 ~ ' + REMINDER_MAX_MINUTES + ' 之间的分钟数'); return;
@@ -1128,7 +1139,7 @@ function batchAddCustomReminder() {
     if (cur.indexOf(val) !== -1) { reject('该提前量已存在'); return; }
     if (cur.length >= REMINDER_MAX_COUNT) {
         shakeReminderLimit(document.getElementById('batch-reminder-picker'));
-        showToast('最多 ' + REMINDER_MAX_COUNT + ' 个提前提醒', 'warning');
+        _batchToast('最多 ' + REMINDER_MAX_COUNT + ' 个提前提醒', 'warning');
         return;
     }
     d.reminders = normalizeReminderMinutes(cur.concat([val]));
@@ -1294,7 +1305,7 @@ function _batchDateKey(d) {
 function batchTagsOpenPicker() {
     const targets = _guardWritable('标签');
     if (!targets) return;
-    if ((settings.tags || []).length === 0) { showToast('没有标签：请先在侧边栏新建', 'info'); return; }
+    if ((settings.tags || []).length === 0) { _batchToast('没有标签：请先在侧边栏新建', 'info'); return; }
     _openBatchPopover('为 ' + targets.length + ' 项设置标签', _batchTagsPillsHtml(targets), 'tags');
 }
 
@@ -1364,7 +1375,7 @@ function batchApplyPending() {
     const targets = _guardWritable('应用');
     if (!targets) return;
     const collected = _collectPendingUndo(targets);
-    if (collected.undoFns.length === 0) { showToast('没有需要应用的修改', 'info'); return; }
+    if (collected.undoFns.length === 0) { _batchToast('没有需要应用的修改', 'info'); return; }
     _commitBatchOperation('批量应用 ' + collected.affected.size + ' 项：' + collected.parts.join('、'), collected.undoFns);
 }
 
