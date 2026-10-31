@@ -1406,6 +1406,17 @@
             overflow: hidden;
         }
 
+        /* 提醒卡 Markdown 正文：保留换行与列表缩进（内容由 mdToPlainText 产出）。
+           含列表时放宽到 6 行；普通 Markdown 正文仍走上面的 2 行档。
+           ⚠️ 用纯 CSS：类名是运行时追加的，离线版本地 JIT 不会生成对应工具类。 */
+        .reminder-toast-body-md {
+            white-space: pre-wrap;
+            tab-size: 4;
+        }
+        .reminder-toast-body.reminder-toast-body-md-list {
+            -webkit-line-clamp: 6;
+        }
+
         @keyframes questPopIn {
             0% { opacity: 0; transform: translateY(30px) scale(0.85); }
             50% { transform: translateY(-5px) scale(1.02); }

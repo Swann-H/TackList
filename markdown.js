@@ -307,6 +307,118 @@ function renderMarkdown(src, opts) {
     }).join('');
 }
 
+/* ==================== 纯文本投影（提醒 Toast / 系统通知预览） ==================== */
+// 提醒 Toast 是窄卡片（普通正文默认 2 行，含列表最多 6 行），不承载富文本；
+// 这里把 Markdown 源文投影成「可读的纯文本」：
+//   · 标题/段落/引用/列表各占一行；空行与分割线丢弃；
+//   · 列表保留层级：无序 - 、有序 1. 、任务列表 ☐/☑，缩进统一 2 空格/级；
+//   · 链接只保留文字，图片统一 [图片]，行内代码/强调标记去掉；
+//   · 代码块压成一行（Toast 不是代码阅读器）。
+// 与编辑器同源：块切分复用 mdParseBlocks，行内解析与 mdInline 同序同规则，
+// 只是输出纯文字、不生成 HTML，避免把富文本渲染/图片加载带进通知路径。
+
+// 行内强调去标记。与 mdInlineEmphasis 的规则逐条对应，只是输出文字而不是 <strong>。
+// ⚠️ mdInlineEmphasis / mdInline 的规则若有调整，必须同步这里。
+function mdInlineEmphasisToPlain(str) {
+    let s = String(str == null ? '' : str);
+    s = s.replace(/\*\*([^\n]+?)\*\*/g, '$1');
+    s = s.replace(/__([^\n]+?)__/g, '$1');
+    s = s.replace(/~~([^\n]+?)~~/g, '$1');
+    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1$2');
+    s = s.replace(/(^|[^_\w])_([^_\n]+?)_(?!\w)/g, '$1$2');
+    return s;
+}
+
+// 行内 Markdown → 纯文本。顺序与 mdInline 一致：行内代码 → 转义 → 图片 → 链接 → 强调。
+// ⚠️ 这里只产出纯文字，不产出 HTML；最终由 Toast 的 _toastEscape 统一转义。
+function mdInlineToPlain(text) {
+    let s = String(text == null ? '' : text);
+    const store = [];
+    const tok = function (txt) {
+        store.push(txt);
+        return '\u0000' + (store.length - 1) + '\u0000';
+    };
+
+    // 1) 行内代码：内容原样保留（不参与后续强调/链接解析）
+    s = s.replace(/`([^`\n]+)`/g, function (_, code) { return tok(code); });
+    // 2) 反斜杠转义：还原字面量
+    s = s.replace(/\\([\\`*_{}\[\]()#+\-.!~>])/g, function (_, ch) { return tok(ch); });
+    // 3) 图片：不展开 URL，也不读取 alt（粘贴截图时 alt 往往是长文件名）
+    s = s.replace(/!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, function () {
+        return tok('[图片]');
+    });
+    // 4) 链接：只保留文字
+    s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, function (_, label) {
+        return tok(mdInlineEmphasisToPlain(label));
+    });
+    // 5) 其余文字去强调标记
+    s = mdInlineEmphasisToPlain(s);
+    // 6) 行内换行折叠为空格（块级换行由 mdToPlainText 负责）
+    s = s.replace(/\r?\n/g, ' ');
+    // 7) 还原占位
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, i) {
+        return store[+i] || '';
+    });
+}
+
+// 块级 Markdown → 纯文本。
+// opts:
+//   preserveLineBreaks  默认 true；false 时所有块压成一行（系统通知等单行场景）
+//   listIndent          列表缩进空格/级，默认 2
+//   maxDepth            最大缩进层级，默认 6（防止深层列表把正文挤没）
+function mdToPlainText(src, opts) {
+    opts = opts || {};
+    const preserveLineBreaks = opts.preserveLineBreaks !== false;
+    const listIndent = Math.max(1, Math.min(4, parseInt(opts.listIndent, 10) || 2));
+    const maxDepth = Math.max(1, Math.min(8, parseInt(opts.maxDepth, 10) || 6));
+    const source = mdNormalizeSource(src);
+    if (!source.trim()) return '';
+
+    const lines = [];
+    mdParseBlocks(source).forEach(function (block) {
+        if (block.type === 'blank' || block.type === 'hr') return;
+
+        if (block.type === 'code') {
+            // 代码块压成一行；围栏和语言标记都不进入预览
+            const code = String(block.codeText || '').replace(/\s+/g, ' ').trim();
+            if (code) lines.push(code);
+            return;
+        }
+
+        if (block.type === 'li') {
+            const depth = Math.min(maxDepth, mdListDepth(block.indent || ''));
+            const pad = new Array(depth * listIndent + 1).join(' ');
+            let marker = '- ';
+            if (block.task) marker = block.checked ? '☑ ' : '☐ ';
+            else if (block.ordered) marker = (block.number || 1) + '. ';
+            const text = mdInlineToPlain(block.content || '').trim();
+            // 空列表项通常是输入过程中的空行，不占提醒卡的行数
+            if (text) lines.push(pad + marker + text);
+            return;
+        }
+
+        const text = mdInlineToPlain(
+            block.text != null ? block.text : block.raw
+        ).trim();
+        if (text) lines.push(text);
+    });
+
+    let out = lines.join(preserveLineBreaks ? '\n' : ' ');
+    if (!preserveLineBreaks) out = out.replace(/[ \t]+/g, ' ');
+    return out.trim();
+}
+
+// 源文是否含列表块（用于 Toast 的 6 行截断档）。
+// 判断源文而不是投影结果：`\- 不是列表` 这类转义行投影后会以 "- " 开头，
+// 但它在源文里是段落，不应放宽截断；反过来空列表项也能被正确识别。
+function mdHasListBlocks(src) {
+    const source = mdNormalizeSource(src);
+    if (!source.trim()) return false;
+    return mdParseBlocks(source).some(function (block) {
+        return block.type === 'li';
+    });
+}
+
 /* ==================== 任务列表勾选 ==================== */
 
 function mdToggleTaskAt(source, offset) {

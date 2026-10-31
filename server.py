@@ -255,6 +255,71 @@ def _truncate_for_title(text, limit=24):
     return t if len(t) <= limit else t[:limit - 1] + '…'
 
 
+# ==================== 系统通知纯文本投影 ====================
+# 应用内 Toast 用 markdown.js 的 mdToPlainText（保留列表缩进）；系统通知
+# （Windows 气泡 / notify-send）只能可靠显示单行纯文本，这里用一组保守的
+# 正则去掉明显标记。
+# ⚠️ 不追求与前端逐字一致：输入只来自 notes / description，输出只用于系统通知；
+#    通知队列仍保留 raw 源文，由前端按自己的规则投影。
+# ⚠️ 只处理明显语法：行首标题/列表/引用、围栏、图片/链接、行内代码与强调、
+#    反斜杠转义；像 2*3、C#、a_b 这类普通文本不会被误伤。
+_MD_FENCE_RE = re.compile(r'^\s*(?:`{3,}|~{3,}).*$')
+_MD_HR_RE = re.compile(r'^\s*([-*_])(?:\s*\1){2,}\s*$')
+_MD_TASK_RE = re.compile(r'^\s*(?:[-*+]|\d{1,2}[.)])\s+\[[ xX]\]\s*')
+_MD_LIST_RE = re.compile(r'^\s*(?:[-*+]|\d{1,2}[.)])\s+')
+_MD_HEADING_RE = re.compile(r'^\s*#{1,6}\s+')
+_MD_QUOTE_RE = re.compile(r'^\s*>\s?')
+
+
+def _md_strip_inline(s):
+    """行内 Markdown 去标记；图片保留 [图片]，链接只保留文字。"""
+    s_re = re.sub(r'!\[([^\]]*)\]\([^)]*\)', '[图片]', s)
+    s_re = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', s_re)
+    s_re = re.sub(r'`([^`\n]+)`', r'\1', s_re)
+    s_re = re.sub(r'\\([\\`*_{}\[\]()#+\-.!~>])', r'\1', s_re)
+    s_re = re.sub(r'\*\*([^\n]+?)\*\*', r'\1', s_re)
+    s_re = re.sub(r'__([^\n]+?)__', r'\1', s_re)
+    s_re = re.sub(r'~~([^\n]+?)~~', r'\1', s_re)
+    s_re = re.sub(r'(^|[^*])\*([^*\n]+?)\*(?!\*)', r'\1\2', s_re)
+    s_re = re.sub(r'(^|[^_\w])_([^_\n]+?)_(?!\w)', r'\1\2', s_re)
+    return s_re
+
+
+def _md_to_plain(text, limit=None):
+    """Markdown 源文 → 单行纯文本（仅系统通知正文使用，不写回数据）。"""
+    s = str(text or '').replace('\r\n', '\n').replace('\r', '\n')
+    if not s.strip():
+        return ''
+
+    out_lines = []
+    in_fence = False
+    for line in s.split('\n'):
+        if _MD_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            # 代码块内容原样保留，但压成单行；不再套用行首标记规则
+            code_line = line.strip()
+            if code_line:
+                out_lines.append(code_line)
+            continue
+        if not line.strip() or _MD_HR_RE.match(line):
+            continue
+        line = _MD_TASK_RE.sub('', line)
+        line = _MD_LIST_RE.sub('', line)
+        line = _MD_HEADING_RE.sub('', line)
+        line = _MD_QUOTE_RE.sub('', line)
+        line = _md_strip_inline(line)
+        line = re.sub(r'[ \t]+', ' ', line).strip()
+        if line:
+            out_lines.append(line)
+
+    plain = ' '.join(out_lines).strip()
+    if limit:
+        plain = _truncate_for_title(plain, limit)
+    return plain
+
+
 def _list_prefix(list_id, data):
     """清单名前缀：非默认清单返回 '清单名 | '，否则空串。"""
     list_name = ''
@@ -1662,12 +1727,15 @@ def _send_windows_notify(title, body):
         pass
 
 def send_notify_send(title, body, task_id=None, category=None, subtask_id=None,
-                     reminder_kind=None, reminder_minute=0):
+                     reminder_kind=None, reminder_minute=0, os_body=None):
     """发通知（系统通知 + 前端队列）。
 
     reminder_kind / reminder_minute：提醒类型（ondot 准点 / advance 提前量 / snooze 稍后）
     与提前分钟数。标题里的「· N 分钟后」只服务于系统通知栏（它只有一行标题）；
     应用内 Toast 需要靠这两个字段把时机改放到图标徽标上，标题行保持规整格式。
+
+    os_body：系统通知专用正文；不传则与队列 body 相同。提醒会把 Markdown 源文投影成
+    纯文本后只用于系统通知，队列仍保留 raw 源文，由前端自行投影（列表缩进等）。
     """
     global _notify_env
     notif_data = {'title': title, 'body': body or ''}
@@ -1686,15 +1754,16 @@ def send_notify_send(title, body, task_id=None, category=None, subtask_id=None,
         if category:
             pending_notifications[:] = [n for n in pending_notifications if n.get('category') != category]
         pending_notifications.append(notif_data)
+    notify_body = body if os_body is None else os_body
     if IS_WINDOWS:
-        _send_windows_notify(title, body)
+        _send_windows_notify(title, notify_body)
     else:
         try:
             if _notify_env is None:
                 _notify_env = _get_notify_env()
-            if body:
+            if notify_body:
                 subprocess.Popen(
-                    ['notify-send', '-t', '10000', title, body],
+                    ['notify-send', '-t', '10000', title, notify_body],
                     env=_notify_env,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
@@ -2661,15 +2730,21 @@ def _fire_task_reminder(task, minute, kind, data):
 
     notes = task.get('notes', '')
     list_prefix = _list_prefix(task.get('listId'), data)
+    os_body = None
     if notes and notes.strip():
         # 保持旧行为：有 notes 时标题带任务名，正文用 notes
         title = '%s %s' % (base_title, task_name)
         body = list_prefix + notes.strip()
+        if (data.get('settings') or {}).get('notesMarkdown', True) is not False:
+            # 系统通知只收纯文本；队列 body 仍是 raw，应用内 Toast 自行投影
+            plain_notes = _md_to_plain(notes.strip(), limit=180)
+            os_body = list_prefix + (plain_notes or task_name)
     else:
         title = base_title
         body = list_prefix + task_name
 
-    send_notify_send(title, body, task_id=task_id, reminder_kind=kind, reminder_minute=minute)
+    send_notify_send(title, body, task_id=task_id, reminder_kind=kind, reminder_minute=minute,
+                     os_body=os_body)
     play_notification_sound()
 
 
@@ -2730,9 +2805,22 @@ def _fire_subtask_reminder(task, subtask, minute, kind, data):
 
     body = '%s%s → %s%s' % (list_prefix, _reminder_body_head(task, task_name), st_text, progress)
 
+    # 系统通知正文：先投影再截断，避免把 `](url)` 之类的语法截成半截。
+    # 队列 body 仍是 raw；应用内 Toast 用 description 全文自行投影。
+    os_body = None
+    if (data.get('settings') or {}).get('notesMarkdown', True) is not False:
+        plain_head = task_name
+        if (task.get('mode') or 'text') != 'text':
+            description = (task.get('description') or '').strip()
+            if description:
+                plain_desc = _md_to_plain(description, limit=80)
+                if plain_desc:
+                    plain_head = '%s · %s' % (task_name, plain_desc)
+        os_body = '%s%s → %s%s' % (list_prefix, plain_head, st_text, progress)
+
     # 不传 category：同一时刻多个子任务到点时应各自独立入队，避免被同类覆盖丢消息
     send_notify_send(title, body, task_id=task_id, subtask_id=st_id,
-                     reminder_kind=kind, reminder_minute=minute)
+                     reminder_kind=kind, reminder_minute=minute, os_body=os_body)
     play_notification_sound()
 
 

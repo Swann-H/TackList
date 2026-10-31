@@ -698,22 +698,77 @@ function showConfirmToast(message, onConfirm, onCancel, opts) {
 //   正文优先取子任务模式的「详情描述」（task.description），未填写描述时回落任务名。
 //   ⚠️ 描述非空时任务名就不会出现在 Toast 里了（第 1 行是服务端拼的"时间 · 子任务名"）——
 //      这是用户确认过的口径：第 1 行保留子任务名，第 2 行让位给详情描述。
-// 无子任务：显示 message 原样（含notes或任务名）
+// 无子任务：正文取 message 里的 notes；没有 notes 时就是任务名。
+// ⚠️ notes / description 现在是 Markdown 源文（受 settings.notesMarkdown 控制）：
+//    提醒卡不渲染富文本，只做纯文本投影；列表保留 - / 1. / ☐☑ 与 2 空格/级缩进，
+//    其余块按行保留。投影失败或关闭 Markdown 时退回原文。
+//    子任务逐行列表（圆圈 + 子任务名）由 extraHtml 单独负责，本函数不碰。
+// 返回 { text, full, md, hasList }：
+//   text    正文（plain text）
+//   full    投影后的全文，供正文 title 悬浮（可能比 text 长）
+//   md      是否应用了 Markdown 投影（决定正文是否 white-space:pre-wrap）
+//   hasList 投影结果是否含列表（决定 6 行截断档；普通正文仍是 2 行）
+function _reminderListPrefix(task, message) {
+    // 与 server.py:_list_prefix 同口径：非默认清单才有 "清单名 | " 前缀。
+    // 不再用 message.split(' | ') 猜——备注/描述本身可能含 " | "。
+    if (task && typeof lists !== 'undefined' && Array.isArray(lists)) {
+        const list = lists.find(function (l) { return l.id === task.listId; });
+        if (list && list.name && list.name !== '默认') return list.name + ' | ';
+    }
+    // 只有在任务不在内存里时才退回旧口径，避免误伤含 | 的备注
+    if (!task && message && message.indexOf(' | ') !== -1) {
+        return message.split(' | ')[0] + ' | ';
+    }
+    return '';
+}
+
 function buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml) {
-    if (!subtaskHtml) {
-        // 无子任务：message 正常显示（可能含 notes 或任务名）
-        return message;
-    }
     const taskName = task ? (task.title || taskTitle) : taskTitle;
-    // 仅子任务模式（mode !== 'text'）才有详情描述；文本模式即使残留 description 字段也不参与展示
-    const description = (task && task.mode !== 'text') ? (task.description || '').trim() : '';
-    const body = description || taskName;
-    if (message.includes(' | ')) {
-        // 非默认清单：显示"清单名 | 正文"
-        return message.split(' | ')[0] + ' | ' + body;
+    const prefix = _reminderListPrefix(task, message);
+    const markdownOn = (typeof _mdIsMarkdownOn === 'function') ? _mdIsMarkdownOn() : true;
+    const canProject = markdownOn
+        && typeof mdToPlainText === 'function'
+        && typeof mdHasListBlocks === 'function';
+
+    if (!subtaskHtml) {
+        // 主任务：message = [清单名 | ]notes 或 [清单名 | ]任务名
+        let rawBody = message;
+        if (prefix) {
+            if (message.indexOf(prefix) !== 0) {
+                // 清单名对不上（提醒生成后清单被改名等），保守显示原文，避免误删正文
+                return { text: message, full: '', md: false, hasList: false };
+            }
+            rawBody = message.slice(prefix.length);
+        }
+        if (!canProject || !rawBody.trim()) {
+            return { text: message, full: '', md: false, hasList: false };
+        }
+        // 没有 notes 时服务端正文就是任务名：不投影，避免把任务名里的 * / # 当成 Markdown
+        if (task && rawBody === taskName) {
+            return { text: message, full: '', md: false, hasList: false };
+        }
+        const plain = mdToPlainText(rawBody);
+        if (!plain) {
+            // 备注只有分割线/空行等无文字内容：回落任务名，标题行逻辑会自动省略任务名
+            return { text: prefix + taskName, full: '', md: false, hasList: false };
+        }
+        const text = prefix + plain;
+        return { text: text, full: text, md: true, hasList: mdHasListBlocks(rawBody) };
     }
-    // 默认清单：仅显示正文
-    return body;
+
+    // 子任务模式：正文优先取详情描述，未填写时回落任务名
+    const description = (task && task.mode !== 'text') ? (task.description || '').trim() : '';
+    const bodyRaw = description || taskName;
+    if (canProject && description) {
+        const plain = mdToPlainText(description);
+        if (plain) {
+            const text = prefix + plain;
+            return { text: text, full: text, md: true, hasList: mdHasListBlocks(description) };
+        }
+        // 描述只有格式标记、没有文字：回落任务名，不把空正文塞给 Toast
+        return { text: prefix + taskName, full: '', md: false, hasList: false };
+    }
+    return { text: prefix + bodyRaw, full: '', md: false, hasList: false };
 }
 
 // 剥掉服务端标题里的提前量时机段（「 · 30 分钟后 / · 1 小时后 / · 1 天」）。
@@ -761,6 +816,9 @@ function buildReminderDisplayTitle(title, task, taskTitle, displayMessage) {
     if (raw.includes('·')) {
         return raw;
     }
+    // 任务不在内存里（提醒生成后删除等）：服务端标题已是「时间 任务名」，
+    // 不要再从 body 反推任务名——body 可能是备注/Markdown，反推会把标记带进标题。
+    if (!task) return raw;
     // 提取纯时间部分
     const timeMatch = raw.match(/^(\d{1,2}:\d{2})/);
     const timeOnly = timeMatch ? timeMatch[1] : raw;
@@ -796,6 +854,8 @@ function buildReminderDisplayTitle(title, task, taskTitle, displayMessage) {
 //    详情描述是自由文本，不设上限时 400 字能把 Toast 撑到 534px（基线 149px）。
 //    该类同时是测试脚本定位第 2 行的稳定锚点——**别用 .text-sm 定位**，
 //    因为第 1 行现在也是 text-sm，querySelector 会先命中标题行。
+//    Markdown 投影后追加 .reminder-toast-body-md（保留换行/缩进）；含列表时再追加
+//    .reminder-toast-body-md-list，把截断放宽到 6 行；普通正文仍是 2 行。
 function showReminderToast(title, message, taskId, opts = {}) {
     const subtaskId = opts.subtaskId || null;
     const pendingSubtasks = Array.isArray(opts.pendingSubtasks) ? opts.pendingSubtasks : [];
@@ -812,7 +872,8 @@ function showReminderToast(title, message, taskId, opts = {}) {
     const subtaskHtml = task ? renderSubtaskListDisplay(task, 'dark', subtaskId) : '';
 
     // 第2行：根据子任务情况构造显示文本（需先计算，供第1行判断是否显示任务名）
-    const displayMessage = buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml);
+    const display = buildReminderDisplayMessage(message, task, taskTitle, subtaskHtml);
+    const displayMessage = display.text;
 
     // 第1行：若第2行已含任务名则只显示时间，否则显示"时间 任务名"
     const displayTitle = buildReminderDisplayTitle(title, task, taskTitle, displayMessage);
@@ -849,14 +910,18 @@ function showReminderToast(title, message, taskId, opts = {}) {
         }
     };
 
-    _toast({
+    const bodyCls = 'reminder-toast-body'
+        + (display.md ? ' reminder-toast-body-md' : '')
+        + (display.hasList ? ' reminder-toast-body-md-list' : '');
+
+    const toast = _toast({
         layout: 'col',
         tone: subtaskId ? 'reminder-subtask' : 'reminder',
         titleRaw: true,
         title: displayTitle,
         titleCls: 'truncate',
         body: displayMessage,
-        bodyCls: 'reminder-toast-body',
+        bodyCls: bodyCls,
         extraHtml: subtaskHtml + pendingHtml,
         badge: badgeHtml,
         life: 0,
@@ -924,6 +989,17 @@ function showReminderToast(title, message, taskId, opts = {}) {
             }
         ]
     });
+
+    // 正文被 CSS 截断时，用原生 tooltip 补回投影后的全文（纯文本，不再带 Markdown 标记）
+    if (toast && display.full) {
+        const bodyEl = toast.el.querySelector('.reminder-toast-body');
+        if (bodyEl) {
+            bodyEl.title = display.full.length > 500
+                ? display.full.slice(0, 499) + '…'
+                : display.full;
+        }
+    }
+    return toast;
 }
 
 let _browserNotificationPermission = 'default';
