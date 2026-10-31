@@ -581,8 +581,9 @@ function renderCommandPaletteCandidates() {
     const pills = c.items.map((it, i) => {
         const cls = it.selected ? 'detail-tag-pill-selected' : 'detail-tag-pill';
         const active = i === c.activeIndex ? ' cmd-pal-candidate-active' : '';
+        const color = it.color || '#6b7280';
         return `<button type="button" class="${cls}${active} cmd-pal-candidate" data-idx="${i}"
-                style="--tag-color:${it.color};" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</button>`;
+                style="--tag-color:${color};${getTagSolidStyle(color)}" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</button>`;
     }).join('');
 
     box.innerHTML = `
@@ -2281,7 +2282,7 @@ function renderNLPPreview(parsed) {
     // 清单预览
     const list = lists.find(l => l.id === parsed.listId);
     if (list) {
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style="background:${list.color}20;color:${list.color}"><i class="fas fa-list"></i>${list.name}</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style="background:${list.color}20;color:var(--text-primary)"><i class="fas fa-list"></i>${list.name}</span>`);
     }
 
     // 标签预览
@@ -2290,7 +2291,7 @@ function renderNLPPreview(parsed) {
         parsed.tagIds.forEach(tagId => {
             const tag = allTags.find(t => t.id === tagId);
             if (tag) {
-                parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style="background:${tag.color}33;color:${tag.color}"><i class="fas fa-tag"></i>${tag.name}</span>`);
+                parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style="background:${tag.color}33;color:var(--text-primary)"><i class="fas fa-tag"></i>${tag.name}</span>`);
             }
         });
     }

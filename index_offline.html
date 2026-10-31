@@ -79,6 +79,9 @@
             --text-secondary: #6b7280;
             --text-muted: #78716c;
             --border-color: #e5e7eb;
+            /* 标签/清单实底文字的两个候选墨色（不随当前主题切换） */
+            --tag-ink-on-light: #111827;
+            --tag-ink-on-dark: #f9fafb;
             --view-bg-default: #f9fafb;
             --view-bg-focus: #eef2ff;
             --view-bg-break: #ecfdf5;
@@ -106,6 +109,9 @@
             --text-secondary: #d1d5db;
             --text-muted: #a8a29e;
             --border-color: #374151;
+            /* 标签/清单实底文字的两个候选墨色（不随当前主题切换） */
+            --tag-ink-on-light: #111827;
+            --tag-ink-on-dark: #f9fafb;
             --view-bg-default: #111827;
             --view-bg-focus: #1e293b;
             --view-bg-break: #1a2e22;
@@ -711,7 +717,16 @@
         }
 
         /* 任务详情栏标签芯片：删除按钮叠加在右上角，胶囊间预留空隙避免布局位移 */
-        .detail-tag-chip { position: relative; margin-right: 0.5rem; }
+        .detail-tag-chip {
+            position: relative;
+            margin-right: 0.5rem;
+            background-color: var(--tag-solid-fill-light, var(--tag-color));
+            color: var(--tag-solid-ink-light, var(--text-primary));
+        }
+        [data-theme="dark"] .detail-tag-chip {
+            background-color: var(--tag-solid-fill-dark, var(--tag-color));
+            color: var(--tag-solid-ink-dark, var(--text-primary));
+        }
         .detail-tag-chip .tag-remove-btn {
             position: absolute;
             top: -0.25rem;
@@ -786,6 +801,60 @@
             white-space: nowrap;
         }
         .detail-group-chip-selected:hover { opacity: 0.85; }
+
+        /* ===== 标签 / 清单 / 分组徽章文字色 =====
+           只作用于数据标签/清单/分组；倒计时重复、节假日类型等语义胶囊仍保持原色字/白字选中。
+           选中态：优先相反主题文字色，不足 4.5:1 时由 JS 选择当前主题文字色（两个候选墨色见 --tag-ink-on-*）。
+           未选/悬停均走作用域规则，避免改动全局 .detail-tag-pill 的语义控件。 */
+        #detail-tag-pills .detail-tag-pill,
+        #detail-list-pills .detail-tag-pill,
+        #tpl-panel-tag-pills .detail-tag-pill,
+        #tpl-panel-list-pills .detail-tag-pill,
+        #command-palette-candidates .detail-tag-pill,
+        #batch-popover-overlay .detail-tag-pill {
+            color: var(--text-primary);
+        }
+        #detail-tag-pills .detail-tag-pill:hover,
+        #detail-list-pills .detail-tag-pill:hover,
+        #tpl-panel-tag-pills .detail-tag-pill:hover,
+        #tpl-panel-list-pills .detail-tag-pill:hover,
+        #command-palette-candidates .detail-tag-pill:hover,
+        #batch-popover-overlay .detail-tag-pill:hover,
+        #detail-tag-pills .detail-tag-pill-selected,
+        #detail-list-pills .detail-tag-pill-selected,
+        #tpl-panel-tag-pills .detail-tag-pill-selected,
+        #tpl-panel-list-pills .detail-tag-pill-selected,
+        #command-palette-candidates .detail-tag-pill-selected,
+        #batch-popover-overlay .detail-tag-pill-selected {
+            background-color: var(--tag-solid-fill-light, var(--tag-color));
+            color: var(--tag-solid-ink-light, var(--text-primary));
+        }
+        [data-theme="dark"] #detail-tag-pills .detail-tag-pill:hover,
+        [data-theme="dark"] #detail-list-pills .detail-tag-pill:hover,
+        [data-theme="dark"] #tpl-panel-tag-pills .detail-tag-pill:hover,
+        [data-theme="dark"] #tpl-panel-list-pills .detail-tag-pill:hover,
+        [data-theme="dark"] #command-palette-candidates .detail-tag-pill:hover,
+        [data-theme="dark"] #batch-popover-overlay .detail-tag-pill:hover,
+        [data-theme="dark"] #detail-tag-pills .detail-tag-pill-selected,
+        [data-theme="dark"] #detail-list-pills .detail-tag-pill-selected,
+        [data-theme="dark"] #tpl-panel-tag-pills .detail-tag-pill-selected,
+        [data-theme="dark"] #tpl-panel-list-pills .detail-tag-pill-selected,
+        [data-theme="dark"] #command-palette-candidates .detail-tag-pill-selected,
+        [data-theme="dark"] #batch-popover-overlay .detail-tag-pill-selected {
+            background-color: var(--tag-solid-fill-dark, var(--tag-color));
+            color: var(--tag-solid-ink-dark, var(--text-primary));
+        }
+        #detail-group-row .detail-group-chip { color: var(--text-primary); }
+        #detail-group-row .detail-group-chip:hover,
+        #detail-group-row .detail-group-chip-selected {
+            background-color: var(--tag-solid-fill-light, var(--tag-color));
+            color: var(--tag-solid-ink-light, var(--text-primary));
+        }
+        [data-theme="dark"] #detail-group-row .detail-group-chip:hover,
+        [data-theme="dark"] #detail-group-row .detail-group-chip-selected {
+            background-color: var(--tag-solid-fill-dark, var(--tag-color));
+            color: var(--tag-solid-ink-dark, var(--text-primary));
+        }
 
         .holiday-countdown-box {
             border: 1.5px dashed var(--border-color);
@@ -6769,7 +6838,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.1</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.2</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>

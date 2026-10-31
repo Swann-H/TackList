@@ -47,6 +47,7 @@ tools/
 
 # Design/plan docs (local only, not shipped; only README*.md are tracked)
 DESIGN_*.md
+设计规范_*.md
 COPY_*.md
 问题分析_*.md
 需求说明书_*.md

@@ -904,7 +904,7 @@ function _batchListPillsHtml(available) {
         const color = l.color || '#6b7280';
         const on = _batchPending.listId === l.id;
         body += '<button type="button" onclick="batchStageList(\'' + l.id + '\')" ' +
-            'class="detail-tag-pill' + (on ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + color + '" ' +
+            'class="detail-tag-pill' + (on ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + color + ';' + getTagSolidStyle(color) + '" ' +
             'title="' + (on ? '已暂存，点击取消' : '移动到「' + escapeHtml(l.name) + '」') + '">' + escapeHtml(l.name) + '</button>';
     });
     return body + '</div>';
@@ -1325,7 +1325,8 @@ function _batchTagsPillsHtml(targets) {
         const partial = !effAll && rawCount > 0;
         const cls = effAll ? 'detail-tag-pill-selected' : (partial ? 'detail-tag-pill batch-pill-partial' : 'detail-tag-pill');
         const title = effAll ? '全部已含，点击移除' : (partial ? rawCount + ' 项已含，点击为全部添加' : '点击为全部添加');
-        body += '<button type="button" class="' + cls + '" style="--tag-color:' + (tag.color || '#6b7280') + '"' +
+        const color = tag.color || '#6b7280';
+        body += '<button type="button" class="' + cls + '" style="--tag-color:' + color + ';' + getTagSolidStyle(color) + '"' +
             ' onclick="batchStageTag(\'' + id + '\')" title="' + title + '">' +
             escapeHtml(tag.name) + (rawCount > 0 ? ' · ' + rawCount : '') + '</button>';
     });

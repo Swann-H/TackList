@@ -5,6 +5,7 @@
 //   sidebarViews.js    : getSidebarNewTaskDefaults
 // 数据模型：data.json 顶层键 taskTemplates（与 pomodoroHistory 同级，已在 data.js 四处登记）。
 // 模板只存「任务结构」：标题/备注/清单/标签/优先级/提醒/重复/子任务/建议时间。
+// 预置模板额外带 presetKey / presetFingerprint，用于升级时识别并更新未被用户改过的旧预置。
 // 不复制状态类字段（completed / completedAt / sortOrder / id / createdAt / templateId 等）。
 // 日期不写入模板；创建时按「调用上下文 > 设置默认日期」决定，模板的 suggestedTime 只补充一天中的时刻。
 
@@ -3056,7 +3057,7 @@ function _tplPanelRefreshTags() {
     box.innerHTML = tags.map(function (tag) {
         const on = selected.indexOf(tag.id) !== -1;
         const color = _safeTemplateColor(tag.color, '#6b7280');
-        return '<button type="button" class="detail-tag-pill' + (on ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + color + ';" aria-pressed="' + on + '" onclick="toggleTaskTemplatePanelTag(&#39;' + tag.id + '&#39;, this)">' + escapeHtml(tag.name) + '</button>';
+        return '<button type="button" class="detail-tag-pill' + (on ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + color + ';' + getTagSolidStyle(color) + '" aria-pressed="' + on + '" onclick="toggleTaskTemplatePanelTag(&#39;' + tag.id + '&#39;, this)">' + escapeHtml(tag.name) + '</button>';
     }).join('');
 }
 
@@ -3073,9 +3074,9 @@ function _tplPanelRefreshTagsDisplay() {
     box.classList.remove('hidden');
     box.innerHTML = tags.map(function (tag) {
         const color = _safeTemplateColor(tag.color, '#6b7280');
-        return '<span class="detail-tag-chip inline-flex items-center px-2 py-0.5 rounded-full text-xs text-white" style="background-color:' + color + ';">' +
+        return '<span class="detail-tag-chip inline-flex items-center px-2 py-0.5 rounded-full text-xs" style="--tag-color:' + color + ';' + getTagSolidStyle(color) + '">' +
             escapeHtml(tag.name) +
-            '<button type="button" onclick="event.stopPropagation();removeTaskTemplatePanelTag(&#39;' + tag.id + '&#39;)" class="tag-remove-btn inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-white/30 hover:bg-black/30 transition text-white" title="删除标签"><i class="fas fa-times text-[9px]"></i></button>' +
+            '<button type="button" onclick="event.stopPropagation();removeTaskTemplatePanelTag(&#39;' + tag.id + '&#39;)" class="tag-remove-btn inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-white/30 hover:bg-black/30 transition" title="删除标签"><i class="fas fa-times text-[9px]"></i></button>' +
         '</span>';
     }).join('');
 }
@@ -3100,11 +3101,12 @@ function _tplPanelRefreshLists() {
     if (!box || !_tplPanelState) return;
     const current = _tplPanelState.draft.task.listId || '';
     const followOn = !current;
-    const items = ['<button type="button" class="detail-tag-pill' + (followOn ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:#8b5cf6" onclick="setTaskTemplatePanelList(\'\')">根据上下文添加</button>'];
+    const followColor = '#8b5cf6';
+    const items = ['<button type="button" class="detail-tag-pill' + (followOn ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + followColor + ';' + getTagSolidStyle(followColor) + '" onclick="setTaskTemplatePanelList(\'\')">根据上下文添加</button>'];
     (typeof lists !== 'undefined' ? lists : []).filter(_templateListSelectable).forEach(function (l) {
         const on = current === l.id;
         const color = _safeTemplateColor(l.color, '#8b5cf6');
-        items.push('<button type="button" class="detail-tag-pill' + (on ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + color + '" onclick="setTaskTemplatePanelList(\'' + l.id + '\')">' + escapeHtml(l.name) + '</button>');
+        items.push('<button type="button" class="detail-tag-pill' + (on ? ' detail-tag-pill-selected' : '') + '" style="--tag-color:' + color + ';' + getTagSolidStyle(color) + '" onclick="setTaskTemplatePanelList(\'' + l.id + '\')">' + escapeHtml(l.name) + '</button>');
     });
     box.innerHTML = items.join('');
     _tplPanelRefreshListButton();
@@ -4004,14 +4006,16 @@ function updateDetailTemplateEntry(task) {
 // ==================== 内置预置模板 ====================
 
 // 预置模板改版号：改动 TEMPLATE_PRESETS 后必须 +1。
-// 启动时 seedTaskTemplatesIfNeeded() 检测到本地版本低于此值，会把模板列表整体重建为
-// 当前 3 个预置（旧版预置及其副本一并清除）；「重置数据」同样调用 resetTaskTemplatesToPresets()。
+// 升级时 seedTaskTemplatesIfNeeded() 按 presetKey / 旧版内容指纹做非破坏性迁移：
+// 只更新未被用户改过的旧预置，自建模板与改过的模板一律保留。
+// 「重置数据」才调用 resetTaskTemplatesToPresets() 整体还原。
 const TEMPLATE_PRESET_VERSION = 4;
 
 // 预置主题固定为 3 个日常工作模板：周报 / 会议纪要 / 项目复盘
 // 备注骨架使用 Markdown（详情面板按行级 Markdown 渲染）
 const TEMPLATE_PRESETS = [
     {
+        presetKey: 'weekly-report',
         name: '周报',
         task: {
             title: '本周周报',
@@ -4028,6 +4032,7 @@ const TEMPLATE_PRESETS = [
         }
     },
     {
+        presetKey: 'meeting-notes',
         name: '会议纪要',
         task: {
             title: '会议纪要',
@@ -4044,6 +4049,7 @@ const TEMPLATE_PRESETS = [
         }
     },
     {
+        presetKey: 'project-review',
         name: '项目复盘',
         task: {
             title: '项目复盘',
@@ -4062,21 +4068,81 @@ const TEMPLATE_PRESETS = [
     }
 ];
 
+// 旧版预置（v3）的内容登记：旧数据没有 presetKey，只能按内容指纹识别「未被用户改过」的预置。
+// 更早的预置（每日站会 / 购物清单 等）没有登记在这里，迁移时一律保留，不做自动删除。
+const LEGACY_TEMPLATE_PRESETS = [
+    {
+        presetKey: 'weekly-report',
+        name: '周报',
+        task: {
+            title: '本周周报',
+            notes: '本周完成\n\n下周计划\n\n风险与需要的支持',
+            important: true,
+            urgent: false,
+            reminders: [60],
+            suggestedTime: '17:00',
+            repeat: { type: 'weekly' },
+            subtasks: [
+                { text: '汇总本周产出' },
+                { text: '整理下周计划' }
+            ]
+        }
+    },
+    {
+        presetKey: 'meeting-notes',
+        name: '会议纪要',
+        task: {
+            title: '会议纪要',
+            notes: '议题\n\n结论\n\n待办与责任人\n\n下次会议',
+            important: false,
+            urgent: false,
+            reminders: [],
+            subtasks: [
+                { text: '会前确认议题与参会人' },
+                { text: '记录讨论结论与待办' },
+                { text: '同步纪要并跟进待办' }
+            ]
+        }
+    },
+    {
+        presetKey: 'project-review',
+        name: '项目复盘',
+        task: {
+            title: '项目复盘',
+            notes: '目标与结果\n\n关键节点\n\n遇到的问题\n\n下一步行动',
+            important: true,
+            urgent: false,
+            reminders: [60],
+            suggestedTime: '16:00',
+            subtasks: [
+                { text: '对比目标与实际结果' },
+                { text: '回顾关键节点与决策' },
+                { text: '整理经验与教训' },
+                { text: '列出下一步行动项' }
+            ]
+        }
+    }
+];
+
 // 按当前预置生成一套全新模板（每次重新分配 id，避免重建后旧引用残留）
 function buildPresetTaskTemplates() {
     const now = new Date().toISOString();
     return TEMPLATE_PRESETS.map(function (p) {
-        return {
+        const tpl = {
             id: _templateId(),
+            presetKey: p.presetKey,
             name: p.name,
             createdAt: now,
             updatedAt: now,
             task: JSON.parse(JSON.stringify(p.task))
         };
+        // 记录「应用时的预置指纹」：后续改版只要用户没改过内容，就能继续升级
+        tpl.presetFingerprint = _templatePresetFingerprint(tpl);
+        return tpl;
     });
 }
 
-// 把模板列表还原为出厂预置（重置数据 / 预置改版升级共用）。
+// 把模板列表还原为出厂预置（仅「重置数据」使用）。
 // 只改内存，持久化由调用方的 saveData/saveDataImmediate 负责。
 function resetTaskTemplatesToPresets() {
     taskTemplates = buildPresetTaskTemplates();
@@ -4084,8 +4150,6 @@ function resetTaskTemplatesToPresets() {
     settings.taskTemplatesPresetVersion = TEMPLATE_PRESET_VERSION;
     return taskTemplates.length;
 }
-
-// 旧版预置（每日站会 / 购物清单 等）不再做逐条补齐：预置改版时整体重建，见 seedTaskTemplatesIfNeeded()。
 
 // 清理历史模板里的 dailyWorkday / yearlyBeforeHoliday 写法（重复引擎不识别这两种 type）
 function _normalizeStoredTemplateRepeats() {
@@ -4097,18 +4161,155 @@ function _normalizeStoredTemplateRepeats() {
     });
 }
 
+function _templateStableStringify(value) {
+    if (value === undefined) return 'null';
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) {
+        return '[' + value.map(_templateStableStringify).join(',') + ']';
+    }
+    return '{' + Object.keys(value).sort().map(function (key) {
+        return JSON.stringify(key) + ':' + _templateStableStringify(value[key]);
+    }).join(',') + '}';
+}
+
+// 只比较模板的可编辑内容，忽略 id / 时间戳 / 使用统计 / mode 等派生字段。
+// 这样打开过编辑面板（字段被规范化）不会误判成修改，真正改过内容才会失配。
+// ⚠️ 修改这里的字段集合会使已存的 presetFingerprint 全部失配（旧预置会被当作已修改保留），
+//    需要同时提供哈希版本或迁移逻辑。
+function _templatePresetFingerprint(tplOrPreset) {
+    const source = tplOrPreset || {};
+    const task = source.task || {};
+    const normalizeText = function (value) {
+        return String(value == null ? '' : value).replace(/\r\n?/g, '\n').trim();
+    };
+    const reminders = _templateRemindersOf(task).slice().sort(function (a, b) { return b - a; });
+    const payload = {
+        name: normalizeText(source.name),
+        title: normalizeText(task.title),
+        notes: normalizeText(task.notes),
+        description: normalizeText(task.description),
+        listId: task.listId || null,
+        tags: Array.isArray(task.tags) ? task.tags.slice().sort() : [],
+        important: !!task.important,
+        urgent: !!task.urgent,
+        reminders: reminders,
+        repeat: _normalizeTemplateRepeat(task.repeat),
+        suggestedTime: _templateNormalizeSuggestedTime(task.suggestedTime),
+        suggestedEndTime: _templateNormalizeSuggestedTime(task.suggestedEndTime),
+        subtasks: (Array.isArray(task.subtasks) ? task.subtasks : [])
+            .filter(function (st) { return st && normalizeText(st.text); })
+            .map(function (st) { return normalizeText(st.text); })
+    };
+    return _templateStableStringify(payload);
+}
+
+let _legacyPresetFingerprintMap = null;
+
+function _getLegacyPresetFingerprints() {
+    if (_legacyPresetFingerprintMap) return _legacyPresetFingerprintMap;
+    _legacyPresetFingerprintMap = {};
+    LEGACY_TEMPLATE_PRESETS.forEach(function (preset) {
+        if (!preset || !preset.presetKey) return;
+        if (!_legacyPresetFingerprintMap[preset.presetKey]) {
+            _legacyPresetFingerprintMap[preset.presetKey] = [];
+        }
+        _legacyPresetFingerprintMap[preset.presetKey].push(_templatePresetFingerprint(preset));
+    });
+    return _legacyPresetFingerprintMap;
+}
+
+// 非破坏性预置迁移：
+// - 带 presetKey 的模板优先按 key 定位；旧数据按旧版内置签名定位；
+// - 有 presetFingerprint 的模板以「内容是否仍等于应用时指纹」判断，没有的按内置签名判断；
+// - 只有未被用户改过的模板才会被更新，自建 / 改过的一律保留；
+// - 不删除任何模板；同内容的多条只在最早的一条上迁移，其余副本保持原样。
+function _migrateTaskTemplatesPresets() {
+    const list = getTaskTemplates();
+    if (!list.length) return false;
+    const legacyMap = _getLegacyPresetFingerprints();
+    const now = new Date().toISOString();
+    let changed = false;
+
+    TEMPLATE_PRESETS.forEach(function (preset) {
+        if (!preset || !preset.presetKey) return;
+        const currentFingerprint = _templatePresetFingerprint(preset);
+        const knownFingerprints = [currentFingerprint].concat(legacyMap[preset.presetKey] || []);
+        // 没有指纹字段的旧模板只能按内置签名识别；有指纹的模板以「内容是否仍等于应用时的指纹」为准，
+        // 这样后续预置改版不必把上一版定义再登记一次。
+        const isUnmodified = function (tpl) {
+            const fingerprint = _templatePresetFingerprint(tpl);
+            const stored = typeof tpl.presetFingerprint === 'string' ? tpl.presetFingerprint : '';
+            if (stored) return fingerprint === stored;
+            return knownFingerprints.indexOf(fingerprint) !== -1;
+        };
+
+        let candidates = list.filter(function (tpl) {
+            return tpl && tpl.presetKey === preset.presetKey;
+        });
+        if (!candidates.length) {
+            candidates = list.filter(function (tpl) {
+                return tpl && !tpl.presetKey && !tpl.presetFingerprint && isUnmodified(tpl);
+            });
+        }
+        const unmodified = candidates.filter(isUnmodified);
+        if (!unmodified.length) return;
+
+        unmodified.sort(function (a, b) {
+            const ta = Date.parse(a.createdAt) || 0;
+            const tb = Date.parse(b.createdAt) || 0;
+            if (ta !== tb) return ta - tb;
+            return list.indexOf(a) - list.indexOf(b);
+        });
+        const target = unmodified[0];
+        const targetFingerprint = _templatePresetFingerprint(target);
+        const contentChanged = targetFingerprint !== currentFingerprint;
+        // 出现同名模板时整条跳过，避免改名冲突，也避免写入与实际内容不一致的指纹
+        if (contentChanged && list.some(function (tpl) {
+            return tpl !== target && _templateNameKey(tpl.name) === _templateNameKey(preset.name);
+        })) return;
+
+        let targetChanged = false;
+        if (target.presetKey !== preset.presetKey) {
+            target.presetKey = preset.presetKey;
+            targetChanged = true;
+        }
+        if (target.presetFingerprint !== currentFingerprint) {
+            target.presetFingerprint = currentFingerprint;
+            targetChanged = true;
+        }
+        if (contentChanged) {
+            target.name = preset.name;
+            target.task = JSON.parse(JSON.stringify(preset.task));
+            target.updatedAt = now;
+            targetChanged = true;
+        }
+        if (targetChanged) changed = true;
+    });
+
+    return changed;
+}
+
 function seedTaskTemplatesIfNeeded() {
     let changed = false;
     const presetVersion = parseInt(settings.taskTemplatesPresetVersion, 10) || 0;
-    if (presetVersion < TEMPLATE_PRESET_VERSION) {
-        // 预置改版（含首次安装，版本视为 0）：整体重建为当前 3 个预置
-        resetTaskTemplatesToPresets();
-        changed = true;
-    } else if (!settings.taskTemplatesSeeded) {
-        // 老数据兜底：标记已播种；列表为空才补，避免覆盖用户已删空的选择
+
+    if (getTaskTemplates().length === 0 && !settings.taskTemplatesSeeded) {
+        // 首次安装（或从未播种过）：生成当前 3 个预置
+        taskTemplates = buildPresetTaskTemplates();
         settings.taskTemplatesSeeded = true;
+        settings.taskTemplatesPresetVersion = TEMPLATE_PRESET_VERSION;
         changed = true;
-        if (getTaskTemplates().length === 0) taskTemplates = buildPresetTaskTemplates();
+    } else {
+        // 升级 / 导入 / 日常启动：只按稳定 key 更新未被用户改过的旧预置，绝不整体重建
+        if (_migrateTaskTemplatesPresets()) changed = true;
+        if (presetVersion < TEMPLATE_PRESET_VERSION) {
+            settings.taskTemplatesPresetVersion = TEMPLATE_PRESET_VERSION;
+            changed = true;
+        }
+        if (!settings.taskTemplatesSeeded) {
+            settings.taskTemplatesSeeded = true;
+            changed = true;
+        }
     }
     if (!settings.taskTemplatesRepeatNormalizedV1) {
         settings.taskTemplatesRepeatNormalizedV1 = true;

@@ -1574,6 +1574,86 @@ function _getTagsByIdMap() {
     return m;
 }
 
+// ==================== 标签/清单徽章文字色 ====================
+// 两个候选墨色来自 CSS 变量（可被自定义配色覆盖）：
+//   --tag-ink-on-light：浅色主题文字色（深墨）
+//   --tag-ink-on-dark ：深色主题文字色（浅墨）
+// 选中 / hover / 只读实底：底色参与对比度调整。
+//   浅色主题：原底深字 ≥6:1 时保留原底 + 深字；否则用浅字并把底加深到 ≥5:1。
+//   深色主题：选中固定深字；原底深字 <5:1 时把底提亮到 ≥5:1。
+let _tagInkTokens = null;
+let _tagInkMap = new Map();
+
+function _invalidateTagInk() {
+    _tagInkTokens = null;
+    _tagInkMap = new Map();
+}
+
+function _getTagInkTokens() {
+    if (_tagInkTokens) return _tagInkTokens;
+    const cs = getComputedStyle(document.documentElement);
+    const read = function (name, fallback) {
+        const v = cs.getPropertyValue(name).trim();
+        return v || fallback;
+    };
+    _tagInkTokens = {
+        light: read('--tag-ink-on-light', '#111827'),
+        dark: read('--tag-ink-on-dark', '#f9fafb')
+    };
+    return _tagInkTokens;
+}
+
+function _tagFillContrast(fillHex, inkHex) {
+    return _contrastRatio(_hexToRgb(fillHex), _hexToRgb(inkHex));
+}
+
+// 在当前色相下调整亮度，直到填充与目标墨色达到 target 对比度；direction=-1 加深，+1 提亮。
+function _adjustTagFill(color, inkHex, target, direction) {
+    let fill = color;
+    try {
+        const rgb = _hexToRgb(color);
+        const hsl = _rgbToHsl(rgb[0], rgb[1], rgb[2]);
+        let l = hsl[2];
+        let attempts = 0;
+        while (_tagFillContrast(fill, inkHex) < target && attempts < 60) {
+            l = Math.max(0, Math.min(1, l + direction));
+            fill = _rgbToHex.apply(null, _hslToRgb(hsl[0], hsl[1], l));
+            attempts++;
+        }
+    } catch (e) { /* 非法颜色保持原值 */ }
+    return fill;
+}
+
+function _getTagInkInfo(color) {
+    const key = String(color || '').toLowerCase();
+    if (_tagInkMap.has(key)) return _tagInkMap.get(key);
+    const t = _getTagInkTokens();
+    const V_DARK_INK = 'var(--tag-ink-on-light)';
+    const V_LIGHT_INK = 'var(--tag-ink-on-dark)';
+    let darkContrast = 0;
+    try {
+        darkContrast = _tagFillContrast(color, t.light);
+    } catch (e) { /* 非法颜色走默认墨色 */ }
+    const lightVariant = darkContrast >= 6.0
+        ? { fill: color, ink: V_DARK_INK }
+        : { fill: _adjustTagFill(color, t.dark, 5.0, -0.02), ink: V_LIGHT_INK };
+    const darkVariant = darkContrast >= 5.0
+        ? { fill: color, ink: V_DARK_INK }
+        : { fill: _adjustTagFill(color, t.light, 5.0, 0.02), ink: V_DARK_INK };
+    const info = { light: lightVariant, dark: darkVariant };
+    _tagInkMap.set(key, info);
+    return info;
+}
+
+// 选中 / hover / 只读实底：返回两套主题的填充与墨色变量，供 CSS 按 [data-theme] 取用
+function getTagSolidStyle(color) {
+    const info = _getTagInkInfo(color);
+    return '--tag-solid-fill-light:' + info.light.fill + ';' +
+        '--tag-solid-ink-light:' + info.light.ink + ';' +
+        '--tag-solid-fill-dark:' + info.dark.fill + ';' +
+        '--tag-solid-ink-dark:' + info.dark.ink + ';';
+}
+
 function renderTagCapsules(task, maxDisplay = 2, position = 'left') {
     const taskTags = task.tags || [];
     if (taskTags.length === 0) return '';
@@ -1586,7 +1666,7 @@ function renderTagCapsules(task, maxDisplay = 2, position = 'left') {
         const tag = tagMap.get(tagId);
         if (!tag) return '';
         const displayName = tag.name.length > 8 ? tag.name.substring(0, 8) + '…' : tag.name;
-        return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: ${tag.color}">${displayName}</span>`;
+        return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: var(--text-primary)">${displayName}</span>`;
     }).filter(Boolean).join('');
 
     const moreHtml = remaining > 0 ? `<span class="text-[10px] text-theme-muted cursor-pointer hover:text-theme-primary transition" onclick="event.stopPropagation(); expandTagCapsules(this, '${task.id}')" title="点击展开全部标签">+${remaining}</span>` : '';
@@ -1596,7 +1676,7 @@ function renderTagCapsules(task, maxDisplay = 2, position = 'left') {
         const tag = tagMap.get(tagId);
         if (!tag) return '';
         const displayName = tag.name.length > 8 ? tag.name.substring(0, 8) + '…' : tag.name;
-        return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: ${tag.color}">${displayName}</span>`;
+        return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: var(--text-primary)">${displayName}</span>`;
     }).filter(Boolean).join('');
 
     const hiddenFull = taskTags.length > maxDisplay ? `<span class="hidden tag-capsules-full">${allCapsules}</span>` : '';
@@ -2982,9 +3062,10 @@ function applyThemePalette(paletteName) {
 // accentLight, bgTertiary, textSecondary）若调色板未提供，则自动从核心字段派生
 function applyPaletteToCssVars(palette, paletteName) {
     if (!palette) return;
+    const paletteVariants = (palette.light && palette.dark) ? palette : null;
     // 内置/自定义调色板含 light/dark 双变体，根据当前主题选择
-    if (palette.light && palette.dark) {
-        palette = isDarkThemeActive() ? palette.dark : palette.light;
+    if (paletteVariants) {
+        palette = isDarkThemeActive() ? paletteVariants.dark : paletteVariants.light;
     }
     const root = document.documentElement;
     const isDark = isDarkThemeActive();
@@ -3038,6 +3119,13 @@ function applyPaletteToCssVars(palette, paletteName) {
     root.style.setProperty('--text-secondary', palette.textSecondary);
     root.style.setProperty('--text-muted', palette.textMuted);
     root.style.setProperty('--border-color', palette.border);
+
+    // 标签/清单实底文字的两个候选墨色：取调色板的浅/深两套文字色
+    const lightText = (paletteVariants && paletteVariants.light && paletteVariants.light.textPrimary) || '#111827';
+    const darkText = (paletteVariants && paletteVariants.dark && paletteVariants.dark.textPrimary) || '#f9fafb';
+    root.style.setProperty('--tag-ink-on-light', lightText);
+    root.style.setProperty('--tag-ink-on-dark', darkText);
+    _invalidateTagInk();
 
     // 中间视图区域背景跟随调色板，避免固定深蓝色与暖色主题不搭
     root.style.setProperty('--view-bg-default', palette.bgPrimary);
@@ -3125,8 +3213,10 @@ function clearThemePaletteVars() {
         '--bg-primary', '--bg-primary-rgb',
         '--bg-secondary', '--bg-secondary-rgb', '--bg-tertiary', '--bg-tertiary-rgb',
         '--text-primary', '--text-secondary', '--text-muted', '--border-color',
+        '--tag-ink-on-light', '--tag-ink-on-dark',
         '--view-bg-default', '--view-bg-focus', '--view-bg-break'];
     keys.forEach(k => root.style.removeProperty(k));
+    _invalidateTagInk();
 }
 
 // ==================== 任务过期判断与专注按钮（从 views.js 拆分） ====================

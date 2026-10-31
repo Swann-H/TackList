@@ -3262,7 +3262,7 @@ function populateDetailListSelect(selectedListId) {
         const color = list.color || '#6b7280';
         const btn = document.createElement('button');
         btn.className = isSelected ? 'detail-tag-pill-selected' : 'detail-tag-pill';
-        btn.style.setProperty('--tag-color', color);
+        btn.style.cssText = '--tag-color:' + color + ';' + getTagSolidStyle(color);
         btn.title = isSelected ? '当前所属清单' : '点击选择此清单';
         btn.textContent = list.name;
         btn.onclick = (e) => {
@@ -3301,7 +3301,7 @@ function populateDetailGroupSelect() {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = isSel ? 'detail-group-chip-selected' : 'detail-group-chip';
-        btn.style.setProperty('--tag-color', color);
+        btn.style.cssText = '--tag-color:' + color + ';' + getTagSolidStyle(color);
         btn.title = isSel ? '当前分组' : '点击选择此分组';
         btn.textContent = opt.name;
         btn.onclick = (e) => {
@@ -5742,9 +5742,10 @@ function renderDetailTags(task) {
             displayContainer.innerHTML = taskTags.map(tagId => {
                 const tag = allTags.find(t => t.id === tagId);
                 if (!tag) return '';
-                return `<span class="detail-tag-chip inline-flex items-center px-2 py-0.5 rounded-full text-xs text-white" style="background-color: ${tag.color}">
+                const color = tag.color || '#6b7280';
+                return `<span class="detail-tag-chip inline-flex items-center px-2 py-0.5 rounded-full text-xs" style="--tag-color: ${color}; ${getTagSolidStyle(color)}">
                     ${tag.name}
-                    <button onclick="event.stopPropagation(); removeTagFromTask('${tagId}')" class="tag-remove-btn inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-white/30 hover:bg-black/30 transition text-white" title="删除标签">
+                    <button onclick="event.stopPropagation(); removeTagFromTask('${tagId}')" class="tag-remove-btn inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-white/30 hover:bg-black/30 transition" title="删除标签">
                         <i class="fas fa-times text-[9px]"></i>
                     </button>
                 </span>`;
@@ -5771,7 +5772,8 @@ function renderDetailTagPills() {
         const cls = isSelected ? 'detail-tag-pill-selected' : (isDisabled ? 'detail-tag-pill detail-tag-pill-disabled' : 'detail-tag-pill');
         const onclickAttr = isDisabled ? '' : `onclick="event.stopPropagation(); toggleTaskTag('${tag.id}')"`;
         const title = isSelected ? '点击取消选择' : (isDisabled ? '标签数量已达上限' : '点击选择');
-        return `<button class="${cls}" style="--tag-color: ${tag.color}" ${onclickAttr} title="${title}">${tag.name}</button>`;
+        const color = tag.color || '#6b7280';
+        return `<button class="${cls}" style="--tag-color: ${color}; ${getTagSolidStyle(color)}" ${onclickAttr} title="${title}">${tag.name}</button>`;
     }).join('');
 
     // 最后一个"+"按钮：展开新建标签表单

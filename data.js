@@ -1502,6 +1502,7 @@ function applyTheme() {
     if (settings.themePalette && settings.themePalette !== 'none') {
         applyThemePalette(settings.themePalette);
     }
+    if (typeof _invalidateTagInk === 'function') _invalidateTagInk();
     // 切换主题时刷新番茄统计页面（热力图等缓存了主题色）
     const statsPage = document.getElementById('pomodoro-stats-page');
     if (statsPage && !statsPage.classList.contains('hidden') && typeof renderPomodoroStats === 'function') {
@@ -1645,6 +1646,7 @@ function updateBgTextAdaptation() {
     if (settings.themePalette && settings.themePalette !== 'none') {
         applyThemePalette(settings.themePalette);
     }
+    if (typeof _invalidateTagInk === 'function') _invalidateTagInk();
 }
 
 // 处理背景图片上传
