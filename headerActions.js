@@ -6,6 +6,8 @@
 // - 桌面/鼠标设备悬浮展开（与「从模板添加」一致），触摸设备点击展开。
 
 let _headerOverflowResizeTimer = null;
+let _headerOverflowMainTimer = null;
+let _headerOverflowPanelTimer = null;
 
 // 头部按钮的语义色与图标由 utils.js 的 VIEW_ACTION_COLOR_HEX / VIEW_ACTION_DEFS 统一维护，设置面板与「更多」面板保持一致。
 
@@ -221,6 +223,44 @@ function _updateHeaderMoreAlign() {
     if (left + width > window.innerWidth - 12) group.classList.add('align-right');
 }
 
+// 面板打开瞬间主区还可能处于过渡起点（宽度未减 384px），按最终宽度预判一次，
+// 避免「先溢出、等过渡结束才收纳」的闪烁。
+function _headerEffectiveWidth(header) {
+    let width = header.clientWidth;
+    const panelOpen = document.body.classList.contains('detail-panel-open')
+        || document.body.classList.contains('fx-detail-open');
+    if (!panelOpen) return width;
+    const main = document.getElementById('main-content');
+    const sidebar = document.getElementById('sidebar');
+    if (!main || !sidebar) return width;
+    const fullMain = window.innerWidth - sidebar.offsetWidth;
+    // 主区还没缩窄 → 预判两个 384px 面板中的一个
+    if (main.clientWidth >= fullMain - 4) width -= 384;
+    return width;
+}
+
+// 当前宽度下 Tab 或 Header 是否已经放不下：用于在数量上限之外继续提前收纳动作按钮。
+// 直接比较「左侧内容宽 + 间距 + 动作组宽」与 Header 可用宽，避免依赖 Tab 容器自身的收缩结果。
+function _headerNeedsMoreRoom() {
+    const header = document.getElementById('main-header');
+    const tabs = document.getElementById('view-tabs');
+    const menu = document.getElementById('mobile-menu-btn');
+    const actions = document.getElementById('header-actions');
+    if (!header || !tabs || !actions) return false;
+    const gap = 16; // #main-header 左右两组 / 菜单与 Tab 之间的间距
+    let leftContent = tabs.scrollWidth; // Tab 的内容宽（不含被 flex-grow 拉出的空白）
+    if (menu && getComputedStyle(menu).display !== 'none') {
+        leftContent += menu.offsetWidth + gap;
+    }
+    // 用 clientWidth 而非 scrollWidth：动作组里的「更多」浮层是绝对定位，
+    // scrollWidth 会把浮层宽度算进来，导致误判为一直放不下。
+    return (leftContent + gap + actions.clientWidth) > _headerEffectiveWidth(header) + 1;
+}
+
+function scheduleHeaderActionOverflow(delay) {
+    setTimeout(function () { applyHeaderActionOverflow(); }, delay || 0);
+}
+
 function applyHeaderActionOverflow() {
     // 先按用户配置的顺序落位，再做数量裁剪
     applyHeaderActionOrder();
@@ -230,18 +270,76 @@ function applyHeaderActionOverflow() {
     const els = _headerActionEls();
     els.forEach(function (el) { el.classList.remove('header-action-collapsed'); });
 
-    const available = els.filter(function (el) { return !el.classList.contains('hidden'); });
+    const available = els.filter(function (el) {
+        return !el.classList.contains('hidden') && el.getClientRects().length > 0;
+    });
     const narrow = _headerIsNarrow();
     const limit = getViewActionLimit();
 
     if (narrow) {
         group.classList.add('overflow-active');
-    } else if (available.length > limit) {
-        // 「更多」占一个名额，右侧保留 limit-1 个操作，其余从最左侧收起
-        const keep = Math.max(0, limit - 1);
-        available.slice(0, available.length - keep).forEach(function (el) {
-            el.classList.add('header-action-collapsed');
+        _syncHeaderMoreAria();
+        renderHeaderMoreMenu();
+        return;
+    }
+
+    // keep = 右侧保留的按钮数；「更多」出现时占一个名额
+    // 先按实际宽度一次性算出能保留几个，避免逐次收起时读到过渡中的布局。
+    const header = document.getElementById('main-header');
+    const tabs = document.getElementById('view-tabs');
+    const actionGap = 12; // #header-actions gap-3
+    const headerGap = 16; // #main-header 左右两组间距
+    const moreWidth = 40 + actionGap;
+    const maxLeft = (header && tabs)
+        ? _headerEffectiveWidth(header) - tabs.scrollWidth - headerGap
+        : 0;
+    const widths = available.map(function (el) {
+        return el.getBoundingClientRect().width + actionGap;
+    });
+    const totalNoMore = widths.reduce(function (sum, w) { return sum + w; }, 0)
+        - (widths.length ? actionGap : 0);
+
+    let keep;
+    if (totalNoMore <= maxLeft) {
+        keep = available.length;
+    } else {
+        // 预留「更多」，从右往左保留能放下的按钮
+        let used = moreWidth;
+        keep = 0;
+        for (let i = available.length - 1; i >= 0; i--) {
+            if (used + widths[i] <= maxLeft) {
+                used += widths[i];
+                keep += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 用户设置的显示数量上限（含「更多」）
+    if (keep === available.length) {
+        if (available.length > limit) keep = Math.max(0, limit - 1);
+    } else {
+        keep = Math.min(keep, Math.max(0, limit - 1));
+    }
+
+    function applyKeep(count) {
+        available.forEach(function (el, i) {
+            el.classList.toggle('header-action-collapsed', i < available.length - count);
         });
+        // 测量可用宽度前就让「更多」占位，否则会少算它自身的 40px
+        group.classList.toggle('overflow-active', count < available.length);
+    }
+    applyKeep(keep);
+
+    // 兜底：字体/滚动条等造成的几像素误差，再收 1–2 个
+    let guard = 0;
+    while (keep > 0 && _headerNeedsMoreRoom() && guard++ < 2) {
+        keep -= 1;
+        applyKeep(keep);
+    }
+
+    if (keep < available.length) {
         group.classList.add('overflow-active');
     } else {
         group.classList.remove('overflow-active');
@@ -310,6 +408,36 @@ function closeHeaderMoreMenu() {
         if (_headerOverflowResizeTimer) clearTimeout(_headerOverflowResizeTimer);
         _headerOverflowResizeTimer = setTimeout(applyHeaderActionOverflow, 150);
     });
+
+    // 详情面板 / 计划面板开关会改变主区宽度（-384px），窗口本身不 resize；
+    // 监听主区宽度变化，延迟重算收纳，保证 1280 宽 + 面板打开时 Header 仍单行。
+    const mainContent = document.getElementById('main-content');
+    if (mainContent && typeof ResizeObserver !== 'undefined') {
+        let lastWidth = mainContent.clientWidth;
+        new ResizeObserver(function () {
+            const width = mainContent.clientWidth;
+            if (Math.abs(width - lastWidth) < 4) return;
+            lastWidth = width;
+            if (_headerOverflowMainTimer) clearTimeout(_headerOverflowMainTimer);
+            _headerOverflowMainTimer = setTimeout(applyHeaderActionOverflow, 120);
+        }).observe(mainContent);
+    }
+
+    // 面板的滑入/滑出有 300ms 过渡；等过渡结束后再算一次，避免只依赖
+    // ResizeObserver 在过渡中的中间宽度而漏掉最终状态。
+    ['task-detail-panel', 'plan-panel'].forEach(function (id) {
+        const panel = document.getElementById(id);
+        if (!panel || typeof MutationObserver === 'undefined') return;
+        new MutationObserver(function () {
+            if (_headerOverflowPanelTimer) clearTimeout(_headerOverflowPanelTimer);
+            _headerOverflowPanelTimer = setTimeout(applyHeaderActionOverflow, 360);
+        }).observe(panel, { attributes: true, attributeFilter: ['class', 'style'] });
+    });
+
+    // 字体加载完成后按钮宽度会变化，重新收纳一次
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () { applyHeaderActionOverflow(); });
+    }
 
     applyHeaderActionOverflow();
 })();

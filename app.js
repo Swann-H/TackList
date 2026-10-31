@@ -15,8 +15,6 @@ async function init() {
     renderView();
     updateViewButtons();
     updateSidebarHighlight();
-    initFormHandlers();
-    initTaskTitleHandler();
     setupDetailPanelCloseHandler();
     setupDetailPickerCloseHandler();
     if (typeof setupDetailPickerHover === 'function') setupDetailPickerHover();
@@ -692,6 +690,8 @@ function openSettingsModal() {
     // 书写态正文宽度（standard 720 / wide 以右下停靠区左边界为限 / full 拉满），默认 standard
     const _wWidth = document.getElementById('settings-write-mode-width');
     if (_wWidth) _wWidth.value = settings.writeModeWidth || 'standard';
+    const _notesMd = document.getElementById('settings-notes-markdown');
+    if (_notesMd) _notesMd.checked = settings.notesMarkdown !== false;
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
@@ -1196,73 +1196,122 @@ function onBgCarouselOrderChange() {
 }
 
 // ==================== 设置面板左侧快速导航 ====================
-let _settingsNavObserver = null;
-let _settingsNavClickLock = false; // 点击跳转期间暂停滚动联动，避免高亮抖动
+// 高亮规则：
+// 1) 点击时立即高亮目标项，并在平滑滚动期间锁定滚动联动；
+// 2) 滚动真正停止后按「容器顶部最近且未越过顶部」的 section 校正；
+// 3) 不再用 IntersectionObserver 取「top 最小」的可见项——上一节已滚出视口上方时
+//    其 top 为负，会被误判为当前节（表现为点「番茄计时设置」却高亮「命令面板」）。
+let _settingsNavObserver = null; // 保留原变量名作为「已初始化」标志，实际保存滚动监听器
+let _settingsNavClickLock = false;
+let _settingsNavRaf = null;
+let _settingsNavToken = 0;
+
+function _settingsNavItems() {
+    const nav = document.getElementById('settings-nav');
+    return nav ? Array.prototype.slice.call(nav.querySelectorAll('.settings-nav-item')) : [];
+}
+
+function _setSettingsNavActive(id) {
+    _settingsNavItems().forEach(function (n) {
+        n.classList.toggle('settings-nav-active', n.dataset.target === id);
+    });
+}
+
+function _settingsNavSectionAtTop() {
+    const scrollEl = document.getElementById('settings-content-scroll');
+    const sections = _settingsNavItems()
+        .map(function (n) { return document.getElementById(n.dataset.target); })
+        .filter(Boolean);
+    if (!scrollEl || sections.length === 0) return null;
+
+    // 滚到底且最后一节无法贴顶时，直接归最后一节（否则会被上一节抢走）
+    const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
+    if (maxScroll > 0 && scrollEl.scrollTop >= maxScroll - 2) {
+        return sections[sections.length - 1];
+    }
+
+    const containerTop = scrollEl.getBoundingClientRect().top;
+    const offset = 24;
+    let best = sections[0];
+    for (let i = 0; i < sections.length; i++) {
+        const top = sections[i].getBoundingClientRect().top - containerTop;
+        if (top <= offset) best = sections[i];
+        else break;
+    }
+    return best;
+}
+
+function _updateSettingsNavFromScroll() {
+    if (_settingsNavClickLock) return;
+    const best = _settingsNavSectionAtTop();
+    if (best) _setSettingsNavActive(best.id);
+}
 
 function initSettingsNav() {
-    const nav = document.getElementById('settings-nav');
     const scrollEl = document.getElementById('settings-content-scroll');
-    if (!nav || !scrollEl) return;
+    if (!scrollEl || _settingsNavObserver) return;
 
-    // 点击跳转
-    nav.querySelectorAll('.settings-nav-item').forEach(item => {
-        item.addEventListener('click', (e) => {
+    _settingsNavItems().forEach(function (item) {
+        item.addEventListener('click', function (e) {
             e.preventDefault();
             const targetId = item.dataset.target;
             const target = document.getElementById(targetId);
             if (!target) return;
+
+            const token = ++_settingsNavToken;
             _settingsNavClickLock = true;
-            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            // 立即高亮，并锁定一段时间防止滚动事件覆盖
-            nav.querySelectorAll('.settings-nav-item').forEach(n => n.classList.remove('settings-nav-active'));
-            item.classList.add('settings-nav-active');
-            setTimeout(() => { _settingsNavClickLock = false; }, 700);
-        });
-    });
+            _setSettingsNavActive(targetId);
 
-    // 滚动联动高亮：IntersectionObserver 监听各 section 可见性
-    const sections = [...nav.querySelectorAll('.settings-nav-item')]
-        .map(n => document.getElementById(n.dataset.target))
-        .filter(Boolean);
-    if (sections.length === 0) return;
-
-    _settingsNavObserver = new IntersectionObserver((entries) => {
-        if (_settingsNavClickLock) return;
-        // 找到当前最靠近顶部的可见 section
-        let best = null;
-        let bestTop = Infinity;
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                const top = entry.boundingClientRect.top;
-                if (top < bestTop) {
-                    bestTop = top;
-                    best = entry.target;
-                }
-            }
-        });
-        if (best) {
-            const id = best.id;
-            nav.querySelectorAll('.settings-nav-item').forEach(n => {
-                n.classList.toggle('settings-nav-active', n.dataset.target === id);
+            const containerTop = scrollEl.getBoundingClientRect().top;
+            const targetTop = target.getBoundingClientRect().top - containerTop + scrollEl.scrollTop - 8;
+            scrollEl.scrollTo({
+                top: Math.max(0, targetTop),
+                behavior: 'smooth'
             });
-        }
-    }, {
-        root: scrollEl,
-        rootMargin: '0px 0px -70% 0px', // 顶部进入视口即算活跃
-        threshold: 0
+
+            // 等滚动停止（连续 3 帧位移 < 1px）后再解除锁定并校正高亮；最多等 120 帧
+            let lastTop = scrollEl.scrollTop;
+            let stable = 0;
+            let frames = 0;
+            function tick() {
+                if (token !== _settingsNavToken) return;
+                frames += 1;
+                const now = scrollEl.scrollTop;
+                if (Math.abs(now - lastTop) < 1) stable += 1;
+                else stable = 0;
+                lastTop = now;
+                if (stable >= 3 || frames > 120) {
+                    _settingsNavClickLock = false;
+                    _updateSettingsNavFromScroll();
+                    return;
+                }
+                requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        });
     });
-    sections.forEach(s => _settingsNavObserver.observe(s));
+
+    const onScroll = function () {
+        if (_settingsNavClickLock) return;
+        if (_settingsNavRaf) return;
+        _settingsNavRaf = requestAnimationFrame(function () {
+            _settingsNavRaf = null;
+            _updateSettingsNavFromScroll();
+        });
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    _settingsNavObserver = onScroll;
+    _updateSettingsNavFromScroll();
 }
 
 function _resetSettingsNavState() {
-    const nav = document.getElementById('settings-nav');
     const scrollEl = document.getElementById('settings-content-scroll');
-    if (!nav) return;
+    _settingsNavToken += 1;
+    _settingsNavClickLock = false;
     // 高亮第一项
-    const firstItem = nav.querySelector('.settings-nav-item');
-    if (firstItem) {
-        nav.querySelectorAll('.settings-nav-item').forEach(n => n.classList.remove('settings-nav-active'));
-        firstItem.classList.add('settings-nav-active');
+    const items = _settingsNavItems();
+    if (items.length) {
+        _setSettingsNavActive(items[0].dataset.target);
     }
     // 滚动到顶部
     if (scrollEl) scrollEl.scrollTop = 0;
@@ -1505,6 +1554,8 @@ function saveSettings(silent) {
     settings.weekStart = document.getElementById('settings-week-start').value;
     const _wWidthEl = document.getElementById('settings-write-mode-width');
     if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'standard';
+    const _notesMdEl = document.getElementById('settings-notes-markdown');
+    if (_notesMdEl) settings.notesMarkdown = _notesMdEl.checked;
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
@@ -1606,6 +1657,10 @@ function saveSettings(silent) {
     saveData();
     // FR-01-4：settings 变更保存后撤销栈失效（结构性变更使旧撤销上下文不可靠）
     if (typeof clearUndoStack === 'function') clearUndoStack();
+    // FR-10：任务内容 Markdown 开关变更后立即同步详情面板编辑器
+    if (typeof mdEditorCommit === 'function') mdEditorCommit({ render: false });
+    if (typeof refreshDetailNotesEditor === 'function') refreshDetailNotesEditor();
+    if (typeof refreshTaskTemplatePanelNotesEditor === 'function') refreshTaskTemplatePanelNotesEditor();
     startDataRefreshTimer();
 
     // 刷新番茄状态背景色（开关变更后立即生效）

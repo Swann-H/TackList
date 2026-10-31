@@ -69,20 +69,20 @@ function renderSummaryView(container) {
             ` : ''}
             <div class="flex items-center justify-between p-4 pb-2">
                 <div class="flex items-center gap-4 flex-wrap">
-                    <select id="summary-time-range" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                    <select id="summary-time-range" class="summary-filter-select">
                         ${timeRangeOptions.map(opt => `<option value="${opt.value}" ${summaryTimeRange === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
                     </select>
 
-                    <select id="summary-priority" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                    <select id="summary-priority" class="summary-filter-select">
                         ${priorityOptions.map(opt => `<option value="${opt.value}" ${summaryPriority === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
                     </select>
 
-                    <select id="summary-list" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                    <select id="summary-list" class="summary-filter-select">
                         <option value="all" ${summaryList === 'all' ? 'selected' : ''}>所有清单</option>
                         ${lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).map(list => `<option value="${list.id}" ${summaryList === list.id ? 'selected' : ''}>${list.name}</option>`).join('')}
                     </select>
 
-                    <select id="summary-status" class="px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary">
+                    <select id="summary-status" class="summary-filter-select">
                         ${statusOptions.map(opt => `<option value="${opt.value}" ${summaryStatus === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
                     </select>
 

@@ -3407,9 +3407,9 @@ function renderBoringContent() {
                 <p class="text-theme-secondary text-center mb-4">你已经换了3次啦，请从以下选择一个：</p>
                 <div class="space-y-3">
                     ${boringState.shownThings.map(thing => `
-                        <div class="bg-purple-50 dark:bg-purple-900/30 rounded-xl p-4 cursor-pointer hover:bg-purple-100 dark:hover:bg-purple-900/40 transition border border-purple-200 dark:border-purple-700/50" onclick="acceptBoringThing('${thing.id}')">
-                            <div class="font-medium text-purple-900 dark:text-purple-100">${thing.description}</div>
-                            <div class="text-sm text-purple-700 dark:text-purple-300 mt-1">预计 ${thing.durationMinutes} 分钟</div>
+                        <div class="tone-bordered-purple rounded-xl p-4 cursor-pointer transition" onclick="acceptBoringThing('${thing.id}')">
+                            <div class="font-medium tone-ink-purple-strong">${thing.description}</div>
+                            <div class="text-sm tone-ink-purple mt-1">预计 ${thing.durationMinutes} 分钟</div>
                         </div>
                     `).join('')}
                 </div>

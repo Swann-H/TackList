@@ -147,7 +147,6 @@ function renderLists(force) {
         container.appendChild(createListEditForm(null));
     }
 
-    updateTaskListSelect();
     updateSettingsListSelect();
     updateSidebarHighlight();
     applySectionCollapse();
@@ -899,19 +898,6 @@ function selectList(listId) {
     renderTags();
 }
 
-function updateTaskListSelect() {
-    const select = document.getElementById('task-list');
-    if (select) {
-        select.innerHTML = '';
-        lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)).forEach(list => {
-            const option = document.createElement('option');
-            option.value = list.id;
-            option.textContent = list.name;
-            select.appendChild(option);
-        });
-    }
-}
-
 function updateSettingsListSelect() {
     const select = document.getElementById('settings-default-list');
     if (select) {
@@ -1585,7 +1571,7 @@ function createFilterEditForm(existingFilter) {
             <label class="text-xs text-theme-muted block mb-1">清单</label>
             <div class="flex flex-wrap gap-1">
                 ${activeLists.map(list => `
-                    <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-theme-secondary transition ${c.listIds && c.listIds.includes(list.id) ? 'bg-accent-strong dark:bg-accent-strong text-accent-dark' : 'text-theme-secondary'}">
+                    <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-theme-secondary transition ${c.listIds && c.listIds.includes(list.id) ? 'accent-chip-strong' : 'text-theme-secondary'}">
                         <input type="checkbox" class="filter-list-check hidden" value="${list.id}" ${c.listIds && c.listIds.includes(list.id) ? 'checked' : ''}>
                         <span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>
                         ${list.name}
@@ -1642,10 +1628,10 @@ function createFilterEditForm(existingFilter) {
             cb.addEventListener('change', () => {
                 const label = cb.closest('label');
                 if (cb.checked) {
-                    label.classList.add('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark');
+                    label.classList.add('accent-chip-strong');
                     label.classList.remove('text-theme-secondary');
                 } else {
-                    label.classList.remove('bg-accent-strong', 'dark:bg-accent-strong', 'text-accent-dark');
+                    label.classList.remove('accent-chip-strong');
                     label.classList.add('text-theme-secondary');
                 }
             });

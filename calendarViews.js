@@ -586,7 +586,7 @@ function renderWeekView(container) {
         const visibleTasks = collapsed ? dayAllDay.slice(0, 2) : dayAllDay;
         
         allDayHtml += `
-            <div class="flex-1 min-w-0 border-l border-theme ${isWeekend ? 'week-weekend-bg bg-gray-50 dark:bg-gray-700/15' : ''}">
+            <div class="flex-1 min-w-0 border-l border-theme ${isWeekend ? 'week-weekend-bg' : ''}">
                 <div class="text-center py-1 border-b border-theme">
                     <div class="text-xs text-theme-secondary">${formatWeekdayShort(date)}</div>
                     <div class="h-6 flex items-center justify-center"><span class="text-sm font-bold ${isToday ? 'w-6 h-6 inline-flex items-center justify-center rounded-full bg-accent text-white' : 'text-theme-primary'}">${date.getDate()}</span></div>
@@ -648,16 +648,16 @@ function renderWeekView(container) {
         const columnTasks = layouts[dateStr] || [];
         
         timeGridHtml += `
-            <div class="flex-1 min-w-0 relative ${isWeekend ? 'week-weekend-bg bg-gray-50/50' : ''} ${isToday ? 'bg-accent-soft dark:bg-accent-strong' : ''} border-l border-theme"
+            <div class="flex-1 min-w-0 relative ${isWeekend ? 'week-weekend-bg' : ''} ${isToday ? 'accent-soft-bg' : ''} border-l border-theme"
                  style="height: ${totalHours * hourHeight}px;"
                  onclick="handleWeekGridClick(event, '${dateStr}')"
                  onmousemove="handleWeekGridMouseMove(event, '${dateStr}')"
                  onmouseleave="handleWeekGridMouseLeave(event)"
                  ondragover="handleWeekDragOver(event)"
                  ondrop="handleWeekTimeDrop(event, '${dateStr}')">
-                <div class="week-hover-indicator absolute left-0 right-0 h-6 rounded flex items-center justify-between px-2 bg-accent-soft dark:bg-accent-strong pointer-events-none" style="display: none; top: 0px; z-index: 6;">
-                    <span class="week-hover-time text-xs text-accent dark:text-accent-secondary font-medium"></span>
-                    <span class="text-accent dark:text-accent-secondary font-bold text-sm">+</span>
+                <div class="week-hover-indicator absolute left-0 right-0 h-6 rounded flex items-center justify-between px-2 accent-soft-bg pointer-events-none" style="display: none; top: 0px; z-index: 6;">
+                    <span class="week-hover-time text-xs accent-ink font-medium"></span>
+                    <span class="accent-ink font-bold text-sm">+</span>
                 </div>
                 ${columnTasks.map(taskLayout => {
                     const list = lists.find(l => l.id === taskLayout.task.listId);
@@ -1321,9 +1321,9 @@ function openMonthDayPopover(dateStr) {
     let holidayBadge = '';
     if (holidayInfo) {
         if (holidayInfo.type === 'work') {
-            holidayBadge = `<span class="text-xs text-red-500 font-bold px-2 py-0.5 rounded bg-red-50 dark:bg-red-900/20" title="${holidayInfo.name}">班</span>`;
+            holidayBadge = `<span class="text-xs text-red-500 font-bold px-2 py-0.5 rounded tone-bg-red" title="${holidayInfo.name}">班</span>`;
         } else {
-            holidayBadge = `<span class="text-xs text-green-500 font-bold px-2 py-0.5 rounded bg-green-50 dark:bg-green-900/20" title="${holidayInfo.name}">休</span>`;
+            holidayBadge = `<span class="text-xs text-green-500 font-bold px-2 py-0.5 rounded tone-bg-green" title="${holidayInfo.name}">休</span>`;
         }
     }
 

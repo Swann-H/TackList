@@ -21,6 +21,8 @@ let _scheduleNavMonthLabel = null; // 当前锚点月份（YYYY-MM），由导�
 let _scheduleScrollTargetMonth = null; // 窗口平移重渲染后的滚动定位目标月份（YYYY-MM）
 let _scheduleScrollTargetDir = 1; // 定位目标的导航方向（目标月份为空月份时就近查找用）
 let _scheduleRestoreFilling = false; // 滚动锚点恢复期间填充月份时，跳过填充锚定补偿（位置由恢复逻辑显式设定）
+let _scheduleLastViewport = null; // 离开日程视图时的视口锚点 { scrollTop, anchorMonth, anchorOffset }，跨视图切回时恢复
+let _scheduleSessionEntered = false; // 本次页面会话是否已进入过日程视图（仅首次进入自动跳今天）
 
 // 计算日程视图日期块吸顶位置：使其在滚动时常驻滚动容器视口的垂直中部。
 // sticky 的 top 百分比相对包含块（整张卡片）解析，无法直接写 50%，故由 JS 换算成像素
@@ -34,6 +36,27 @@ function updateScheduleDateStickyTop() {
     if (!dateBlock) return;
     const top = Math.max((scrollContainer.clientHeight - dateBlock.offsetHeight) / 2, 0);
     scrollContainer.style.setProperty('--schedule-date-sticky-top', top + 'px');
+}
+
+// 离开日程视图时记录视口锚点：视图 DOM 会被整体替换，仅靠 scrollTop 无法跨视图还原位置。
+// 记录视口顶线所在月份及其相对偏移，切回后按锚点恢复，不受月份懒加载填充影响。
+function captureScheduleViewport() {
+    // 只认主视图容器下的真实日程 DOM；排除视图切换过渡期的 .fx-view-ghost 克隆
+    const scrollContainer = document.querySelector('#view-container > .schedule-container');
+    if (!scrollContainer) return null;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    let anchorMonth = null;
+    let anchorOffset = 0;
+    const sections = scrollContainer.querySelectorAll('[data-schedule-month]');
+    for (const sec of sections) {
+        const r = sec.getBoundingClientRect();
+        if (r.bottom > containerRect.top) {
+            anchorMonth = sec.getAttribute('data-schedule-month');
+            anchorOffset = r.top - containerRect.top;
+            break;
+        }
+    }
+    return { scrollTop: scrollContainer.scrollTop, anchorMonth, anchorOffset };
 }
 // 任务列表视图：filter+分组结果签名缓存，折叠/展开等纯状态变更时复用，避免全量扫描
 let _taskListGroupsCache = null;
@@ -1437,6 +1460,7 @@ function getScheduleGroupedTasks() {
 }
 
 function renderScheduleView(container) {
+    _scheduleSessionEntered = true;
     // 数据准备（filter+排序+分组）走缓存，避免每次全量扫描 5518 条
     const groupedTasks = getScheduleGroupedTasks();
     _scheduleGroupedTasks = groupedTasks; // 供勾选任务的局部更新复用
@@ -1490,7 +1514,8 @@ function renderScheduleView(container) {
         </div>
     `;
 
-    const prevScrollContainer = container.querySelector('.schedule-container');
+    // 只认主视图下的真实日程容器；切换过渡期的 .fx-view-ghost 克隆里也可能有同名容器
+    const prevScrollContainer = container.querySelector(':scope > .schedule-container');
     const savedScrollTop = prevScrollContainer ? prevScrollContainer.scrollTop : 0;
     // 滚动锚点：记录旧 DOM 中视口顶线所处的月份区块及其相对视口偏移。
     // 重渲染后上方曾懒加载填充的月份会退回空壳（高度≈0），旧 DOM 的绝对像素 scrollTop
@@ -1510,6 +1535,9 @@ function renderScheduleView(container) {
             }
         }
     }
+    // 跨视图切回：旧 DOM 已不在，使用离开时记录的视口锚点恢复上次位置
+    const pendingViewport = (!prevScrollContainer && _scheduleLastViewport) ? _scheduleLastViewport : null;
+    _scheduleLastViewport = null;
 
     container.innerHTML = html;
 
@@ -1590,35 +1618,64 @@ function renderScheduleView(container) {
     // 会强制同步布局（Layout Thrashing），在大量月份下导致明显卡顿。
     // IO 在浏览器内部以非主线程方式计算可见性，性能极高。
     if (scheduleScrollContainer) {
-        // 同步恢复滚动位置，消除刷新时从顶部（往期任务）跳到今天的跳动
-        if (!_scheduleAutoScroll && savedScrollTop > 0) {
-            // 优先按锚点月份恢复：先填充锚点月份（补偿逻辑与本恢复互斥），再把该月份
-            // 区块顶部放回原来的视口偏移处。锚点月份在新 DOM 中缺失（如勾选完成后该月
-            // 变为空月份不再生成外壳）时，就近查找相邻月份，仍找不到才回退像素恢复。
-            let restoredByAnchor = false;
-            if (savedAnchorMonth && /^\d{4}-\d{2}$/.test(savedAnchorMonth)) {
-                let anchorSec = scheduleScrollContainer.querySelector(`[data-schedule-month="${savedAnchorMonth}"]`);
-                if (!anchorSec) {
-                    const ay = parseInt(savedAnchorMonth.substring(0, 4), 10);
-                    const am = parseInt(savedAnchorMonth.substring(5), 10) - 1;
-                    anchorSec = _findScheduleMonthSection(scheduleScrollContainer, ay, am, 1)
-                        || _findScheduleMonthSection(scheduleScrollContainer, ay, am, -1);
+        // 定位辅助：先同步填充到目标月份（含），避免目标上方月份还是高度≈0的空壳。
+        // 否则跳转时文档总高不足，目标 scrollTop 会被浏览器钳到顶部（稀疏月份下表现为
+        // 切到日程视图却停在最前面的往期月份）。
+        const _populateMonthsThrough = (monthLabel) => {
+            if (!monthLabel) return;
+            _scheduleRestoreFilling = true;
+            try {
+                for (const el of _scheduleMonthEls) {
+                    if (el.dataset.populated !== 'true') _populateScheduleMonth(el);
+                    const sec = el.parentElement;
+                    if (sec && sec.getAttribute('data-schedule-month') === monthLabel) break;
                 }
-                if (anchorSec) {
-                    const anchorContent = anchorSec.querySelector('.schedule-month-content');
-                    if (anchorContent && anchorContent.dataset.populated !== 'true') {
-                        _scheduleRestoreFilling = true;
-                        try { _populateScheduleMonth(anchorContent); } finally { _scheduleRestoreFilling = false; }
-                    }
-                    const cRect = scheduleScrollContainer.getBoundingClientRect();
-                    const r = anchorSec.getBoundingClientRect();
-                    scheduleScrollContainer.scrollTop += r.top - cRect.top - savedAnchorOffset;
-                    _scheduleNavMonthLabel = anchorSec.getAttribute('data-schedule-month');
-                    restoredByAnchor = true;
-                }
+            } finally {
+                _scheduleRestoreFilling = false;
             }
-            if (!restoredByAnchor) {
-                scheduleScrollContainer.scrollTop = savedScrollTop;
+        };
+        const _scrollToScheduleMonth = (monthLabel, offset = 0) => {
+            if (!monthLabel || !/^\d{4}-\d{2}$/.test(monthLabel)) return null;
+            const y = parseInt(monthLabel.substring(0, 4), 10);
+            const m = parseInt(monthLabel.substring(5), 10) - 1;
+            const sec = scheduleScrollContainer.querySelector(`[data-schedule-month="${monthLabel}"]`)
+                || _findScheduleMonthSection(scheduleScrollContainer, y, m, 1)
+                || _findScheduleMonthSection(scheduleScrollContainer, y, m, -1);
+            if (!sec) return null;
+            _populateMonthsThrough(sec.getAttribute('data-schedule-month'));
+            const cRect = scheduleScrollContainer.getBoundingClientRect();
+            const r = sec.getBoundingClientRect();
+            scheduleScrollContainer.scrollTop += r.top - cRect.top - offset;
+            _scheduleNavMonthLabel = sec.getAttribute('data-schedule-month');
+            return sec;
+        };
+        // 懒加载会在定位后继续增加内容高度（尤其未来月份填充后可用滚动距离变大），
+        // 下一帧再校一次，避免停在被钳制的旧位置；此时用户通常还未开始滚动。
+        const _settleScheduleScroll = (anchorEl, offset) => {
+            requestAnimationFrame(() => {
+                if (!anchorEl || !document.body.contains(anchorEl) || !document.body.contains(scheduleScrollContainer)) return;
+                const cRect = scheduleScrollContainer.getBoundingClientRect();
+                const r = anchorEl.getBoundingClientRect();
+                const diff = r.top - cRect.top - offset;
+                if (Math.abs(diff) > 2) scheduleScrollContainer.scrollTop += diff;
+            });
+        };
+
+        // 同步恢复滚动位置，消除刷新时从顶部（往期任务）跳到今天的跳动
+        if (!_scheduleAutoScroll) {
+            // 视图内重渲染优先按旧 DOM 锚点恢复；跨视图切回用离开时保存的视口锚点。
+            // 锚点月份在新 DOM 中缺失（如勾选完成后该月变为空月份不再生成外壳）时，
+            // 就近查找相邻月份，仍找不到才回退像素恢复。
+            const restoreAnchorMonth = savedScrollTop > 0 ? savedAnchorMonth : (pendingViewport ? pendingViewport.anchorMonth : null);
+            const restoreAnchorOffset = savedScrollTop > 0 ? savedAnchorOffset : (pendingViewport ? pendingViewport.anchorOffset : 0);
+            const restoreScrollTop = savedScrollTop > 0 ? savedScrollTop : (pendingViewport ? pendingViewport.scrollTop : 0);
+            const restoredSec = restoreAnchorMonth
+                ? _scrollToScheduleMonth(restoreAnchorMonth, restoreAnchorOffset)
+                : null;
+            if (restoredSec) {
+                _settleScheduleScroll(restoredSec, restoreAnchorOffset);
+            } else if (restoreScrollTop > 0) {
+                scheduleScrollContainer.scrollTop = restoreScrollTop;
             }
         } else if (_scheduleAutoScroll) {
             // 自动定位"今天"：同步执行（今天所在月份已在上文同步填充，卡片必然存在）。
@@ -1639,23 +1696,25 @@ function renderScheduleView(container) {
                     || _findScheduleMonthSection(scheduleScrollContainer, ty, tm, -dir);
             }
             if (anchorEl) {
-                const containerRect = scheduleScrollContainer.getBoundingClientRect();
-                const secRect = anchorEl.getBoundingClientRect();
-                scheduleScrollContainer.scrollTop += secRect.top - containerRect.top;
-                _scheduleNavMonthLabel = anchorEl.getAttribute('data-schedule-month');
+                if (_scrollToScheduleMonth(anchorEl.getAttribute('data-schedule-month'), 0)) {
+                    _settleScheduleScroll(anchorEl, 0);
+                }
             } else {
                 // 默认定位"今天"
                 const todayCard = scheduleScrollContainer.querySelector('.schedule-day-drop.ring-2');
+                const now = new Date();
+                const todayMonth = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
                 if (todayCard) {
+                    _populateMonthsThrough(todayMonth);
                     const containerRect = scheduleScrollContainer.getBoundingClientRect();
                     const cardRect = todayCard.getBoundingClientRect();
                     scheduleScrollContainer.scrollTop += cardRect.top - containerRect.top - 20;
+                    _settleScheduleScroll(todayCard, 20);
                 }
                 // 没能定位到指定月份（窗口内该月无任务、无外壳）：锚点同步回落到今天，
                 // 否则 _scheduleNavMonthLabel 会停留在「目标月」而实际显示的是今天所在月，
                 // 让上层（快速跳转的落地提示）误判成跳转成功。
-                const now = new Date();
-                _scheduleNavMonthLabel = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+                _scheduleNavMonthLabel = todayMonth;
             }
         }
         // 滚动恢复 / 自动定位完成后，用真实锚点校正标题：

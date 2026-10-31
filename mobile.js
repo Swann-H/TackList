@@ -195,7 +195,7 @@ document.addEventListener('focusin', function (e) {
     if (!isMobileView()) return;
     const el = e.target;
     if (!el || !el.matches || !el.matches('input, textarea, select')) return;
-    if (!el.closest('#task-detail-panel, #plan-panel, #add-task-modal, #settings-modal, #month-day-popover, #command-palette-overlay, #pomodoro-task-panel')) return;
+    if (!el.closest('#task-detail-panel, #plan-panel, #settings-modal, #month-day-popover, #command-palette-overlay, #pomodoro-task-panel')) return;
     setTimeout(function () {
         try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (err) { /* 忽略 */ }
     }, 350);

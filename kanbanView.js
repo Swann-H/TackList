@@ -647,6 +647,11 @@ function renderKanbanView(container) {
     const validKeys = new Set(Object.keys(_kanbanLeafMap));
     Object.keys(_kanbanExpanded).forEach(k => { if (!validKeys.has(k)) delete _kanbanExpanded[k]; });
 
+    // 保存旧看板的横向滚动位置：任务详情切换保存、配置变更等重渲染会整板重建 DOM，
+    // 不恢复则滚动位置回到最左（与任务列表保存 scrollTop 的做法一致）。
+    const prevBoard = container.querySelector('#kanban-board');
+    const savedScrollLeft = prevBoard ? prevBoard.scrollLeft : 0;
+
     container.innerHTML = `
         <div class="h-full flex flex-col">
             <div class="flex-1 min-h-0 flex items-start gap-4 overflow-x-auto scrollbar-always pb-2 pt-1" id="kanban-board">
@@ -654,6 +659,9 @@ function renderKanbanView(container) {
                 ${addGroupHtml}
             </div>
         </div>`;
+
+    const newBoard = container.querySelector('#kanban-board');
+    if (newBoard && savedScrollLeft > 0) newBoard.scrollLeft = savedScrollLeft;
 
     // 展开列底部的哨兵元素接近视口时自动追加下一批任务（参考日程视图的懒加载方式）
     setupKanbanLazyIO(container);

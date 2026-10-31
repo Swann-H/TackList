@@ -964,6 +964,8 @@ const DEFAULT_SETTINGS = {
     showCompleted: true,
     showLunar: true,
     noDateTaskPosition: 'last',
+    // FR-10：任务内容 Markdown 渲染总开关；关闭后详情面板/书写态按纯文本编辑
+    notesMarkdown: true,
     focusDuration: 25,
     shortBreakDuration: 5,
     longBreakDuration: 15,

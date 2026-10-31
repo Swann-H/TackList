@@ -342,12 +342,33 @@ function _uploadAttachmentRaw(taskId, file) {
 }
 
 // 多文件合并为一次落盘/重绘，避免 N 个文件触发 N 次全量 PUT 与 renderView
-async function uploadAttachmentFiles(taskId, files) {
-    if (!taskId || !Array.isArray(files) || files.length === 0) return;
-    if (!isAttachmentSupported()) { showToast('当前环境不支持附件', 'info'); return; }
+// options.onDone({ metas, results, failed, taskId })：粘贴图片通道用它把上传结果回写到备注占位处
+async function uploadAttachmentFiles(taskId, files, options) {
+    const opts = options || {};
+    const notifyDone = function (payload) {
+        if (typeof opts.onDone !== 'function') return;
+        try { opts.onDone(payload); } catch (err) { console.error('[attachments] onDone failed:', err); }
+    };
+    if (!taskId || !Array.isArray(files) || files.length === 0) {
+        notifyDone({ metas: [], results: [], failed: 0, taskId: taskId });
+        return;
+    }
+    if (!isAttachmentSupported()) {
+        showToast('当前环境不支持附件', 'info');
+        notifyDone({ metas: [], results: [], failed: files.length, taskId: taskId });
+        return;
+    }
     const existingTask = tasks.find(function (t) { return t.id === taskId; });
-    if (!existingTask) { showToast('任务不存在，附件未上传', 'warning'); return; }
-    if (_attachmentsReadOnly(existingTask)) { showToast('只读任务不能上传附件', 'info'); return; }
+    if (!existingTask) {
+        showToast('任务不存在，附件未上传', 'warning');
+        notifyDone({ metas: [], results: [], failed: files.length, taskId: taskId });
+        return;
+    }
+    if (_attachmentsReadOnly(existingTask)) {
+        showToast('只读任务不能上传附件', 'info');
+        notifyDone({ metas: [], results: [], failed: files.length, taskId: taskId });
+        return;
+    }
     const accepted = [];
     files.forEach(function (file) {
         if (!file) return;
@@ -357,7 +378,10 @@ async function uploadAttachmentFiles(taskId, files) {
         }
         accepted.push(file);
     });
-    if (accepted.length === 0) return;
+    if (accepted.length === 0) {
+        notifyDone({ metas: [], results: [], failed: files.length, taskId: taskId });
+        return;
+    }
     _setAttachmentUploadingUi(taskId, true);
     let results;
     try {
@@ -375,6 +399,7 @@ async function uploadAttachmentFiles(taskId, files) {
     const task = tasks.find(function (t) { return t.id === taskId; });
     if (!task) {
         showToast('任务已被删除，已上传的附件未关联', 'error');
+        notifyDone({ metas: [], results: results, failed: accepted.length, taskId: taskId, taskMissing: true });
         return;
     }
     const metas = results.map(function (r) { return r.meta; }).filter(Boolean);
@@ -401,6 +426,7 @@ async function uploadAttachmentFiles(taskId, files) {
         const err = results.find(function (r) { return r.error; });
         showToast('附件上传失败：' + (err && err.error && err.error.message ? err.error.message : '未知错误'), 'error');
     }
+    notifyDone({ metas: metas, results: results, failed: failed, taskId: taskId });
 }
 
 function removeAttachment(taskId, attId) {
@@ -508,7 +534,53 @@ function onDetailPanelDrop(e) {
     uploadAttachmentFiles(currentDetailTaskId, files);
 }
 
-// 粘贴上传：备注框内 Ctrl+V 有图片时上传为附件（FR-10 落地前先走这条通道）
+// 粘贴上传：备注框内 Ctrl+V 有图片时上传为附件，并在光标处写入 Markdown 图片链接（FR-10-5）。
+// 上传期间先插入占位文本（upload:// token 不是合法链接，渲染器会按原文显示），
+// 成功后替换为 ![](/api/attachments/...)，失败则清除占位。
+const _pendingNotePlaceholders = new Map(); // taskId -> Set(token)
+
+function _notePlaceholder(token) {
+    return '![上传中…](upload://' + token + ')';
+}
+
+function _registerPendingNoteToken(taskId, token) {
+    if (!_pendingNotePlaceholders.has(taskId)) _pendingNotePlaceholders.set(taskId, new Set());
+    _pendingNotePlaceholders.get(taskId).add(token);
+}
+
+function _unregisterPendingNoteToken(taskId, token) {
+    const set = _pendingNotePlaceholders.get(taskId);
+    if (!set) return;
+    set.delete(token);
+    if (!set.size) _pendingNotePlaceholders.delete(taskId);
+}
+
+// 切任务 / 关面板 / 切换文本-子任务模式前调用：把未完成上传的占位从备注里摘掉，
+// 避免用户已经离开该任务后占位文本被当作正文保存。
+function cleanupPendingNotePlaceholders(taskId) {
+    if (!taskId) return;
+    const set = _pendingNotePlaceholders.get(taskId);
+    if (!set || !set.size) return;
+    const tokens = Array.from(set);
+    _pendingNotePlaceholders.delete(taskId);
+    tokens.forEach(function (token) {
+        const ph = _notePlaceholder(token);
+        if (typeof mdReplaceInNotes === 'function') mdReplaceInNotes(ph, '');
+        else {
+            const notes = document.getElementById('detail-task-notes');
+            if (notes && notes.value.indexOf(ph) !== -1) notes.value = notes.value.split(ph).join('');
+        }
+        const task = tasks.find(function (t) { return t.id === taskId; });
+        if (task && typeof task.notes === 'string' && task.notes.indexOf(ph) !== -1) {
+            task.notes = task.notes.split(ph).join('');
+        }
+    });
+}
+
+function _attachmentMarkdownAlt(name) {
+    return String(name || '图片').replace(/[\r\n]+/g, ' ').replace(/[\[\]]/g, '');
+}
+
 function handleAttachmentPaste(e) {
     const taskId = currentDetailTaskId;
     if (!taskId || !isAttachmentSupported()) return;
@@ -518,14 +590,64 @@ function handleAttachmentPaste(e) {
     const imgs = items.filter(function (it) { return it.kind === 'file' && /^image\//.test(it.type); });
     if (!imgs.length) return;
     e.preventDefault();
-    const files = [];
+
+    const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const entries = [];
     imgs.forEach(function (it, i) {
         const f = it.getAsFile();
         if (!f) return;
+        if (f.size > ATTACHMENT_MAX_BYTES) {
+            showToast('粘贴的图片超过 20MB，未上传', 'warning');
+            return;
+        }
         const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-        files.push(new File([f], '粘贴图片-' + Date.now() + (i ? '-' + i : '') + '.' + ext, { type: f.type }));
+        const token = stamp + '-' + i;
+        entries.push({
+            token: token,
+            file: new File([f], '粘贴图片-' + Date.now() + (i ? '-' + i : '') + '.' + ext, { type: f.type })
+        });
     });
-    uploadAttachmentFiles(taskId, files);
+    if (!entries.length) return;
+
+    entries.forEach(function (entry) { _registerPendingNoteToken(taskId, entry.token); });
+    const insertText = entries.map(function (entry) { return _notePlaceholder(entry.token); }).join('\n');
+    if (typeof mdEditorInsertText === 'function') {
+        mdEditorInsertText(insertText);
+    } else {
+        const notes = document.getElementById('detail-task-notes');
+        if (notes) {
+            const start = notes.selectionStart == null ? notes.value.length : notes.selectionStart;
+            const end = notes.selectionEnd == null ? start : notes.selectionEnd;
+            notes.value = notes.value.slice(0, start) + insertText + notes.value.slice(end);
+            notes.selectionStart = notes.selectionEnd = start + insertText.length;
+            if (typeof scheduleWriteModeAutoSave === 'function') scheduleWriteModeAutoSave();
+        }
+    }
+
+    uploadAttachmentFiles(taskId, entries.map(function (entry) { return entry.file; }), {
+        onDone: function (res) {
+            entries.forEach(function (entry, i) {
+                const ph = _notePlaceholder(entry.token);
+                _unregisterPendingNoteToken(taskId, entry.token);
+                // 已经切换任务/关闭面板：不再往当前备注里写，只清掉旧任务已落盘的占位
+                if (currentDetailTaskId !== taskId) {
+                    const oldTask = tasks.find(function (t) { return t.id === taskId; });
+                    if (oldTask && typeof oldTask.notes === 'string' && oldTask.notes.indexOf(ph) !== -1) {
+                        oldTask.notes = oldTask.notes.split(ph).join('');
+                    }
+                    return;
+                }
+                const meta = res && res.results && res.results[i] && res.results[i].meta;
+                if (meta) {
+                    const url = attachmentUrl(taskId, meta.id);
+                    const md = '![' + _attachmentMarkdownAlt(meta.name) + '](' + url + ')';
+                    if (typeof mdReplaceInNotes === 'function') mdReplaceInNotes(ph, md);
+                } else if (typeof mdReplaceInNotes === 'function') {
+                    mdReplaceInNotes(ph, '');
+                }
+            });
+        }
+    });
 }
 
 // ---- 预览浮层 ----

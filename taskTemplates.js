@@ -364,7 +364,7 @@ function createTaskFromTemplate(tpl, options) {
     if (typeof renderLists === 'function') renderLists();
     if (typeof renderView === 'function') renderView();
 
-    if (typeof showToast === 'function') {
+    if (!options.skipToast && typeof showToast === 'function') {
         const timeSensitive = !!task.repeat || reminders.length > 0;
         const hasClock = !!(task.startTime && !task.isAllDay);
         if (timeSensitive && !hasClock) {
@@ -587,15 +587,345 @@ function closeTaskTemplateSaveDialog() {
 
 let _tplPickerState = null;
 let _tplPickerEscHandler = null;
+let _tplPickerHideTimer = null;
+let _tplPickerOutsideBound = false;
+let _tplPickerIgnoreOutsideClick = false;
+let _tplPickerSelectTimer = null;
+// 单击只高亮，超过这个时长没有再次单击同一行就自动熄灭
+const TPL_PICKER_SELECT_RESET_MS = 3000;
 
-function _templatePickerDateLabel(mode) {
-    return mode === 'tomorrow' ? '明天' : (mode === 'none' ? '不设日期' : '今天');
+// 选择器右栏：与任务详情面板同款（384px 文档流兄弟节点，移动端全屏）
+function _ensureTaskTemplatePickerCss() {
+    if (document.getElementById('tpl-picker-css')) return;
+    const style = document.createElement('style');
+    style.id = 'tpl-picker-css';
+    style.textContent = `
+        @media (min-width: 769px) {
+            body.fx-smooth #tpl-picker-panel.panel-fade-in { animation: fxPanelIn .25s ease both; }
+            body.fx-smooth #tpl-picker-panel.panel-fade-out { animation: fxPanelOut .2s ease forwards; }
+            body.fx-smooth #tpl-picker-panel:not(.hidden) { position: fixed; top: 0; right: 0; bottom: 0; }
+            body.fx-smooth.tpl-picker-open #main-content { margin-right: 24rem; }
+        }
+        @media (max-width: 768px) {
+            #tpl-picker-panel {
+                position: fixed !important;
+                top: 0 !important;
+                right: 0 !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                /* width 交给 left/right 撑开：写 100% 会取 #app-container 的宽度，
+                   主区内容更宽时会溢出视口，右侧的关闭与「管理模板」会被裁掉 */
+                width: auto !important;
+                max-width: 100vw !important;
+                height: 100dvh !important;
+                z-index: 52 !important;
+                border: none !important;
+                overflow-x: hidden;
+            }
+            #tpl-picker-panel:not(.hidden) { animation: mobilePanelIn .28s ease; }
+            #tpl-picker-panel .tpl-picker-dock {
+                padding-bottom: calc(0.75rem + env(safe-area-inset-bottom)) !important;
+            }
+            /* 触控目标 40 → 44（规范 7），与侧边栏动作按钮的移动端提升同口径 */
+            #tpl-picker-panel .tpl-circle { width: 44px !important; height: 44px !important; }
+        }
+        body.has-bg-image #tpl-picker-panel {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.55) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        body.has-bg-image #tpl-picker-panel .bg-theme-secondary,
+        body.has-bg-image #tpl-picker-panel.bg-theme-secondary {
+            background-color: transparent !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        html[data-blur="off"] body.has-bg-image #tpl-picker-panel {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.92) !important;
+        }
+        html[data-blur="off"] body.has-bg-image #tpl-picker-panel .bg-theme-secondary,
+        html[data-blur="off"] body.has-bg-image #tpl-picker-panel.bg-theme-secondary {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.92) !important;
+        }
+        /* 384px 宽度下省略行尾圆形加号：整行本身即可点击，省出的宽度留给标签与清单 */
+        #tpl-picker-panel .tpl-picker-row .tpl-card-add { display: none; }
+
+        /* ---- 底部停靠区圆钮：一比一复刻任务详情栏 .wm-circle（index.html:3198）----
+           基础形态（40×40 正圆 / 2px 语义色描边 / 透明底 / 图标 15px 且 color:inherit）
+           直接复用全局 .wm-circle，这里只补 picker 自己的配色与 hover / 激活态：
+           .wm-circle 的 background 没有 !important（详情栏注释明确要求，否则会抹掉激活淡底），
+           所以 hover 的 background-color 必须带 !important 才能压过透明底。 */
+        #tpl-picker-panel .tpl-circle {
+            border-color: var(--tpl-btn-color, var(--accent-color)) !important;
+            color: var(--tpl-btn-color, var(--accent-color)) !important;
+        }
+        #tpl-picker-panel .tpl-circle:hover {
+            background-color: var(--tpl-btn-color, var(--accent-color)) !important;
+            border-color: var(--tpl-btn-color, var(--accent-color)) !important;
+            color: #fff !important;
+        }
+        /* 清单候选已展开（或已指定具体清单）时实心：圆钮不带文字，状态只能靠颜色表达 */
+        #tpl-picker-panel .tpl-circle.is-on {
+            background-color: var(--tpl-btn-color, var(--accent-color)) !important;
+            border-color: var(--tpl-btn-color, var(--accent-color)) !important;
+            color: #fff !important;
+        }
+
+        /* 行 hover：与管理页 .tpl-manage-row 同为 hover:opacity-80（不改底色），
+           这样象限底色在 hover 时依然成立；hover 换底色会把象限色盖掉。 */
+        #tpl-picker-panel .tpl-picker-row:hover { opacity: .8; }
+
+        /* 行左侧清单色条：与全局 .task-list-color-bar 同规格（4px / 绝对定位 / 贴满上下），
+           但选择器行是 <button>，内部只能放 phrasing content，故用 <span> 承载。
+           rounded-r-lg + 左侧贴边，形成规范 2.6 要求的「色条 + 卡片」连续感。 */
+        #tpl-picker-panel .tpl-picker-color-bar {
+            position: absolute;
+            left: 0;
+            top: -1px;
+            bottom: -1px;
+            width: 4px;
+            z-index: 1;
+        }
+
+        /* 搜索输入框：与回收站 / 模板管理页同款（border-2 + focus 改 accent 描边） */
+        #tpl-picker-panel #tpl-picker-search:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px var(--accent-bg);
+        }
+
+        /* ---- 行选中态（单击高亮、3 秒内再次单击同一行创建）----
+           口径取番茄专注页「选取关联任务」的选定态：反色——
+           浅色模式选中转深（#1f2937），深色模式选中转浅（#f9fafb），
+           行内三档文字色同步反转，保证深/浅底上都可读。
+           · 底色必须 !important：行本身可能带象限底色（重要/紧急），选中态要压过它；
+           · 行 hover 时整体 opacity .8，选中行回到 1，否则高亮会被自己压暗。 */
+        #tpl-picker-panel .tpl-picker-row.is-selected {
+            background-color: #1f2937 !important;
+        }
+        #tpl-picker-panel .tpl-picker-row.is-selected .text-theme-primary { color: #f9fafb !important; }
+        #tpl-picker-panel .tpl-picker-row.is-selected .text-theme-secondary { color: #d1d5db !important; }
+        #tpl-picker-panel .tpl-picker-row.is-selected .text-theme-muted { color: #a8a29e !important; }
+        [data-theme="dark"] #tpl-picker-panel .tpl-picker-row.is-selected {
+            background-color: #f9fafb !important;
+        }
+        [data-theme="dark"] #tpl-picker-panel .tpl-picker-row.is-selected .text-theme-primary { color: #111827 !important; }
+        [data-theme="dark"] #tpl-picker-panel .tpl-picker-row.is-selected .text-theme-secondary { color: #6b7280 !important; }
+        [data-theme="dark"] #tpl-picker-panel .tpl-picker-row.is-selected .text-theme-muted { color: #78716c !important; }
+        /* 选中行：模板图标换成「添加任务」圆钮（与主视图右上角同形），
+           外圈在第 1.5 秒开始用 1.5 秒抽空，与 3 秒选中超时同步。
+           --tpl-ring-delay 由 _syncTaskTemplatePickerSelection 按已过时间写入，
+           保证搜索/日期重渲染后动画相位仍与计时器一致。 */
+        #tpl-picker-panel .tpl-picker-lead {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #tpl-picker-panel .tpl-picker-add-icon {
+            display: none;
+            position: relative;
+            width: 20px;
+            height: 20px;
+            align-items: center;
+            justify-content: center;
+            color: #a855f7;
+        }
+        #tpl-picker-panel .tpl-picker-row.is-selected .tpl-picker-lead-default { display: none; }
+        #tpl-picker-panel .tpl-picker-row.is-selected .tpl-picker-add-icon { display: flex; }
+        #tpl-picker-panel .tpl-picker-add-icon .tpl-picker-add-ring {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+            overflow: visible;
+        }
+        #tpl-picker-panel .tpl-picker-add-icon .tpl-picker-add-ring circle {
+            fill: none;
+            stroke: #a855f7;
+            stroke-width: 1.6;
+            stroke-linecap: round;
+            stroke-dasharray: 53.41;
+            stroke-dashoffset: 0;
+        }
+        #tpl-picker-panel .tpl-picker-row.is-selected .tpl-picker-add-icon .tpl-picker-add-ring circle {
+            animation: tplPickRingDrain 1.5s linear var(--tpl-ring-delay, 1.5s) forwards;
+        }
+        #tpl-picker-panel .tpl-picker-add-icon .fa-plus {
+            position: relative;
+            font-size: 9px;
+            line-height: 1;
+        }
+        @keyframes tplPickRingDrain {
+            to { stroke-dashoffset: 53.41; }
+        }
+
+        /* 选中行 hover：不再整体降透明（高亮会被自己压暗） */
+        #tpl-picker-panel .tpl-picker-row.is-selected:hover { opacity: 1; }
+    `;
+    document.head.appendChild(style);
 }
 
-function _templatePickerListLabel(listId) {
-    if (!listId || listId === '__template__') return '跟随模板清单';
-    const list = typeof getList === 'function' ? getList(listId) : null;
-    return list ? (list.name || '当前清单') : '默认清单';
+function _ensureTaskTemplatePickerPanel() {
+    let panel = document.getElementById('tpl-picker-panel');
+    if (panel) return panel;
+    panel = document.createElement('aside');
+    panel.id = 'tpl-picker-panel';
+    panel.className = 'hidden w-96 bg-theme-secondary border-l border-theme flex flex-col h-screen relative z-40';
+    panel.setAttribute('aria-label', '从模板创建');
+    const app = document.getElementById('app-container') || document.body;
+    app.appendChild(panel);
+    return panel;
+}
+
+// 骨架与任务详情栏同构（规范 4.10）：顶栏（上下文 + 关闭）→ 正文列表 → 底部停靠区。
+// 四层之间一律不画横向分割线，分区只靠 16px 留白与字号层级分群 —— 分割线是「弹窗表单感」的主要来源。
+// 停靠区一行搞定：左侧（搜索框，常驻但可收起）+ 右侧圆钮（搜索 / 转到模板管理）。
+// 搜索框是**常驻节点、只切 hidden**，不参与行区重渲染 —— 否则中文输入法组合串会被打断。
+// 收起时左侧不占位，圆钮被推到右侧，与详情栏停靠区同观感。
+// 清单目标不在面板里选：不指定清单本就是常态，创建时跟随模板自带清单。
+function _tplPickerPanelHtml() {
+    return '<div class="px-4 pt-4 pb-3 flex items-center justify-between gap-2 flex-shrink-0">' +
+            '<div id="tpl-picker-date-chips" class="flex items-center gap-1 min-w-0"></div>' +
+            '<button type="button" class="p-2 hover:bg-theme-tertiary rounded-lg transition flex-shrink-0" onclick="closeTaskTemplatePicker()" aria-label="关闭" title="关闭"><i class="fas fa-times text-theme-muted"></i></button>' +
+        '</div>' +
+        // pt-1 与顶栏的 pb-3 合计 16px，分区间距仍是 16（不靠分割线，只靠留白）
+        '<div id="tpl-picker-list-box" class="flex-1 min-h-0 overflow-y-auto px-4 pt-1 pb-4">' +
+            '<div id="tpl-picker-rows" class="space-y-1"></div>' +
+        '</div>' +
+        '<div class="tpl-picker-dock px-4 py-3 flex-shrink-0">' +
+            '<div class="flex items-center gap-2">' +
+                // lead：搜索展开时占满剩余宽度（收起时留白，圆钮自然靠右）
+                '<div class="flex-1 min-w-0 flex items-center">' +
+                    '<div id="tpl-picker-search-wrap" class="hidden w-full min-w-0">' +
+                        '<input id="tpl-picker-search" type="text" autocomplete="off" spellcheck="false" ' +
+                            'placeholder="搜索模板名称或任务标题…" ' +
+                            'oninput="onTaskTemplatePickerSearchInput(this.value)" onkeydown="onTaskTemplatePickerSearchKeydown(event)" ' +
+                            'class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                    '</div>' +
+                '</div>' +
+                // 搜索沿用回收站 / 模板管理页的 cyan-500（全站搜索入口既定色）
+                '<button type="button" id="tpl-picker-search-btn" class="wm-circle tpl-circle flex-shrink-0" style="--tpl-btn-color: #06b6d4;" onclick="toggleTaskTemplatePickerSearch()" title="搜索" aria-label="搜索"><i class="fas fa-search"></i></button>' +
+                // 转到模板管理：fa-arrow-right-from-bracket（方框 + 右出箭头）
+                // 40px 圆钮下比 9px 挂角小箭头清晰得多，语义也更直白（从当前面板转到外部页面）
+                '<button type="button" class="wm-circle tpl-circle flex-shrink-0" style="--tpl-btn-color: #6366f1;" onclick="openTaskTemplatesPageFromPicker(false)" title="转到模板管理" aria-label="转到模板管理"><i class="fas fa-arrow-right-from-bracket"></i></button>' +
+            '</div>' +
+        '</div>';
+}
+
+// 搜索开关：只切两个常驻节点的可见性与按钮态，不重建 input（重建会打断中文输入法组合串）
+function _syncTaskTemplatePickerSearchUI() {
+    const on = !!(_tplPickerState && _tplPickerState.searchVisible);
+    const wrap = document.getElementById('tpl-picker-search-wrap');
+    const input = document.getElementById('tpl-picker-search');
+    const btn = document.getElementById('tpl-picker-search-btn');
+    if (wrap) wrap.classList.toggle('hidden', !on);
+    if (input) {
+        const q = _tplPickerState ? _tplPickerState.query : '';
+        if (input.value !== q) input.value = q;
+    }
+    if (btn) {
+        btn.classList.toggle('is-on', on);
+        btn.title = on ? '隐藏搜索' : '搜索';
+        btn.setAttribute('aria-label', btn.title);
+    }
+}
+
+function toggleTaskTemplatePickerSearch(force) {
+    if (!_tplPickerState) return;
+    const next = force === undefined ? !_tplPickerState.searchVisible : !!force;
+    _tplPickerState.searchVisible = next;
+    // 收起即清词：否则列表还筛着，按钮却显示成未展开，状态自相矛盾
+    if (!next) _tplPickerState.query = '';
+    _syncTaskTemplatePickerSearchUI();
+    _renderTaskTemplatePickerRows();
+    if (!next) return;
+    // 展开后立刻聚焦并把光标放到末尾（与模板管理页同口径）
+    setTimeout(function () {
+        const input = document.getElementById('tpl-picker-search');
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }, 30);
+}
+
+function onTaskTemplatePickerSearchInput(value) {
+    if (!_tplPickerState) return;
+    _tplPickerState.query = value || '';
+    // 只重渲行区：input 节点保持不变，输入法组合中/光标位置都不受影响
+    _renderTaskTemplatePickerRows();
+}
+
+function onTaskTemplatePickerSearchKeydown(e) {
+    if (e.key === 'Escape') {
+        // 三级语义：有词先清词 → 词空则收起搜索框 → 搜索已收起才交给面板级 Esc 关闭
+        if (_tplPickerState && _tplPickerState.query) {
+            e.preventDefault();
+            clearTaskTemplatePickerSearch();
+            return;
+        }
+        if (_tplPickerState && _tplPickerState.searchVisible) {
+            e.preventDefault();
+            toggleTaskTemplatePickerSearch(false);
+        }
+        return;
+    }
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        // 已高亮 → 视为「再次单击」，直接创建；未高亮 → 先高亮第一条（3 秒后自动熄灭）
+        if (_tplPickerState && _tplPickerState.selectedId) {
+            const id = _tplPickerState.selectedId;
+            _clearTaskTemplatePickerSelectTimer();
+            pickTaskTemplate(id);
+            return;
+        }
+        const first = document.querySelector('#tpl-picker-rows .tpl-picker-row');
+        if (first) first.click();
+        return;
+    }
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const first = document.querySelector('#tpl-picker-rows .tpl-picker-row');
+        if (first) first.focus();
+    }
+}
+
+// 只清关键词、保留展开态：清完通常还要继续输入，不该顺手把输入框收掉
+function clearTaskTemplatePickerSearch() {
+    if (!_tplPickerState) return;
+    _tplPickerState.query = '';
+    if (!_tplPickerState.searchVisible) {
+        toggleTaskTemplatePickerSearch(true);
+        return;
+    }
+    _syncTaskTemplatePickerSearchUI();
+    _renderTaskTemplatePickerRows();
+    const search = document.getElementById('tpl-picker-search');
+    if (search) search.focus();
+}
+
+function _setupTaskTemplatePickerOutsideClose() {
+    if (_tplPickerOutsideBound) return;
+    _tplPickerOutsideBound = true;
+    document.addEventListener('click', function (e) {
+        if (!_tplPickerState) return;
+        if (e.target.closest && e.target.closest('#tpl-picker-panel')) return;
+        // 打开选择器的那一次点击同样会冒泡到这里：忽略一次，避免刚打开就被关掉
+        if (_tplPickerIgnoreOutsideClick) {
+            _tplPickerIgnoreOutsideClick = false;
+            return;
+        }
+        // 与任务详情栏同口径（tasks.js#setupDetailPanelCloseHandler）：落在按钮 / 输入控件 /
+        // 已打开浮层内部时不算「点击外部」。此前少了这几条豁免，点面板外任意按钮都会收起，
+        // 与详情栏行为不一致（点同样的按钮，详情栏会留着）。
+        if (e.target.closest('button, input, textarea, select, label, a')) return;
+        if (typeof isEventInsideOpenOverlay === 'function' && isEventInsideOpenOverlay(e)) return;
+        closeTaskTemplatePicker();
+    });
 }
 
 function _renderTaskTemplatePickerDateChips() {
@@ -616,18 +946,12 @@ function _renderTaskTemplatePickerDateChips() {
     }).join('');
 }
 
-function _updateTaskTemplatePickerSummary() {
-    const el = document.getElementById('tpl-picker-summary');
-    if (!el || !_tplPickerState) return;
-    el.textContent = '创建到：' + _templatePickerDateLabel(_tplPickerState.dateMode) +
-        ' · ' + _templatePickerListLabel(_tplPickerState.listId);
-}
-
 function _templateMetaChips(meta, extraNeedsTime, hideTimeWarning, hideSuggestedTime, hideSubCount) {
     const chips = [];
-    function chip(icon, text, cls) {
-        return '<span class="inline-flex items-center gap-1 flex-shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[11px] ' +
-            (cls || 'border-theme text-theme-muted bg-theme-secondary') + '">' +
+    // 胶囊口径对齐规范 4.9：12px 字、全圆角、padding 2px 10px、1.5px 描边（原 11px 与 6px 内边距均非档位）
+    function chip(icon, text, cls, style) {
+        return '<span class="inline-flex items-center gap-1 flex-shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs ' +
+            (cls || 'border-theme text-theme-muted bg-theme-secondary') + '"' + (style ? ' style="' + style + '"' : '') + '>' +
             (icon ? '<i class="' + icon + '"></i>' : '') + escapeHtml(text) + '</span>';
     }
     const timeText = meta.timeLabel || meta.suggestedTime;
@@ -637,7 +961,7 @@ function _templateMetaChips(meta, extraNeedsTime, hideTimeWarning, hideSuggested
     if (meta.listName) chips.push(chip('fas fa-inbox', meta.listName));
     meta.tags.slice(0, 2).forEach(function (tag) {
         const color = _safeTemplateColor(tag.color, '#6b7280');
-        chips.push('<span class="inline-flex items-center gap-1 flex-shrink-0 whitespace-nowrap rounded-full border border-theme bg-theme-secondary px-1.5 py-0.5 text-[11px] text-theme-muted">' +
+        chips.push('<span class="inline-flex items-center gap-1 flex-shrink-0 whitespace-nowrap rounded-full border border-theme bg-theme-secondary px-2.5 py-0.5 text-xs text-theme-muted">' +
             '<span class="w-1.5 h-1.5 rounded-full" style="background:' + color + '"></span>' +
             escapeHtml(tag.name) + '</span>');
     });
@@ -648,9 +972,48 @@ function _templateMetaChips(meta, extraNeedsTime, hideTimeWarning, hideSuggested
     if (meta.repeatLabel) chips.push(chip('fas fa-redo', meta.repeatLabel));
     if (meta.subCount && !hideSubCount) chips.push(chip('fas fa-list-check', meta.subCount + ' 个子任务'));
     if ((meta.needsTime || extraNeedsTime) && !hideTimeWarning) {
-        chips.push(chip('fas fa-triangle-exclamation', '需补时间', 'border-amber-500/40 text-amber-500 bg-amber-500/10'));
+        // 内联 style 而非 border-amber-500/40 + bg-amber-500/10：离线版 JIT 不生成 /xx 变体
+        chips.push(chip('fas fa-triangle-exclamation', '需补时间', '', 'border-color:#f59e0b; color:#f59e0b; background-color:rgba(245, 158, 11, .12);'));
     }
     return chips.join('');
+}
+
+// Markdown → 纯文本：仅用于第 2 行预览与悬浮提示，不生成 HTML
+function _templatePlainText(src) {
+    let text = String(src == null ? '' : src).replace(/\r\n?/g, '\n');
+    text = text.replace(/(?:```|~~~)[^\n]*\n?([\s\S]*?)(?:```|~~~)/g, '$1');
+    text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1');
+    text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+    return text.split('\n').map(function (line) {
+        let out = line
+            .replace(/^\s*#{1,6}\s+/, '')
+            .replace(/^\s*>\s?/, '')
+            .replace(/^\s*(?:[-*+]|\d{1,2}[.)])\s+/, '')
+            .replace(/^\[[ xX]\]\s*/, '')
+            .replace(/^\s*([-*_])(?:\s*\1){2,}\s*$/, '')
+            .replace(/`([^`\n]+)`/g, '$1');
+        out = out
+            .replace(/\*\*([^\n]+?)\*\*/g, '$1')
+            .replace(/__([^\n]+?)__/g, '$1')
+            .replace(/~~([^\n]+?)~~/g, '$1')
+            .replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1$2')
+            .replace(/(^|[^_\w])_([^_\n]+?)_(?!\w)/g, '$1$2')
+            .replace(/\\([\\`*_{}\[\]()#+\-.!~>])/g, '$1');
+        return out.trimEnd();
+    }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// 第 2 行悬浮提示：备注全文 + 全部子任务。原生 title 不适合超长文本，截断到 800 字
+function _templateDetailHoverText(notesSource, notesIsSubtaskEcho, subtaskTexts) {
+    const parts = [];
+    const notes = notesIsSubtaskEcho ? '' : _templatePlainText(notesSource);
+    if (notes) parts.push(notes);
+    if (subtaskTexts.length) {
+        parts.push(subtaskTexts.map(function (text) { return '○ ' + text; }).join('\n'));
+    }
+    let text = parts.join('\n\n');
+    if (text.length > 800) text = text.slice(0, 800) + '…';
+    return text;
 }
 
 function _templateDetailLineHTML(task) {
@@ -663,53 +1026,112 @@ function _templateDetailLineHTML(task) {
         : ((task && task.notes) || '');
     const notesIsSubtaskEcho = subtaskTexts.length > 0
         && String(notesSource).trim() === subtaskTexts.join('\n');
-    // 只取备注首行做预览。预置模板的备注已是纯文本；这里再去掉井号前缀，
-    // 仅为兜住用户自建模板里残留的 Markdown 标题写法（应用不渲染 Markdown）
-    const notes = notesIsSubtaskEcho
-        ? ''
-        : String(notesSource).trim().split(/\r?\n/)[0].replace(/^#{1,6}\s+/, '');
-    const notesPreview = notes.length > 50 ? notes.slice(0, 50) + '…' : notes;
+    // 预览取备注首个有效行：预置模板的备注是 Markdown，先转纯文本再去掉标记
+    const plainNotes = notesIsSubtaskEcho ? '' : _templatePlainText(notesSource);
+    const firstLine = plainNotes.split('\n').map(function (line) { return line.trim(); })
+        .find(function (line) { return !!line; }) || '';
+    const notesPreview = firstLine.length > 50 ? firstLine.slice(0, 50) + '…' : firstLine;
     // 备注最多占 35% 行宽：50 字硬截断之外再让一次宽度，避免长备注把子任务全挤掉
     const notesPrefixHtml = notesPreview
         ? '<span class="flex-shrink-0 truncate text-theme-secondary" style="max-width:35%;">' + escapeHtml(notesPreview) + '</span>'
+        : '';
+    // 悬浮提示挂在第 2 行整体上：被 …[ n/total ] 收起的子任务也能从 title 里看全
+    const hoverText = _templateDetailHoverText(notesSource, notesIsSubtaskEcho, subtaskTexts);
+    const hoverTitleAttr = hoverText
+        ? ' title="' + escapeHtml(hoverText).replace(/\n/g, '&#10;') + '"'
         : '';
     if (subtaskTexts.length) {
         const itemsHtml = subtaskTexts.map(function (text, i) {
             return '<span data-tpl-detail-item="' + i + '" class="inline-flex items-center gap-0.5 flex-shrink-0"><span class="text-theme-muted">○</span><span>' + escapeHtml(text) + '</span></span>';
         }).join('');
-        return '<span data-tpl-detail-line class="flex w-full items-center gap-1 min-w-0 overflow-hidden text-xs text-theme-muted mt-0.5">' +
+        return '<span data-tpl-detail-line' + hoverTitleAttr + ' class="flex w-full items-center gap-1 min-w-0 overflow-hidden text-xs text-theme-muted mt-0.5">' +
             notesPrefixHtml +
             '<span data-tpl-detail-names class="flex items-center gap-1 min-w-0 overflow-hidden whitespace-nowrap">' + itemsHtml + '</span>' +
             '<span data-tpl-detail-counter class="flex-shrink-0 hidden"></span>' +
             '</span>';
     }
     if (notesPreview) {
-        return '<span data-tpl-detail-line class="flex w-full items-center gap-1 min-w-0 overflow-hidden text-xs text-theme-muted mt-0.5">' +
+        return '<span data-tpl-detail-line' + hoverTitleAttr + ' class="flex w-full items-center gap-1 min-w-0 overflow-hidden text-xs text-theme-muted mt-0.5">' +
             '<span class="min-w-0 truncate text-theme-secondary">' + escapeHtml(notesPreview) + '</span>' +
             '</span>';
     }
     return '';
 }
 
-function _templatePickerRowHTML(tpl) {
+function _templatePickerRowHTML(tpl, options) {
+    options = options || {};
     const meta = getTaskTemplateMeta(tpl);
     const name = tpl.name || '未命名模板';
+    const rowClass = options.rowClass || 'tpl-picker-row';
+    // 选择器行走二次确认（先高亮、3 秒内再点同一行才创建）；命令面板等外部调用仍可直接传 onclick
+    const onclick = options.onclick || ("onTaskTemplatePickerRowClick('" + tpl.id + "')");
+    const extraAttr = options.extraAttr ? ' ' + options.extraAttr : '';
     const needsTime = meta.needsTime || ((meta.reminders.length || meta.task.repeat) && _tplPickerState && _tplPickerState.dateMode === 'none');
-    return '<button type="button" data-tpl-id="' + tpl.id + '" class="tpl-picker-row w-full text-left flex items-start gap-3 p-3 rounded-xl border border-theme bg-theme-secondary hover:bg-theme-tertiary transition group" onclick="pickTaskTemplate(\'' + tpl.id + '\')">' +
-        '<span class="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-500 flex items-center justify-center flex-shrink-0"><i class="fas fa-layer-group text-sm"></i></span>' +
-        '<span class="flex-1 min-w-0">' +
-            '<span class="flex items-center gap-2 min-w-0">' +
-                '<span class="text-sm font-medium text-theme-primary truncate">' + escapeHtml(name) + '</span>' +
+    // 选择器行式化（去掉卡片边框，与主区任务行同一解剖）；命令面板的 cmd-tpl-row 共用本函数，
+    // 保留其既有卡片外观 —— 靠 rowClass 区分，避免这次改动波及命令面板。
+    const layout = rowClass === 'tpl-picker-row'
+        ? 'py-2.5 px-3 rounded-lg hover:bg-theme-tertiary'
+        : 'p-3 rounded-xl border border-theme bg-theme-secondary hover:bg-theme-tertiary';
+    if (rowClass !== 'tpl-picker-row') {
+        return '<button type="button" data-tpl-id="' + tpl.id + '"' + extraAttr + ' class="' + rowClass + ' w-full text-left flex items-start gap-3 ' + layout + ' transition group" onclick="' + onclick + '">' +
+            '<span class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style="background-color: rgba(168, 85, 247, .12); color: #a855f7;"><i class="fas fa-layer-group text-sm"></i></span>' +
+            '<span class="flex-1 min-w-0">' +
+                '<span class="flex items-center gap-2 min-w-0">' +
+                    '<span class="text-sm font-medium text-theme-primary truncate">' + escapeHtml(name) + '</span>' +
+                '</span>' +
+                '<span data-tpl-picker-meta class="flex items-center gap-1 mt-1.5 overflow-hidden">' + _templateMetaChips(meta, needsTime, false, false, true) + '</span>' +
+                _templateDetailLineHTML(meta.task) +
             '</span>' +
-            '<span data-tpl-picker-meta class="flex items-center gap-1 mt-1.5 overflow-hidden">' + _templateMetaChips(meta, needsTime, false, false, true) + '</span>' +
-            _templateDetailLineHTML(meta.task) +
-        '</span>' +
-        '<span class="flex-shrink-0 w-7 h-7 rounded-full border border-theme text-theme-muted group-hover:text-accent group-hover:border-accent flex items-center justify-center mt-0.5"><i class="fas fa-plus text-xs"></i></span>' +
-    '</button>';
+            '<span class="tpl-card-add flex-shrink-0 self-center w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center group-hover:bg-purple-500 group-hover:text-white transition"><i class="fas fa-plus"></i></span>' +
+        '</button>';
+    }
+    // —— 选择器行：信息行与模板管理页 .tpl-manage-row 同构（字号 text-xs、间距 gap-x-1.5、
+    //    清单为「圆点 + 名称」、标签走 renderTagCapsules、警告为图标 + 文字），
+    //    重要 / 紧急不在信息行里堆图标，改由管理页同款的象限底色表达（见下方 quadBg）。
+    const list = meta.task.listId && typeof getList === 'function' ? getList(meta.task.listId) : null;
+    const listColor = list ? (list.color || '#8b5cf6') : '#8b5cf6';
+    const listLabel = list ? (list.name || '当前清单') : '根据上下文添加';
+    const quadColors = (typeof getQuadrantColorClass === 'function')
+        ? getQuadrantColorClass({ important: !!meta.important, urgent: !!meta.urgent })
+        : { bg: '' };
+    const reminderText = meta.reminders.length ? '提前 ' + meta.reminders.join('/') + ' 分钟' : '';
+    const tagCapsules = (typeof renderTagCapsules === 'function')
+        ? renderTagCapsules(Object.assign({}, meta.task, { id: tpl.id }), 2, 'right')
+        : '';
+    const timeText = meta.timeLabel || meta.suggestedTime || '';
+    return '<button type="button" data-tpl-id="' + tpl.id + '"' + extraAttr +
+            ' class="' + rowClass + ' relative w-full text-left flex items-center gap-2 py-2.5 px-3 rounded-r-lg ' + (quadColors.bg || '') + ' hover:opacity-80 transition" onclick="' + onclick + '">' +
+            '<span class="tpl-picker-color-bar" style="background-color:' + listColor + ';"></span>' +
+            '<span class="tpl-picker-lead w-5 h-5 flex-shrink-0">' +
+                '<i class="fas fa-layer-group text-sm text-purple-500 tpl-picker-lead-default"></i>' +
+                '<span class="tpl-picker-add-icon" title="再次单击创建任务" aria-hidden="true">' +
+                    '<svg class="tpl-picker-add-ring" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8.5"></circle></svg>' +
+                    '<i class="fas fa-plus"></i>' +
+                '</span>' +
+            '</span>' +
+            '<span class="flex-1 min-w-0">' +
+                '<span class="block text-base font-medium text-theme-primary truncate">' + escapeHtml(name) + '</span>' +
+                _templateDetailLineHTML(meta.task) +
+                '<span data-tpl-info-line class="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0 text-xs text-theme-secondary mt-0.5">' +
+                    (timeText ? '<span class="inline-flex items-center gap-1 flex-shrink-0 text-theme-secondary"><i class="far fa-clock"></i>' + escapeHtml(timeText) + '</span>' : '') +
+                    // 清单名允许收缩换行（overflow-wrap:anywhere 兜住超长英文名），不再截断到 110px
+                    '<span class="inline-flex items-center gap-1 min-w-0">' +
+                        '<span class="w-2 h-2 rounded-full flex-shrink-0" style="background:' + listColor + ';"></span>' +
+                        '<span class="min-w-0" style="overflow-wrap:anywhere;">' + escapeHtml(listLabel) + '</span>' +
+                    '</span>' +
+                    (reminderText ? '<span class="inline-flex items-center gap-1 flex-shrink-0"><i class="fas fa-bell"></i>' + escapeHtml(reminderText) + '</span>' : '') +
+                    (meta.repeatLabel ? '<span class="inline-flex items-center gap-1 flex-shrink-0"><i class="fas fa-redo"></i>' + escapeHtml(meta.repeatLabel) + '</span>' : '') +
+                    tagCapsules +
+                    ((meta.needsTime || needsTime) ? '<span class="inline-flex items-center gap-1 flex-shrink-0 text-amber-500"><i class="fas fa-triangle-exclamation"></i>需补时间</span>' : '') +
+                '</span>' +
+            '</span>' +
+        '</button>';
 }
 
 function _renderTaskTemplatePickerRows() {
-    const box = document.getElementById('tpl-picker-list-box');
+    // 只重渲行区，搜索框是常驻节点（见 _tplPickerPanelHtml）——
+    // 把 input 一起重建会打断中文输入法的组合串
+    const box = document.getElementById('tpl-picker-rows');
     if (!box || !_tplPickerState) return;
     const all = getTaskTemplates();
     const q = _tplPickerState.query.trim().toLowerCase();
@@ -719,6 +1141,14 @@ function _renderTaskTemplatePickerRows() {
         return name.indexOf(q) !== -1 || title.indexOf(q) !== -1;
     }) : all;
 
+    // 选中项被搜索筛掉 / 被删掉时同步失效：否则高亮还亮着，点的却是一个看不见的模板
+    if (_tplPickerState.selectedId
+        && !filtered.some(function (t) { return t.id === _tplPickerState.selectedId; })) {
+        _tplPickerState.selectedId = null;
+        _tplPickerState.selectedAt = null;
+        _clearTaskTemplatePickerSelectTimer();
+    }
+
     if (all.length === 0) {
         box.innerHTML = '<div class="text-center py-10 text-theme-muted">' +
             '<i class="fas fa-layer-group text-4xl mb-3 opacity-30"></i>' +
@@ -726,6 +1156,7 @@ function _renderTaskTemplatePickerRows() {
             '<p class="text-xs mt-1">在任务标题右侧点模板图标，或新建一个。</p>' +
             '<button type="button" class="mt-4 px-4 py-2 rounded-lg bg-accent text-white text-sm hover:bg-accent-hover transition" onclick="openTaskTemplatesPageFromPicker(true)"><i class="fas fa-plus mr-1"></i>新建模板</button>' +
         '</div>';
+        _syncTaskTemplatePickerSelection();
         _setupTaskTemplateDetailFit();
         return;
     }
@@ -735,6 +1166,7 @@ function _renderTaskTemplatePickerRows() {
             '<p class="text-sm text-theme-primary">没有匹配「' + escapeHtml(_tplPickerState.query.trim()) + '」的模板</p>' +
             '<button type="button" class="mt-3 text-xs text-accent hover:underline" onclick="clearTaskTemplatePickerSearch()">清除搜索</button>' +
         '</div>';
+        _syncTaskTemplatePickerSelection();
         _setupTaskTemplateDetailFit();
         return;
     }
@@ -744,125 +1176,178 @@ function _renderTaskTemplatePickerRows() {
         const recent = getRecentTaskTemplates(4);
         const recentIds = recent.map(function (t) { return t.id; });
         if (recent.length) {
-            html += '<div class="px-1 pt-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-muted">最近使用</div>';
+            html += '<div class="px-1 pt-1 pb-1 text-xs font-semibold text-theme-muted">最近使用</div>';
             html += recent.map(_templatePickerRowHTML).join('');
             const rest = filtered.filter(function (t) { return recentIds.indexOf(t.id) === -1; });
             if (rest.length) {
-                html += '<div class="px-1 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-muted">其他模板</div>';
+                html += '<div class="px-1 pt-3 pb-1 text-xs font-semibold text-theme-muted">其他模板</div>';
                 html += rest.map(_templatePickerRowHTML).join('');
             }
         } else {
-            html += '<div class="px-1 pt-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-muted">全部模板</div>';
+            html += '<div class="px-1 pt-1 pb-1 text-xs font-semibold text-theme-muted">全部模板</div>';
             html += filtered.map(_templatePickerRowHTML).join('');
         }
     } else {
-        html += '<div class="px-1 pt-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-muted">搜索结果</div>';
+        html += '<div class="px-1 pt-1 pb-1 text-xs font-semibold text-theme-muted">搜索结果</div>';
         html += filtered.map(_templatePickerRowHTML).join('');
     }
     box.innerHTML = html;
+    _syncTaskTemplatePickerSelection();
     _setupTaskTemplateDetailFit();
+}
+
+// ==================== 行选中（单击高亮，3 秒内再次单击创建） ====================
+// 高亮是瞬时的：3 秒内没有再次单击同一行就自动熄灭（定时器见下）。
+// 不在行尾放确认按钮：行本身是 <button>，HTML 不允许再嵌套 <button>。
+function _clearTaskTemplatePickerSelectTimer() {
+    if (_tplPickerSelectTimer) {
+        clearTimeout(_tplPickerSelectTimer);
+        _tplPickerSelectTimer = null;
+    }
+}
+
+function _armTaskTemplatePickerSelectTimer() {
+    _clearTaskTemplatePickerSelectTimer();
+    _tplPickerSelectTimer = setTimeout(function () {
+        _tplPickerSelectTimer = null;
+        if (!_tplPickerState || !_tplPickerState.selectedId) return;
+        _tplPickerState.selectedId = null;
+        _tplPickerState.selectedAt = null;
+        _syncTaskTemplatePickerSelection();
+    }, TPL_PICKER_SELECT_RESET_MS);
+}
+
+function _tplPickerRingDelay() {
+    const state = _tplPickerState;
+    if (!state || !state.selectedAt) return '1.5s';
+    const elapsed = Math.max(0, Date.now() - state.selectedAt);
+    if (elapsed < 1500) return (1500 - elapsed) + 'ms';
+    return '-' + Math.min(elapsed - 1500, 1500) + 'ms';
+}
+
+function _syncTaskTemplatePickerSelection() {
+    const state = _tplPickerState;
+    const box = document.getElementById('tpl-picker-rows');
+    const selectedId = state ? state.selectedId : null;
+    if (box) {
+        box.querySelectorAll('.tpl-picker-row').forEach(function (row) {
+            const on = !!selectedId && row.dataset.tplId === selectedId;
+            if (on) {
+                const icon = row.querySelector('.tpl-picker-add-icon');
+                if (icon) icon.style.setProperty('--tpl-ring-delay', _tplPickerRingDelay());
+            }
+            row.classList.toggle('is-selected', on);
+        });
+    }
+}
+
+// 返回是否真的清掉了一个选中项 —— Esc 用它区分「撤销选中」与「关闭面板」
+function clearTaskTemplatePickerSelection() {
+    if (!_tplPickerState || !_tplPickerState.selectedId) return false;
+    _tplPickerState.selectedId = null;
+    _tplPickerState.selectedAt = null;
+    _clearTaskTemplatePickerSelectTimer();
+    _syncTaskTemplatePickerSelection();
+    return true;
+}
+
+// 行点击入口：第一次 = 选中高亮（3 秒后自动熄灭），第二次（同一行）= 确认创建
+function onTaskTemplatePickerRowClick(tplId) {
+    if (!_tplPickerState) return;
+    if (_tplPickerState.selectedId === tplId) {
+        _clearTaskTemplatePickerSelectTimer();
+        pickTaskTemplate(tplId);
+        return;
+    }
+    _tplPickerState.selectedId = tplId;
+    _tplPickerState.selectedAt = Date.now();
+    _syncTaskTemplatePickerSelection();
+    _armTaskTemplatePickerSelectTimer();
 }
 
 function openTaskTemplatePicker(options) {
     options = options || {};
-    closeTaskTemplatePicker();
+    const existingPanel = document.getElementById('tpl-picker-panel');
+    // 同一入口再次触发（Header 悬浮组 / 空态按钮 / 命令面板）→ 收起
+    if (_tplPickerState && existingPanel && !existingPanel.classList.contains('hidden')) {
+        closeTaskTemplatePicker();
+        return;
+    }
+    closeTaskTemplatePicker(true);
+
+    // 右栏互斥：详情面板 / 计划面板先按各自关闭口径收起（落盘草稿）
+    const detailPanel = document.getElementById('task-detail-panel');
+    if (detailPanel && !detailPanel.classList.contains('hidden')
+        && typeof closeTaskDetailPanel === 'function') {
+        closeTaskDetailPanel();
+    }
+    if (typeof planPanelOpen !== 'undefined' && planPanelOpen
+        && typeof closePlanPanel === 'function') {
+        closePlanPanel();
+    }
+    // 模板编辑面板同样占用右栏：先落盘草稿；保存失败（如重名）则保留编辑态，不打开选择器
+    if (_tplPanelState && !closeTaskTemplatePanel()) return;
+    // 触发按钮保留焦点会让 Header 悬浮组一直展开，点击后主动让出焦点
+    const active = document.activeElement;
+    if (active && active.closest && active.closest('#add-task-group')) active.blur();
+
     const ctx = (typeof getSidebarNewTaskDefaults === 'function') ? getSidebarNewTaskDefaults() : null;
     _tplPickerState = {
         query: '',
+        // 搜索默认收起：停靠区的圆形搜索钮点击后，输入框在**同一行左侧**展开
+        searchVisible: false,
+        // 二次确认的选中项：null = 未选；单击只高亮，3 秒内再次单击同一行才创建
+        selectedId: null,
+        // 选中时刻：搜索/日期重渲染后据此恢复圆环动画的相位
+        selectedAt: null,
         dateMode: options.dateMode || (settings.defaultTaskDate === 'none' ? 'none' : 'today'),
+        // 面板内不再提供清单选择：保留字段仅为「从任务行打开时落到该行清单」这一入口，
+        // 默认 __template__ = 跟随模板自带清单（不指定清单即常态）
         listId: options.listId || (ctx && ctx.listId) || '__template__'
     };
-    const listOptions = ['<option value="__template__">跟随模板清单</option>'].concat(
-        (typeof lists !== 'undefined' ? lists : [])
-            .filter(_templateListSelectable)
-            .map(function (l) {
-                return '<option value="' + escapeHtml(l.id) + '">' + escapeHtml(l.name) + '</option>';
-            })
-    ).join('');
-    const overlay = document.createElement('div');
-    overlay.id = 'tpl-picker-overlay';
-    overlay.className = 'fixed inset-0 modal-overlay flex items-end sm:items-center justify-center';
-    overlay.style.zIndex = '55';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-label', '从模板创建');
-    overlay.innerHTML =
-        '<div class="bg-theme-secondary w-full sm:max-w-lg max-h-[92vh] sm:max-h-[82vh] rounded-t-2xl sm:rounded-2xl border border-theme shadow-2xl flex flex-col overflow-hidden" onclick="event.stopPropagation()">' +
-            '<div class="flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-theme flex-shrink-0">' +
-                '<div class="min-w-0">' +
-                    '<h3 class="text-base font-semibold text-theme-primary">从模板创建</h3>' +
-                    '<p class="text-xs text-theme-muted mt-0.5">点击模板即可创建；日期与清单可在上面调整。</p>' +
-                '</div>' +
-                '<button type="button" class="p-1.5 rounded-lg text-theme-muted hover:bg-theme-tertiary transition flex-shrink-0" onclick="closeTaskTemplatePicker()" aria-label="关闭"><i class="fas fa-times"></i></button>' +
-            '</div>' +
-            '<div class="px-5 py-3 border-b border-theme bg-theme-tertiary/40 flex-shrink-0">' +
-                '<div class="flex flex-wrap items-center gap-2">' +
-                    '<span class="text-xs text-theme-secondary">创建到</span>' +
-                    '<div id="tpl-picker-date-chips" class="flex items-center gap-1"></div>' +
-                    '<span class="text-theme-muted text-xs">·</span>' +
-                    '<select id="tpl-picker-list" aria-label="创建到清单" class="text-xs px-2 py-1 rounded-lg border border-theme bg-theme-secondary text-theme-primary cursor-pointer" onchange="setTaskTemplatePickerList(this.value)">' + listOptions + '</select>' +
-                '</div>' +
-                '<div id="tpl-picker-summary" class="text-[11px] text-theme-muted mt-1"></div>' +
-            '</div>' +
-            '<div class="px-5 py-3 border-b border-theme flex-shrink-0">' +
-                '<div class="relative">' +
-                    '<i class="fas fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-xs text-theme-muted"></i>' +
-                    '<input id="tpl-picker-search" type="text" autocomplete="off" spellcheck="false" aria-label="搜索模板" placeholder="搜索模板名称或任务标题…" class="w-full pl-8 pr-3 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary outline-none focus:border-accent">' +
-                '</div>' +
-            '</div>' +
-            '<div id="tpl-picker-list-box" class="flex-1 overflow-y-auto p-3 space-y-1.5 min-h-[180px]"></div>' +
-            '<div class="px-5 py-3 border-t border-theme flex flex-wrap items-center justify-between gap-2 flex-shrink-0">' +
-                '<div class="flex items-center gap-1.5">' +
-                    '<button type="button" class="px-2.5 py-1.5 text-xs rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" onclick="openTaskTemplatesPageFromPicker(true)"><i class="fas fa-plus mr-1"></i>新建模板</button>' +
-                    '<button type="button" class="px-2.5 py-1.5 text-xs rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition" onclick="openTaskTemplatesPageFromPicker(false)"><i class="fas fa-sliders mr-1"></i>管理模板</button>' +
-                '</div>' +
-                '<button type="button" class="px-3 py-1.5 text-xs rounded-lg text-theme-secondary hover:bg-theme-tertiary transition" onclick="closeTaskTemplatePicker()">关闭</button>' +
-            '</div>' +
-        '</div>';
-    document.body.appendChild(overlay);
-    overlay.addEventListener('click', function (e) {
-        if (e.target === overlay) closeTaskTemplatePicker();
-    });
+    _ensureTaskTemplatePickerCss();
+    const panel = _ensureTaskTemplatePickerPanel();
+    // 每次打开重建内容：日期胶囊与搜索框 value 都需要按当前状态复位
+    panel.innerHTML = _tplPickerPanelHtml();
+    panel.classList.remove('hidden');
+    document.body.classList.add('tpl-picker-open');
+    if (settings.smoothAnimations === true) {
+        panel.classList.remove('panel-fade-out');
+        panel.classList.remove('panel-fade-in');
+        void panel.offsetWidth;
+        panel.classList.add('panel-fade-in');
+    } else {
+        panel.classList.remove('panel-fade-in', 'panel-fade-out');
+    }
+    // 面板挤压主区：Header 动作按钮需要重新收纳（与详情面板同口径）
+    if (typeof scheduleHeaderActionOverflow === 'function') {
+        scheduleHeaderActionOverflow(380);
+        scheduleHeaderActionOverflow(0);
+    }
+
     _renderTaskTemplatePickerDateChips();
-    const listSelect = document.getElementById('tpl-picker-list');
-    if (listSelect) listSelect.value = _tplPickerState.listId;
-    _updateTaskTemplatePickerSummary();
+    _syncTaskTemplatePickerSearchUI();
     _renderTaskTemplatePickerRows();
-    // 浮层内字体/滚动条落定后再量一次，避免首次测量偏宽导致子任务多留一个
+    // 面板内字体/滚动条落定后再量一次，避免首次测量偏宽导致子任务多留一个
     _scheduleTaskTemplateDetailFit(400);
 
-    const search = document.getElementById('tpl-picker-search');
-    if (search) {
-        search.addEventListener('input', function () {
-            if (!_tplPickerState) return;
-            _tplPickerState.query = search.value;
-            _renderTaskTemplatePickerRows();
-        });
-        search.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') { e.preventDefault(); closeTaskTemplatePicker(); }
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                const first = document.querySelector('#tpl-picker-list-box .tpl-picker-row');
-                if (first) first.click();
-            }
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                const first = document.querySelector('#tpl-picker-list-box .tpl-picker-row');
-                if (first) first.focus();
-            }
-        });
-        if (!window.matchMedia || !window.matchMedia('(hover: none)').matches) {
-            setTimeout(function () { search.focus(); }, 50);
-        }
-    }
     _tplPickerEscHandler = function (e) {
         if (e.key !== 'Escape') return;
         if (e.defaultPrevented) return;
         if (document.getElementById('tpl-save-overlay')) return;
+        // 二次确认的第二层：先撤销选中，再按一次才关面板（与详情栏「先收浮层再关」同序）
+        if (clearTaskTemplatePickerSelection()) {
+            e.preventDefault();
+            return;
+        }
         e.preventDefault();
         closeTaskTemplatePicker();
     };
     document.addEventListener('keydown', _tplPickerEscHandler);
+
+    _setupTaskTemplatePickerOutsideClose();
+    _tplPickerIgnoreOutsideClick = true;
+    setTimeout(function () { _tplPickerIgnoreOutsideClick = false; }, 0);
 }
 
 function setTaskTemplatePickerDate(mode) {
@@ -870,26 +1355,12 @@ function setTaskTemplatePickerDate(mode) {
     if (mode !== 'today' && mode !== 'tomorrow' && mode !== 'none') return;
     _tplPickerState.dateMode = mode;
     _renderTaskTemplatePickerDateChips();
-    _updateTaskTemplatePickerSummary();
-    _renderTaskTemplatePickerRows();
-}
-
-function setTaskTemplatePickerList(listId) {
-    if (!_tplPickerState) return;
-    _tplPickerState.listId = listId || '__template__';
-    _updateTaskTemplatePickerSummary();
-}
-
-function clearTaskTemplatePickerSearch() {
-    if (!_tplPickerState) return;
-    _tplPickerState.query = '';
-    const search = document.getElementById('tpl-picker-search');
-    if (search) { search.value = ''; search.focus(); }
     _renderTaskTemplatePickerRows();
 }
 
 function refreshTaskTemplatePicker() {
-    if (_tplPickerState && document.getElementById('tpl-picker-overlay')) {
+    const panel = document.getElementById('tpl-picker-panel');
+    if (_tplPickerState && panel && !panel.classList.contains('hidden')) {
         _renderTaskTemplatePickerRows();
     }
 }
@@ -903,20 +1374,119 @@ function pickTaskTemplate(tplId) {
         refreshTaskTemplatePicker();
         return;
     }
-    const options = { dateMode: state.dateMode, listId: state.listId };
-    closeTaskTemplatePicker();
-    createTaskFromTemplate(tpl, options);
+    // 撤销要回到同一上下文：日期模式 / 清单目标在面板收起（state 被清空）前快照
+    const pickerOptions = { dateMode: state.dateMode, listId: state.listId };
+    const usageBefore = { lastUsedAt: tpl.lastUsedAt, useCount: tpl.useCount };
+    // 立即隐藏选择器但保留主区宽度类：紧接着由任务详情面板接管右栏，主区不会先回弹再收缩
+    _finishTaskTemplatePickerHide(true);
+    // 通知交由下方的撤销条统一发出，避免成功提示叠两条
+    const task = createTaskFromTemplate(tpl, { dateMode: state.dateMode, listId: state.listId, skipToast: true });
+    if (task && typeof openTaskDetailPanel === 'function') {
+        openTaskDetailPanel(task.id);
+    }
+    // 详情面板已加上自己的宽度类；此时移除选择器类不会改变 margin-right
+    requestAnimationFrame(function () {
+        document.body.classList.remove('tpl-picker-open');
+        if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(0);
+    });
+    if (task) _showTaskTemplateCreatedUndo(tpl, task, usageBefore, pickerOptions);
 }
 
-function closeTaskTemplatePicker() {
-    const overlay = document.getElementById('tpl-picker-overlay');
-    if (overlay) overlay.remove();
+// 创建成功的通知改走撤销条：UNDO / Ctrl+Z 删除刚创建的任务，并回到模板选择面板。
+// 时间敏感型模板（含提醒/重复但没有具体时间）保留原警示文案，同样允许撤销。
+function _showTaskTemplateCreatedUndo(tpl, task, usageBefore, pickerOptions) {
+    if (typeof showUndoToast !== 'function') return;
+    const usageAfter = { lastUsedAt: tpl.lastUsedAt, useCount: tpl.useCount };
+    let entry = null;
+    if (typeof pushUndoEntry === 'function') {
+        entry = pushUndoEntry({
+            label: '从模板创建任务',
+            kind: 'create',
+            undo: function () {
+                const wasShowing = typeof currentDetailTaskId !== 'undefined' && currentDetailTaskId === task.id;
+                // 先按正常口径收起详情栏（退出书写态 + 落盘），再做删除
+                if (wasShowing && typeof closeTaskDetailPanel === 'function') closeTaskDetailPanel();
+                tasks = tasks.filter(function (t) { return t.id !== task.id; });
+                // 兜底：saveTaskDetail 校验失败时 close 会提前返回；任务已删除，直接强制收起
+                if (wasShowing && typeof currentDetailTaskId !== 'undefined' && currentDetailTaskId === task.id) {
+                    if (typeof hideDetailPanel === 'function') hideDetailPanel();
+                    currentDetailTaskId = null;
+                }
+                // 撤销「最近使用」排序影响；若模板期间又被使用过，不覆盖较新的记录
+                if (tpl.lastUsedAt === usageAfter.lastUsedAt && tpl.useCount === usageAfter.useCount) {
+                    if (usageBefore.lastUsedAt === undefined) delete tpl.lastUsedAt;
+                    else tpl.lastUsedAt = usageBefore.lastUsedAt;
+                    if (usageBefore.useCount === undefined) delete tpl.useCount;
+                    else tpl.useCount = usageBefore.useCount;
+                }
+                // 面板已开着（用户操作中途按了 Ctrl+Z）就保持现状，避免 openTaskTemplatePicker 的再次触发把它收起
+                const pickerPanel = document.getElementById('tpl-picker-panel');
+                if (pickerPanel && !pickerPanel.classList.contains('hidden')) {
+                    if (typeof refreshTaskTemplatePicker === 'function') refreshTaskTemplatePicker();
+                } else if (typeof openTaskTemplatePicker === 'function') {
+                    openTaskTemplatePicker(pickerOptions);
+                }
+            }
+        });
+    }
+    const timeSensitive = !!task.repeat || (Array.isArray(task.reminders) && task.reminders.length > 0);
+    const hasClock = !!(task.startTime && !task.isAllDay);
+    const warn = timeSensitive && !hasClock;
+    showUndoToast(
+        warn
+            ? '已从模板创建「' + task.title + '」；模板含提醒/重复，设置具体时间后生效'
+            : '已从模板创建「' + task.title + '」',
+        function () {
+            if (typeof _executeUndoEntry !== 'function' || !entry) return { ok: false, reason: 'invalid' };
+            return _executeUndoEntry(entry);
+        },
+        warn ? { type: 'warning' } : {}
+    );
+}
+
+// 详情面板接管右栏前调用：只收起选择器面板，主区宽度类留给详情面板无缝接替
+function dismissTaskTemplatePickerForDetail() {
+    if (!_tplPickerState) return false;
+    _finishTaskTemplatePickerHide(true);
+    return true;
+}
+
+function _finishTaskTemplatePickerHide(instant) {
+    _clearTaskTemplatePickerSelectTimer();
     if (_tplPickerEscHandler) {
         document.removeEventListener('keydown', _tplPickerEscHandler);
         _tplPickerEscHandler = null;
     }
     _tplPickerState = null;
     _setupTaskTemplateDetailFit();
+    if (_tplPickerHideTimer) {
+        clearTimeout(_tplPickerHideTimer);
+        _tplPickerHideTimer = null;
+    }
+    const panel = document.getElementById('tpl-picker-panel');
+    if (!panel) return;
+    const smooth = typeof settings !== 'undefined' && settings.smoothAnimations === true;
+    if (instant === true || !smooth || panel.classList.contains('hidden')) {
+        panel.classList.remove('panel-fade-in', 'panel-fade-out');
+        panel.classList.add('hidden');
+        return;
+    }
+    panel.classList.remove('panel-fade-in');
+    panel.classList.add('panel-fade-out');
+    _tplPickerHideTimer = setTimeout(function () {
+        _tplPickerHideTimer = null;
+        panel.classList.remove('panel-fade-out');
+        panel.classList.add('hidden');
+        if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(0);
+    }, 200);
+}
+
+function closeTaskTemplatePicker(instant) {
+    _finishTaskTemplatePickerHide(instant);
+    document.body.classList.remove('tpl-picker-open');
+    if (typeof scheduleHeaderActionOverflow === 'function') {
+        scheduleHeaderActionOverflow(instant === true ? 0 : 380);
+    }
 }
 
 // ==================== 设置入口 / 模板管理页 ====================
@@ -1059,6 +1629,34 @@ function _ensureTaskTemplatesCss() {
         #tpl-panel-list-btn:hover { background: var(--accent-color, #3b82f6) !important; border-color: var(--accent-color, #3b82f6) !important; color: #fff !important; }
         #tpl-panel-delete-btn { border-color: #ef4444 !important; color: #ef4444 !important; }
         #tpl-panel-delete-btn:hover { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
+
+        /* ---- 建议时间菜单：与任务详情栏 #detail-time-menu 同口径 ----
+           · 浅底圆角卡片替代分割线（底色 + 1px 描边 + 10px 圆角 / 2 16 6 外边距 / 10 14 内边距）；
+           · 时间段输入框改为「透明底 + 1px 描边 + 次级文字色」，与下方提醒 / 重复按钮一致。
+           壁纸模式与 blur-off 的取值直接对齐 #detail-time-menu 的既有规则。 */
+        #template-detail-panel #tpl-panel-time-menu:not(.hidden) {
+            background-color: var(--bg-tertiary, #f3f4f6);
+            border: 1px solid var(--border-color, #e5e7eb);
+            border-radius: 10px;
+            margin: 2px 16px 6px;
+            padding: 10px 14px;
+        }
+        body.has-bg-image #template-detail-panel #tpl-panel-time-menu:not(.hidden) {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+        }
+        html[data-blur="off"] body.has-bg-image #template-detail-panel #tpl-panel-time-menu:not(.hidden) {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.92) !important;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        /* 原生 time 输入框的 UA 底色是 field（主题下呈白色），必须显式透明；
+           outline:none 与详情栏同因（原生 date/time 恒匹配 :focus-visible，单击也会画白环） */
+        #template-detail-panel #tpl-panel-time-menu input[type="time"] {
+            background-color: transparent;
+            outline: none;
+        }
         body.has-bg-image #template-detail-panel {
             background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.55) !important;
             backdrop-filter: blur(var(--bg-blur, 12px)) !important;
@@ -1209,7 +1807,7 @@ function _tplPageHeaderButtons(searchBtnClass) {
         '<button type="button" onclick="startNewTaskTemplate()" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition" title="新建模板">' +
             '<i class="fas fa-plus"></i>' +
         '</button>' +
-        '<button type="button" onclick="closeTaskTemplatesView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回">' +
+        '<button type="button" onclick="closeTaskTemplatesView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回">' +
             '<i class="fas fa-arrow-left"></i>' +
         '</button>' +
     '</div>';
@@ -1326,16 +1924,16 @@ function _renderTaskTemplateRow(tpl, searching) {
     const listAll = getTaskTemplates();
     const idx = listAll.findIndex(function (t) { return t.id === tpl.id; });
     const actionBase = 'w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0';
-    const editCls = actionBase + ' border border-accent text-accent hover:bg-accent-soft dark:border-accent-secondary dark:text-accent-light dark:hover:bg-accent-strong';
-    const copyCls = actionBase + ' border border-emerald-500 text-emerald-500 hover:bg-emerald-50 dark:border-emerald-400 dark:text-emerald-400 dark:hover:bg-emerald-900/30';
-    const sortCls = actionBase + ' border border-sky-500 text-sky-500 hover:bg-sky-50 dark:border-sky-400 dark:text-sky-400 dark:hover:bg-sky-900/30';
-    const useCls = 'px-2.5 py-1.5 text-xs rounded-lg border border-purple-500 text-purple-500 hover:bg-purple-50 dark:border-purple-400 dark:text-purple-400 dark:hover:bg-purple-900/30 transition flex-shrink-0';
+    const editCls = actionBase + ' tone-outline-accent';
+    const copyCls = actionBase + ' tone-outline-emerald';
+    const sortCls = actionBase + ' tone-outline-sky';
+    const useCls = 'px-2.5 py-1.5 text-xs rounded-lg tone-outline-purple transition flex-shrink-0';
     const disabledUp = searching || idx <= 0;
     const disabledDown = searching || idx === -1 || idx >= listAll.length - 1;
     const confirming = _tplRowDeleteConfirmId === tpl.id;
     const deleteCls = actionBase + (confirming
-        ? ' bg-red-600 text-white border-red-600 dark:bg-red-700 dark:border-red-700'
-        : ' border border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30');
+        ? ' tone-solid-red'
+        : ' tone-outline-red');
 
     return `<div class="tpl-manage-row relative flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-80 transition cursor-pointer group"
             data-tpl-id="${tpl.id}"
@@ -1349,11 +1947,11 @@ function _renderTaskTemplateRow(tpl, searching) {
         <div class="flex-1 min-w-0">
             <div data-tpl-title class="text-base font-medium text-theme-primary truncate">${titleHtml}</div>
             ${detailHtml}
-            <div data-tpl-info-line class="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap text-sm text-theme-secondary mt-0.5">
+            <div data-tpl-info-line class="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0 text-xs text-theme-secondary mt-0.5">
                 ${timeText ? '<span class="inline-flex items-center gap-1 flex-shrink-0 text-theme-secondary"><i class="far fa-clock"></i>' + escapeHtml(timeText) + '</span>' : ''}
-                <span class="inline-flex items-center gap-1 flex-shrink-0 min-w-0">
+                <span class="inline-flex items-center gap-1 min-w-0">
                     <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${listDotColor};"></span>
-                    <span class="truncate" style="max-width:110px;">${escapeHtml(listLabel)}</span>
+                    <span class="min-w-0" style="overflow-wrap:anywhere;">${escapeHtml(listLabel)}</span>
                 </span>
                 ${reminderText ? '<span class="inline-flex items-center gap-1 flex-shrink-0"><i class="fas fa-bell"></i>' + escapeHtml(reminderText) + '</span>' : ''}
                 ${repeatLabel ? '<span class="inline-flex items-center gap-1 flex-shrink-0"><i class="fas fa-redo"></i>' + escapeHtml(repeatLabel) + '</span>' : ''}
@@ -1480,7 +2078,7 @@ function _fitTaskTemplateDetailLine(line) {
 }
 
 function _fitAllTaskTemplateDetailLines() {
-    document.querySelectorAll('.tpl-manage-row [data-tpl-detail-line], .tpl-picker-row [data-tpl-detail-line]').forEach(function (line) {
+    document.querySelectorAll('.tpl-manage-row [data-tpl-detail-line], .tpl-picker-row [data-tpl-detail-line], .cmd-tpl-row [data-tpl-detail-line]').forEach(function (line) {
         _fitTaskTemplateDetailLine(line);
     });
 }
@@ -1499,7 +2097,7 @@ function _fitPickerMetaChips(meta) {
 }
 
 function _fitAllPickerMetaChips() {
-    document.querySelectorAll('.tpl-picker-row [data-tpl-picker-meta]').forEach(_fitPickerMetaChips);
+    document.querySelectorAll('.tpl-picker-row [data-tpl-picker-meta], .cmd-tpl-row [data-tpl-picker-meta]').forEach(_fitPickerMetaChips);
 }
 
 function _setupTaskTemplateDetailFit() {
@@ -1517,7 +2115,7 @@ function _setupTaskTemplateDetailFit() {
         });
     }
     _tplDetailResizeObserver.disconnect();
-    document.querySelectorAll('.tpl-manage-row [data-tpl-detail-line], .tpl-picker-row [data-tpl-detail-line], .tpl-picker-row [data-tpl-picker-meta]').forEach(function (line) {
+    document.querySelectorAll('.tpl-manage-row [data-tpl-detail-line], .tpl-picker-row [data-tpl-detail-line], .cmd-tpl-row [data-tpl-detail-line], .tpl-picker-row [data-tpl-picker-meta], .cmd-tpl-row [data-tpl-picker-meta]').forEach(function (line) {
         _tplDetailResizeObserver.observe(line);
     });
 }
@@ -1785,13 +2383,6 @@ function duplicateTaskTemplate(tplId) {
     return copy;
 }
 
-function duplicateTaskTemplateFromPanel() {
-    if (!_tplPanelState || !_tplPanelState.tplId) return;
-    if (typeof flushTaskTemplatePanelAutoSave === 'function' && !flushTaskTemplatePanelAutoSave()) return;
-    const copy = duplicateTaskTemplate(_tplPanelState.tplId);
-    if (copy) openTaskTemplatePanel(copy.id, true);
-}
-
 function _doDeleteTaskTemplate(tplId) {
     const tpl = getTaskTemplateById(tplId);
     if (!tpl) return;
@@ -1932,7 +2523,6 @@ function _taskTemplatePanelHtml() {
                 <i class="fas fa-chevron-down text-xs flex-shrink-0"></i>
             </button>
             <div class="flex items-center gap-2 flex-shrink-0">
-                <button type="button" id="tpl-panel-duplicate-btn" onclick="duplicateTaskTemplateFromPanel()" class="p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" title="复制模板"><i class="fas fa-copy"></i></button>
                 <button type="button" onclick="closeTaskTemplatePanel()" class="p-2 text-theme-muted hover:bg-theme-tertiary rounded-lg transition" title="关闭"><i class="fas fa-times"></i></button>
             </div>
         </div>
@@ -1946,11 +2536,11 @@ function _taskTemplatePanelHtml() {
             </div>
             <div class="grid grid-cols-2 gap-2">
                 <div class="relative">
-                    <input type="time" id="tpl-panel-time" title="开始时间" aria-label="开始时间" class="w-full px-3 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary" onclick="openTimePicker(this, 'tpl-panel-time-picker', onTaskTemplatePanelTimeChange)" onchange="onTaskTemplatePanelTimeChange()">
+                    <input type="time" id="tpl-panel-time" title="开始时间" aria-label="开始时间" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg text-theme-secondary cursor-pointer" onclick="openTimePicker(this, 'tpl-panel-time-picker', onTaskTemplatePanelTimeChange)" onchange="onTaskTemplatePanelTimeChange()">
                     <div id="tpl-panel-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
                 </div>
                 <div id="tpl-panel-end-time-container" class="relative hidden">
-                    <input type="time" id="tpl-panel-end-time" title="结束时间" aria-label="结束时间" class="w-full px-3 py-2 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary" onclick="openTimePicker(this, 'tpl-panel-end-time-picker', onTaskTemplatePanelEndTimeChange)" onchange="onTaskTemplatePanelEndTimeChange()">
+                    <input type="time" id="tpl-panel-end-time" title="结束时间" aria-label="结束时间" class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg text-theme-secondary cursor-pointer" onclick="openTimePicker(this, 'tpl-panel-end-time-picker', onTaskTemplatePanelEndTimeChange)" onchange="onTaskTemplatePanelEndTimeChange()">
                     <div id="tpl-panel-end-time-picker" class="hidden absolute left-0 right-0 mt-1 bg-theme-tertiary rounded-lg border border-theme z-20 shadow-lg max-h-48 overflow-y-auto"></div>
                 </div>
             </div>
@@ -2260,8 +2850,6 @@ function _tplPanelUpdateNotesPlaceholder() {
 function _tplPanelRefreshActions() {
     if (!_tplPanelState) return;
     const saved = !!_tplPanelState.tplId;
-    const dup = document.getElementById('tpl-panel-duplicate-btn');
-    if (dup) dup.classList.toggle('hidden', !saved);
     const del = document.getElementById('tpl-panel-delete-btn');
     if (del) {
         del.classList.toggle('opacity-30', !saved);
@@ -2648,6 +3236,7 @@ function openTaskTemplatePanel(tplId, force) {
     document.querySelectorAll('#tpl-panel-subtasks textarea').forEach(function (ta) {
         _tplPanelAutoResizeSubtask(ta);
     });
+    if (typeof refreshTaskTemplatePanelNotesEditor === 'function') refreshTaskTemplatePanelNotesEditor();
     _tplPanelState.escHandler = function (e) {
         if (e.key !== 'Escape') return;
         const menu = document.getElementById('tpl-panel-time-menu');
@@ -2701,6 +3290,8 @@ function _tplPanelUniqueName(base) {
 
 function _tplPanelFlushBeforeClose() {
     if (!_tplPanelState) return true;
+    // 行级编辑器先落定活动块（含输入法组合中的最后一段），再读 textarea 持久化
+    if (typeof mdEditorCommit === 'function') mdEditorCommit({ render: false });
     if (_tplPanelSaveTimer) {
         clearTimeout(_tplPanelSaveTimer);
         _tplPanelSaveTimer = null;
@@ -2721,6 +3312,9 @@ function _tplPanelFlushBeforeClose() {
 function closeTaskTemplatePanel(force) {
     // force=false 时先把草稿落盘；持久化失败（如重名）则保留面板与草稿，由调用方决定是否继续
     if (!force && !_tplPanelFlushBeforeClose()) return false;
+    // 备注行级编辑器：先落定活动块再收起（自动保存失败保留面板时，编辑区仍保持激活）
+    if (typeof mdEditorCommit === 'function') mdEditorCommit({ render: false });
+    if (typeof mdDeactivateEditorForKind === 'function') mdDeactivateEditorForKind('template');
     if (_tplPanelSaveTimer) {
         clearTimeout(_tplPanelSaveTimer);
         _tplPanelSaveTimer = null;
@@ -3412,16 +4006,16 @@ function updateDetailTemplateEntry(task) {
 // 预置模板改版号：改动 TEMPLATE_PRESETS 后必须 +1。
 // 启动时 seedTaskTemplatesIfNeeded() 检测到本地版本低于此值，会把模板列表整体重建为
 // 当前 3 个预置（旧版预置及其副本一并清除）；「重置数据」同样调用 resetTaskTemplatesToPresets()。
-const TEMPLATE_PRESET_VERSION = 3;
+const TEMPLATE_PRESET_VERSION = 4;
 
 // 预置主题固定为 3 个日常工作模板：周报 / 会议纪要 / 项目复盘
-// 备注骨架一律用纯文本（本应用不渲染 Markdown，写「## 标题」会原样显示成井号）
+// 备注骨架使用 Markdown（详情面板按行级 Markdown 渲染）
 const TEMPLATE_PRESETS = [
     {
         name: '周报',
         task: {
             title: '本周周报',
-            notes: '本周完成\n\n下周计划\n\n风险与需要的支持',
+            notes: '## 本周完成\n- **重点产出**：\n- **关键数据**：\n\n## 下周计划\n- **核心目标**：\n- **需要的支持**：\n\n## 风险与需要的支持\n- **风险**：\n- **应对方案**：',
             important: true,
             urgent: false,
             reminders: [60],
@@ -3437,7 +4031,7 @@ const TEMPLATE_PRESETS = [
         name: '会议纪要',
         task: {
             title: '会议纪要',
-            notes: '议题\n\n结论\n\n待办与责任人\n\n下次会议',
+            notes: '## 议题\n- 议题 1\n- 议题 2\n\n## 结论\n- 结论 1\n\n## 待办与责任人\n- [ ] 事项 —— 负责人 / 截止时间\n\n## 下次会议\n- **时间**：\n- **议题**：',
             important: false,
             urgent: false,
             // 会议时间不固定，模板不写死时刻：建成全天任务，由用户按会议时段补时间
@@ -3453,7 +4047,7 @@ const TEMPLATE_PRESETS = [
         name: '项目复盘',
         task: {
             title: '项目复盘',
-            notes: '目标与结果\n\n关键节点\n\n遇到的问题\n\n下一步行动',
+            notes: '## 目标与结果\n- **原定目标**：\n- **实际结果**：\n\n## 关键节点\n1. 启动：\n2. 交付：\n\n## 遇到的问题\n- **问题**：\n- **根因**：\n\n## 下一步行动\n- [ ] 待办 —— 负责人 / 截止时间',
             important: true,
             urgent: false,
             reminders: [60],

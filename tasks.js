@@ -647,85 +647,6 @@ function openAddTaskModal(presetDate = null) {
     }, 100);
 }
 
-function closeAddTaskModal() {
-    document.getElementById('add-task-modal').classList.add('hidden');
-    document.getElementById('add-task-modal').classList.remove('flex');
-}
-
-function openEditTaskModal(taskId) {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-    
-    document.getElementById('task-modal-title').textContent = '编辑任务';
-    document.getElementById('task-id').value = task.id;
-    document.getElementById('task-title').value = task.title;
-    document.getElementById('task-list').value = task.listId;
-    document.getElementById('task-important').checked = task.important;
-    document.getElementById('task-urgent').checked = task.urgent;
-    document.getElementById('task-notes').value = task.notes || '';
-    
-    if (task.notes) {
-        document.getElementById('task-details-section').classList.remove('hidden');
-    } else {
-        document.getElementById('task-details-section').classList.add('hidden');
-    }
-    
-    // 重置选择器状态
-    document.getElementById('time-picker').classList.add('hidden');
-    document.getElementById('priority-picker').classList.add('hidden');
-    document.getElementById('list-picker').classList.add('hidden');
-    document.getElementById('reminder-picker').classList.add('hidden');
-    document.getElementById('repeat-picker').classList.add('hidden');
-    
-    // 重置提醒和重复选项
-    document.querySelectorAll('.reminder-option').forEach(opt => opt.checked = false);
-    document.querySelectorAll('.repeat-option').forEach(opt => opt.checked = false);
-    document.getElementById('custom-reminder').classList.add('hidden');
-    document.getElementById('custom-repeat-container').classList.add('hidden');
-    document.getElementById('reminder-text').textContent = '提醒';
-    document.getElementById('repeat-text').textContent = '重复';
-    
-    // 更新按钮文本
-    const list = lists.find(l => l.id === task.listId);
-    document.getElementById('list-btn-text').textContent = list?.name || '选择清单';
-    
-    const timeDisplay = task.startTime ? formatTaskTimeLabel(task) : '设置时间';
-    document.getElementById('time-btn-text').textContent = timeDisplay;
-    
-    const priorityText = (task.important ? '重要' : '') + (task.important && task.urgent ? ' / ' : '') + (task.urgent ? '紧急' : '');
-    document.getElementById('priority-btn-text').textContent = priorityText || '设置优先级';
-    
-    if (task.startTime) {
-        const date = new Date(task.startTime);
-        document.getElementById('task-selected-date').value = formatDate(date);
-        initCalendar(date);
-        document.getElementById('task-start-time').value = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-        
-        if (task.endTime) {
-            setTimeMode('range');
-            const endDate = new Date(task.endTime);
-            document.getElementById('task-end-time').value = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-        }
-    } else {
-        document.getElementById('task-selected-date').value = formatDate(new Date());
-        initCalendar(new Date());
-    }
-    
-    document.getElementById('add-task-modal').classList.remove('hidden');
-    document.getElementById('add-task-modal').classList.add('flex');
-    
-    setTimeout(() => {
-        document.getElementById('task-title').focus();
-    }, 100);
-}
-
-function openEditTaskPriority(taskId) {
-    openEditTaskModal(taskId);
-    setTimeout(() => {
-        toggleImportantUrgent();
-    }, 100);
-}
-
 let currentDetailTaskId = null;
 let isTimeRangeMode = false;
 // 任务详情面板只读模式（如归档清单中的任务）
@@ -873,6 +794,8 @@ function showDetailPanel(taskId) {
     const wasExiting = panel.classList.contains('panel-fade-out');
     // 同步解除 hidden：后续 renderSubtasks()/autoResizeTextarea 需面板可见才能测量高度
     panel.classList.remove('hidden');
+    // 面板 384px 入场会挤压主区；等过渡结束后重算 Header 收纳（0ms 再按预判宽度立即收一次）
+    if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(380);
     // 四象限展开态窄轨联动（PRD FR4 方案 B）：「象限重排 + 主区 margin 收缩」交给 qHookDetailPanelToggle，
     // 与面板入场并入同一场 View Transition，同帧起跑、同时长同缓动
     // （taskId 供其实现象限跟随与状态去重：点击缩略格任务时同步切换展开象限，换看任务时不重播象限动画）
@@ -885,6 +808,7 @@ function showDetailPanel(taskId) {
         return;
     }
     document.body.classList.add('detail-panel-open');
+    if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(0);
     if (settings.smoothAnimations === true) {
         // 主界面（含顶部右侧按钮）跟随面板收缩：CSS 过渡 margin-right
         document.body.classList.add('fx-detail-open');
@@ -906,6 +830,8 @@ function hideDetailPanel() {
     subtaskManageMode = false;         // 关闭面板时退出子任务管理模式（临时状态，不残留）
     const panel = document.getElementById('task-detail-panel');
     if (!panel) return;
+    // 面板收起后主区回弹；等过渡结束重算 Header 收纳
+    if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(380);
     // 四象限展开态窄轨联动（PRD FR4 方案 B）：面板的移除同样交给 qHookDetailPanelToggle，
     // 与「象限重排 + 主区 margin 回弹」同场过渡；fx-detail-open 的摘除时机也交给回调，
     // 保证 margin 过渡与卡片 morph 同帧起跑（此前同步摘除会让回弹早于快照补间，收尾出现跳变）
@@ -924,6 +850,7 @@ function hideDetailPanel() {
     // 移除跟随类，主界面平滑回弹（与面板滑出动画同时进行）
     document.body.classList.remove('fx-detail-open');
     document.body.classList.remove('detail-panel-open');
+    if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(0);
     if (settings.smoothAnimations === true && !panel.classList.contains('hidden')) {
         panel.classList.remove('panel-fade-in');
         panel.classList.add('panel-fade-out');
@@ -953,7 +880,7 @@ function _applyExtTaskDetailGuard(task) {
         if (host && host.parentNode) {
             const banner = document.createElement('div');
             banner.id = 'detail-ext-banner';
-            banner.className = 'px-4 py-2 bg-cyan-50 dark:bg-cyan-900/20 border-b border-cyan-200 dark:border-cyan-800 text-xs text-cyan-700 dark:text-cyan-300 flex items-center gap-2 flex-shrink-0';
+            banner.className = 'px-4 py-2 tone-banner-cyan text-xs flex items-center gap-2 flex-shrink-0';
             banner.innerHTML = '<i class="fas fa-lock"></i><span>外部订阅日程 · 来自 ' +
                 escapeHtml(getCalendarSubscriptionName(task.extSourceId)) +
                 '，任务标题、时间请在原日历中更改。</span>';
@@ -1111,6 +1038,13 @@ function pruneLeftoverEmptyTasks() {
 }
 
 function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
+    // 模板选择器与详情共用同一个右栏槽：选择器立即收起，主区宽度由详情面板无缝接替
+    if (typeof dismissTaskTemplatePickerForDetail === 'function' && dismissTaskTemplatePickerForDetail()) {
+        requestAnimationFrame(function () {
+            document.body.classList.remove('tpl-picker-open');
+            if (typeof scheduleHeaderActionOverflow === 'function') scheduleHeaderActionOverflow(0);
+        });
+    }
     // 上一次收拢动画可能还没落地（面板被关掉时已强制落定，这里再兜一道）：
     // 残留的 detail-write-mode 会让面板一打开就是书写态。
     if (typeof _wmMorphFinishNow === 'function') _wmMorphFinishNow();
@@ -1134,6 +1068,10 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     if (currentDetailTaskId && currentDetailTaskId !== taskId && !detailReadOnly) {
         const visiblePanel = document.getElementById('task-detail-panel');
         if (visiblePanel && !visiblePanel.classList.contains('hidden')) {
+            // FR-10：未完成上传的图片占位先摘掉，避免带着旧任务占位去保存
+            if (typeof cleanupPendingNotePlaceholders === 'function') cleanupPendingNotePlaceholders(currentDetailTaskId);
+            // FR-10：落定块编辑器（含文末空块的补白回收），再保存旧任务
+            if (typeof mdEditorCommit === 'function') mdEditorCommit({ render: false });
             // 当前任务若是「新建后什么都没填」的空任务，切换时按关闭面板的口径直接删除，
             // 而不是当作普通任务保存下来（否则空任务会永久留在列表里）。
             // 目标任务不存在时保持原逻辑：只保存、不删除。
@@ -1439,6 +1377,8 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
 
     // 应用只读模式：禁用所有可编辑控件，隐藏操作按钮
     applyDetailReadOnly(detailReadOnly);
+    // FR-10：备注块级 Markdown 编辑器（在只读判定之后初始化，保证 readOnly 状态正确）
+    if (typeof refreshDetailNotesEditor === 'function') refreshDetailNotesEditor();
     // FR-09：标题行模板入口需在只读/外部任务判定之后同步显隐与提示
     if (typeof updateDetailTemplateEntry === 'function') updateDetailTemplateEntry(task);
 }
@@ -1675,6 +1615,10 @@ function toggleTaskMode(event) {
     const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
     if (taskIndex === -1) return;
     const task = tasks[taskIndex];
+    // FR-10：先落定块编辑器，再切换模式（子任务拆分读取的是 notes 源码）
+    if (typeof mdEditorCommit === 'function') mdEditorCommit({ render: false });
+    // FR-10：切换模式前摘掉未完成上传的图片占位，避免被当成子任务文本
+    if (typeof cleanupPendingNotePlaceholders === 'function') cleanupPendingNotePlaceholders(task.id);
     
     if (currentTaskMode === 'text') {
         const notesValue = document.getElementById('detail-task-notes').value;
@@ -1745,6 +1689,7 @@ function toggleTaskMode(event) {
     task.mode = currentTaskMode;
     touchTask(task); // 模式切换视为内容变更（问题 1）
     // 模式切换后详情文本元素变化（notes <-> description+subtasks），重算毛玻璃带纵向范围
+    if (typeof refreshDetailNotesEditor === 'function') refreshDetailNotesEditor();
     requestAnimationFrame(updateWriteModeGlassBounds);
 }
 
@@ -3209,6 +3154,10 @@ function commitDetailDateTimeInput(input) {
 }
 
 function closeTaskDetailPanel() {
+    // FR-10：先清理未完成上传的占位并落定块编辑器（含文末空块补白回收），
+    // 无论后续是关闭面板还是切回番茄概况，都不把临时内容留在正文里。
+    if (typeof cleanupPendingNotePlaceholders === 'function') cleanupPendingNotePlaceholders(currentDetailTaskId);
+    if (typeof mdEditorCommit === 'function') mdEditorCommit({ render: false });
     // 番茄右栏「任务详情」模式（特性二）：面板此刻托管在番茄页右栏，主视图不可见。
     // 此时「关闭」的语义是切回右栏的专注概况，而不是把主视图的详情栏关掉
     // （关掉只会让右栏留下一块空白）。_unmountDetailFromRight 会先摘托管标记再走这里，故不重入。
@@ -3435,15 +3384,13 @@ function applyDetailInputsToTask(task, options = {}) {
         newStartTime = new Date(dateValue + 'T00:00:00').toISOString();
     }
 
+    const endDateValue = isTimeRangeMode ? document.getElementById('detail-task-end-date').value : '';
+    const endTimeValue = isTimeRangeMode ? document.getElementById('detail-task-end-time').value : '';
     let newEndTime = null;
-    if (isTimeRangeMode) {
-        const endDateValue = document.getElementById('detail-task-end-date').value;
-        const endTimeValue = document.getElementById('detail-task-end-time').value;
-        if (endDateValue && endTimeValue && !isAllDay) {
-            newEndTime = new Date(`${endDateValue}T${endTimeValue}`).toISOString();
-        } else if (endDateValue) {
-            newEndTime = new Date(endDateValue + 'T00:00:00').toISOString();
-        }
+    if (endDateValue && endTimeValue && !isAllDay) {
+        newEndTime = new Date(`${endDateValue}T${endTimeValue}`).toISOString();
+    } else if (endDateValue) {
+        newEndTime = new Date(endDateValue + 'T00:00:00').toISOString();
     }
 
     // ── 第二段：唯一校验点（此刻 task 仍完全未被修改）──
@@ -3455,37 +3402,51 @@ function applyDetailInputsToTask(task, options = {}) {
     // ── 第三段：校验通过，统一写入 ──
     // 外部任务（_isExtTask）保护外部覆盖字段：title/notes/startTime/endTime/isAllDay/repeat 保留原值，
     // 本地保留字段（mode/description/listId/groupId/important/urgent）仍写；reminder 强制 0（附录 A-5）。
-    // 变更追踪（changeFlag）：仅记录真实变化；无修改的换看任务由调用方跳过保存与整板重渲染
+    // 变更追踪（changeFlag）：仅记录真实变化；无修改的换看任务由调用方跳过保存与整板重渲染。
+    // 历史数据的可选字段可能缺失或为 null（groupId / reminders / endTime / description 等），
+    // 必须先把任务侧值与表单侧默认值归一化到同一语义再比较，否则「未编辑直接换看」会被误判为有修改。
     const _cf = options.changeFlag;
     const _setIf = (cond, apply) => { if (cond) { apply(); if (_cf) _cf.changed = true; } };
     if (!_isExtTask) {
-        if (newTitle !== undefined) _setIf(task.title !== newTitle, () => { task.title = newTitle; });
-        if (notes !== undefined) _setIf(task.notes !== notes, () => { task.notes = notes; });
+        if (newTitle !== undefined) _setIf((task.title || '') !== newTitle, () => { task.title = newTitle; });
+        if (notes !== undefined) _setIf((task.notes || '') !== notes, () => { task.notes = notes; });
         _setIf(JSON.stringify(task.repeat || null) !== JSON.stringify(repeat || null), () => { task.repeat = repeat; });
 
-        if (newStartTime) {
-            _setIf(task.startTime !== newStartTime || task.isAllDay !== isAllDay, () => {
+        // 时间按面板显示的「日期 + 时:分」比较，而非 ISO 瞬时值：历史全天任务可能存成
+        // UTC 午夜或本地午夜（同一显示日期对应不同 ISO），直接比 ISO 会让每次换看都误判为修改。
+        const _hhmm = (iso) => {
+            const d = new Date(iso);
+            return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+        };
+        const curDateValue = task.startTime ? formatDate(new Date(task.startTime)) : '';
+        const curTimeValue = (task.startTime && !task.isAllDay) ? _hhmm(task.startTime) : '';
+        const startUnchanged = curDateValue === dateValue && curTimeValue === timeValue;
+        if (!startUnchanged) {
+            if (newStartTime) {
                 task.startTime = newStartTime;
                 task.isAllDay = isAllDay;
-            });
-        } else {
-            _setIf(task.startTime !== undefined || task.isAllDay !== false, () => {
+            } else {
                 delete task.startTime;
                 task.isAllDay = false;
-            });
+            }
+            if (_cf) _cf.changed = true;
+            // 手动修改时间后，顺延保留的原始时间失效
+            if (task._originalStartTime !== undefined) delete task._originalStartTime;
         }
-        // 手动修改时间后，清除顺延保留的原始时间
-        _setIf(task._originalStartTime !== undefined, () => { delete task._originalStartTime; });
 
-        if (newEndTime) {
-            _setIf(task.endTime !== newEndTime, () => { task.endTime = newEndTime; });
-        } else {
-            _setIf(task.endTime !== undefined, () => { delete task.endTime; });
+        const curEndDateValue = task.endTime ? formatDate(new Date(task.endTime)) : '';
+        const curEndTimeValue = (task.endTime && !task.isAllDay) ? _hhmm(task.endTime) : '';
+        const endUnchanged = (!!task.endTime === isTimeRangeMode)
+            && (!isTimeRangeMode || (curEndDateValue === endDateValue && curEndTimeValue === endTimeValue));
+        if (!endUnchanged) {
+            if (newEndTime) task.endTime = newEndTime;
+            else delete task.endTime;
+            if (_cf) _cf.changed = true;
         }
     }
-    _setIf(task.mode !== mode, () => { task.mode = mode; });
-    if (description !== undefined) _setIf(task.description !== description, () => { task.description = description; });
-    _setIf(task.listId !== listId, () => { task.listId = listId; });
+    _setIf((task.mode || 'text') !== mode, () => { task.mode = mode; });
+    if (description !== undefined) _setIf((task.description || '') !== description, () => { task.description = description; });
+    _setIf((task.listId || 'default') !== listId, () => { task.listId = listId; });
     // FR-01：改清单入撤销栈（kind='moveList'，只还原 listId）
     if (!_isExtTask && _prevListId !== task.listId && typeof pushUndoEntry === 'function') {
         const _movedTask = task;
@@ -3495,15 +3456,18 @@ function applyDetailInputsToTask(task, options = {}) {
             undo: function () { _movedTask.listId = _prevListId; }
         });
     }
-    _setIf(task.groupId !== groupId, () => { task.groupId = groupId; });
-    _setIf(task.important !== important, () => { task.important = important; });
-    _setIf(task.urgent !== urgent, () => { task.urgent = urgent; });
-    // 提前提醒：外部日历任务强制清空（附录 A-5）；旧字段 reminder 作为兼容镜像双写
+    _setIf((task.groupId || null) !== groupId, () => { task.groupId = groupId; });
+    _setIf(!!task.important !== important, () => { task.important = important; });
+    _setIf(!!task.urgent !== urgent, () => { task.urgent = urgent; });
+    // 提前提醒：外部日历任务强制清空（附录 A-5）；旧字段 reminder 作为兼容镜像双写。
+    // 旧数据只有 reminder 没有 reminders 数组时，getAdvanceMinutes 会回退读取，
+    // 这里同样按回退结果比较，避免仅因字段缺失就判定为修改。
     const newReminders = _isExtTask ? [] : reminders;
-    _setIf(JSON.stringify(task.reminders || []) !== JSON.stringify(newReminders),
+    const curReminders = normalizeReminderMinutes(getAdvanceMinutes(task));
+    _setIf(JSON.stringify(curReminders) !== JSON.stringify(newReminders),
         () => { task.reminders = newReminders; });
     const newReminderMirror = newReminders.length ? Math.max(...newReminders) : 0;
-    _setIf(task.reminder !== newReminderMirror, () => { task.reminder = newReminderMirror; });
+    _setIf((task.reminder || 0) !== newReminderMirror, () => { task.reminder = newReminderMirror; });
     // 内容发生真实变化时打修改时间戳（问题 1）
     if (_cf && _cf.changed) touchTask(task);
     return true;
@@ -3551,6 +3515,12 @@ function togglePlanPanel() {
     if (planPanelOpen) {
         closePlanPanel();
     } else {
+        // 右栏互斥：模板选择器打开时先收起它，避免两个右栏同时挤压主区
+        const tplPickerPanel = document.getElementById('tpl-picker-panel');
+        if (tplPickerPanel && !tplPickerPanel.classList.contains('hidden')
+            && typeof closeTaskTemplatePicker === 'function') {
+            closeTaskTemplatePicker(true);
+        }
         panel.classList.remove('hidden');
         planPanelOpen = true;
         renderPlanPanel();
@@ -4881,380 +4851,6 @@ function initScrollbarHandler() {
             scrollTimers.delete(target);
         }, 1000));
     }, true);
-}
-
-function initTaskTitleHandler() {
-    const titleInput = document.getElementById('task-title');
-    if (titleInput) {
-        titleInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Tab' && !e.shiftKey) {
-                e.preventDefault();
-                const detailsSection = document.getElementById('task-details-section');
-                if (detailsSection.classList.contains('hidden')) {
-                    detailsSection.classList.remove('hidden');
-                    setTimeout(() => {
-                        document.getElementById('task-notes').focus();
-                    }, 100);
-                }
-            }
-        });
-    }
-}
-
-// 切换选择器
-function toggleTimePicker() {
-    const picker = document.getElementById('time-picker');
-    picker.classList.toggle('hidden');
-    document.getElementById('priority-picker').classList.add('hidden');
-    document.getElementById('list-picker').classList.add('hidden');
-}
-
-function toggleImportantUrgent() {
-    const picker = document.getElementById('priority-picker');
-    picker.classList.toggle('hidden');
-    document.getElementById('time-picker').classList.add('hidden');
-    document.getElementById('list-picker').classList.add('hidden');
-}
-
-function toggleListPicker() {
-    const picker = document.getElementById('list-picker');
-    picker.classList.toggle('hidden');
-    document.getElementById('time-picker').classList.add('hidden');
-    document.getElementById('priority-picker').classList.add('hidden');
-}
-
-function toggleReminderPicker() {
-    const picker = document.getElementById('reminder-picker');
-    picker.classList.toggle('hidden');
-}
-
-function toggleRepeatPicker() {
-    const picker = document.getElementById('repeat-picker');
-    picker.classList.toggle('hidden');
-}
-
-function updateReminderText() {
-    const selected = document.querySelector('input[name="reminder"]:checked');
-    const reminderText = document.getElementById('reminder-text');
-    const customInput = document.getElementById('custom-reminder');
-    
-    if (selected) {
-        switch (selected.value) {
-            case '5':
-                reminderText.textContent = '提前5分钟';
-                customInput.classList.add('hidden');
-                break;
-            case '1440':
-                reminderText.textContent = '提前1天';
-                customInput.classList.add('hidden');
-                break;
-            case 'custom':
-                reminderText.textContent = '自定义';
-                customInput.classList.remove('hidden');
-                const customValue = customInput.value;
-                if (customValue) {
-                    reminderText.textContent = `提前${customValue}分钟`;
-                }
-                break;
-            default:
-                reminderText.textContent = '提醒';
-                customInput.classList.add('hidden');
-        }
-    }
-}
-
-// 更新重复按钮文本
-function updateRepeatText() {
-    const selected = document.querySelector('input[name="repeat"]:checked');
-    const repeatText = document.getElementById('repeat-text');
-    const customContainer = document.getElementById('custom-repeat-container');
-    
-    if (selected) {
-        switch (selected.value) {
-            case '':
-                repeatText.textContent = '重复';
-                customContainer.classList.add('hidden');
-                break;
-            case 'daily':
-                repeatText.textContent = '每天';
-                customContainer.classList.add('hidden');
-                break;
-            case 'weekly':
-                repeatText.textContent = '每周';
-                customContainer.classList.add('hidden');
-                break;
-            case 'monthly':
-                repeatText.textContent = '每月';
-                customContainer.classList.add('hidden');
-                break;
-            case 'yearly':
-                repeatText.textContent = '每年';
-                customContainer.classList.add('hidden');
-                break;
-            case 'custom':
-                repeatText.textContent = '自定义';
-                customContainer.classList.remove('hidden');
-                const interval = document.getElementById('custom-repeat-interval').value;
-                const unit = document.getElementById('custom-repeat-unit').value;
-                if (interval) {
-                    const unitName = {
-                        'days': '天',
-                        'weeks': '周',
-                        'months': '月',
-                        'years': '年'
-                    };
-                    repeatText.textContent = `每${interval}${unitName[unit]}`;
-                }
-                break;
-            default:
-                repeatText.textContent = '重复';
-                customContainer.classList.add('hidden');
-        }
-    }
-}
-
-function getReminderValueFromForm() {
-    const selected = document.querySelector('input[name="reminder"]:checked');
-    if (!selected) return 0;
-    if (selected.value === 'custom') {
-        const customVal = parseInt(document.getElementById('custom-reminder').value);
-        return customVal > 0 ? customVal : 0;
-    }
-    return parseInt(selected.value) || 0;
-}
-
-function getRepeatValueFromForm() {
-    const selected = document.querySelector('input[name="repeat"]:checked');
-    if (!selected) return null;
-    if (selected.value === '' || selected.value === undefined) return null;
-    if (selected.value === 'custom') {
-        const interval = parseInt(document.getElementById('custom-repeat-interval').value);
-        const unit = document.getElementById('custom-repeat-unit').value;
-        if (!interval || interval <= 0) return null;
-        return { type: 'custom', interval: interval, unit: unit };
-    }
-    return { type: selected.value };
-}
-
-let calendarMonth = new Date();
-
-function initCalendar(date = new Date()) {
-    calendarMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-    renderCalendar();
-}
-
-function renderCalendar() {
-    const container = document.getElementById('calendar-container');
-    const year = calendarMonth.getFullYear();
-    const month = calendarMonth.getMonth();
-    
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const today = new Date();
-    
-    const dayOffset = settings.weekStart === 'monday' ? 1 : 0;
-    let startOffset = firstDay.getDay() - dayOffset;
-    if (startOffset < 0) startOffset += 7;
-    
-    let html = `
-        <div class="col-span-7 flex items-center justify-between mb-2">
-            <button onclick="prevCalendarMonth()" class="p-1 hover:bg-gray-200 rounded text-theme-secondary">
-                <i class="fas fa-chevron-left"></i>
-            </button>
-            <span class="font-medium text-theme-primary">${year}年${month + 1}月</span>
-            <button onclick="nextCalendarMonth()" class="p-1 hover:bg-gray-200 rounded text-theme-secondary">
-                <i class="fas fa-chevron-right"></i>
-            </button>
-        </div>
-    `;
-    
-    const weekdays = settings.weekStart === 'monday' ? ['一', '二', '三', '四', '五', '六', '日'] : ['日', '一', '二', '三', '四', '五', '六'];
-    weekdays.forEach(d => {
-        html += `<div class="text-center text-xs text-theme-muted py-1">${d}</div>`;
-    });
-    
-    for (let i = startOffset - 1; i >= 0; i--) {
-        html += `<div class="calendar-day disabled opacity-40"></div>`;
-    }
-    
-    const selectedDate = document.getElementById('task-selected-date')?.value;
-    
-    for (let i = 1; i <= lastDay.getDate(); i++) {
-        const date = new Date(year, month, i);
-        const dateStr = formatDate(date);
-        const isToday = isSameDay(date, today);
-        const isSelected = dateStr === selectedDate;
-        
-        html += `
-            <div class="calendar-day text-center py-2 rounded cursor-pointer text-theme-primary ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}" 
-                 data-date="${dateStr}"
-                 onclick="selectCalendarDate('${dateStr}')">
-                ${i}
-            </div>
-        `;
-    }
-    
-    container.innerHTML = html;
-}
-
-function prevCalendarMonth() {
-    calendarMonth.setMonth(calendarMonth.getMonth() - 1);
-    renderCalendar();
-}
-
-function nextCalendarMonth() {
-    calendarMonth.setMonth(calendarMonth.getMonth() + 1);
-    renderCalendar();
-}
-
-function selectCalendarDate(dateStr) {
-    document.getElementById('task-selected-date').value = dateStr;
-    renderCalendar();
-    updateTimeButtonText();
-}
-
-let timeMode = 'single';
-
-function setTimeMode(mode) {
-    timeMode = mode;
-    document.querySelectorAll('.time-mode-btn').forEach(btn => {
-        if (btn.dataset.mode === mode) {
-            btn.className = 'time-mode-btn px-4 py-2 rounded-lg';
-            btn.style.backgroundColor = 'var(--accent-color)';
-            btn.style.color = 'white';
-        } else {
-            btn.className = 'time-mode-btn px-4 py-2 rounded-lg bg-gray-200 text-gray-700';
-        }
-    });
-    
-    document.getElementById('end-time-container').classList.toggle('hidden', mode !== 'range');
-}
-
-function updateTimeButtonText() {
-    const dateStr = document.getElementById('task-selected-date')?.value;
-    const startTime = document.getElementById('task-start-time')?.value;
-    const endTime = document.getElementById('task-end-time')?.value;
-    
-    if (dateStr) {
-        const date = new Date(dateStr);
-        const dateText = `${date.getMonth() + 1}月${date.getDate()}日`;
-        
-        if (startTime) {
-            let text = dateText + ' ' + startTime;
-            if (timeMode === 'range' && endTime) {
-                text += ' - ' + endTime;
-            }
-            document.getElementById('time-btn-text').textContent = text;
-        } else {
-            document.getElementById('time-btn-text').textContent = dateText;
-        }
-    }
-}
-
-function initFormHandlers() {
-    const taskForm = document.getElementById('task-form');
-    if (taskForm) {
-        taskForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            
-            const id = document.getElementById('task-id').value;
-            const title = document.getElementById('task-title').value;
-            const listId = document.getElementById('task-list').value;
-            const important = document.getElementById('task-important').checked;
-            const urgent = document.getElementById('task-urgent').checked;
-            const notes = document.getElementById('task-notes').value;
-            const selectedDate = document.getElementById('task-selected-date').value;
-            const startTime = document.getElementById('task-start-time').value;
-            const endTime = document.getElementById('task-end-time').value;
-            const reminder = getReminderValueFromForm();
-            const repeat = getRepeatValueFromForm();
-            
-            let startDateTime = null;
-            let endDateTime = null;
-            
-            if (selectedDate && startTime) {
-                startDateTime = new Date(`${selectedDate}T${startTime}:00`);
-                if (timeMode === 'range' && endTime) {
-                    endDateTime = new Date(`${selectedDate}T${endTime}:00`);
-                }
-            }
-            
-            if (id) {
-                const task = tasks.find(t => t.id === id);
-                if (task) {
-                    task.title = title;
-                    task.listId = listId;
-                    task.important = important;
-                    task.urgent = urgent;
-                    task.notes = notes;
-                    task.startTime = startDateTime ? startDateTime.toISOString() : null;
-                    task.endTime = endDateTime ? endDateTime.toISOString() : null;
-                    task.reminder = reminder;
-                    task.reminders = reminder > 0 ? [reminder] : [];
-                    task.repeat = repeat;
-                    touchTask(task); // 问题 1：旧版编辑弹窗保存
-                }
-            } else {
-                tasks.push({
-                    id: generateId(),
-                    title,
-                    listId,
-                    important,
-                    urgent,
-                    notes,
-                    tags: [],
-                    startTime: startDateTime ? startDateTime.toISOString() : null,
-                    endTime: endDateTime ? endDateTime.toISOString() : null,
-                    reminder,
-                    reminders: reminder > 0 ? [reminder] : [],
-                    repeat,
-                    completed: false,
-                    createdAt: new Date().toISOString()
-                });
-            }
-            
-            saveData();
-            closeAddTaskModal();
-            renderLists();
-            renderView();
-            showToast(id ? '已更新任务' : '已添加任务', 'success');
-        });
-    }
-    
-    // 监听时间变化
-    const startTimeInput = document.getElementById('task-start-time');
-    const endTimeInput = document.getElementById('task-end-time');
-    if (startTimeInput) {
-        startTimeInput.addEventListener('change', updateTimeButtonText);
-    }
-    if (endTimeInput) {
-        endTimeInput.addEventListener('change', updateTimeButtonText);
-    }
-    
-    // 清单选择变化
-    const taskListSelect = document.getElementById('task-list');
-    if (taskListSelect) {
-        taskListSelect.addEventListener('change', () => {
-            const list = lists.find(l => l.id === taskListSelect.value);
-            document.getElementById('list-btn-text').textContent = list?.name || '选择清单';
-        });
-    }
-    
-    // 重要/紧急变化
-    const importantCheckbox = document.getElementById('task-important');
-    const urgentCheckbox = document.getElementById('task-urgent');
-    if (importantCheckbox && urgentCheckbox) {
-        importantCheckbox.addEventListener('change', updatePriorityButtonText);
-        urgentCheckbox.addEventListener('change', updatePriorityButtonText);
-    }
-}
-
-function updatePriorityButtonText() {
-    const important = document.getElementById('task-important')?.checked;
-    const urgent = document.getElementById('task-urgent')?.checked;
-    
-    const text = (important ? '重要' : '') + (important && urgent ? ' / ' : '') + (urgent ? '紧急' : '');
-    document.getElementById('priority-btn-text').textContent = text || '设置优先级';
 }
 
 function deleteTask(taskId) {
@@ -6610,11 +6206,20 @@ function updateWriteModeGlassBounds() {
     // 若用 offsetParent 会误判为可见并取其底边（≈ 正文区底）污染范围。
     const visible = (el) => el && el.offsetHeight > 0;
     const notes = document.getElementById('detail-task-notes');
+    const mdEditor = document.getElementById('detail-notes-md-editor');
     const desc = document.getElementById('detail-task-description');
     const subtaskContent = document.getElementById('subtask-content');
     if (visible(notes)) {
         const nr = notes.getBoundingClientRect();
         textBottom = Math.max(textBottom, nr.top + _textElContentHeight(notes) - (notes.scrollTop || 0));
+    }
+    if (visible(mdEditor)) {
+        // 块编辑器的文本高度同样要扣掉书写态预留的 padding-bottom:46vh，
+        // 否则毛玻璃带会多出半屏（与上方 _textElContentHeight 同一口径）。
+        const er = mdEditor.getBoundingClientRect();
+        const ecs = getComputedStyle(mdEditor);
+        const epad = (parseFloat(ecs.paddingTop) || 0) + (parseFloat(ecs.paddingBottom) || 0);
+        textBottom = Math.max(textBottom, er.top + Math.max(0, mdEditor.scrollHeight - epad) - (mdEditor.scrollTop || 0));
     }
     if (visible(desc)) {
         const dr = desc.getBoundingClientRect();
@@ -6691,11 +6296,11 @@ function resizeAllSubtaskInputs() {
 }
 
 function _initWmGlass() {
-    if (_wmGlassInited) return;
-    _wmGlassInited = true;
+    // 每个元素只绑定一次，已初始化过也不提前返回（面板 DOM 可能在首次调用后才补全）。
     ['detail-task-notes', 'detail-task-description', 'subtask-content'].forEach((id) => {
         const el = document.getElementById(id);
-        if (!el) return;
+        if (!el || el._wmGlassBound) return;
+        el._wmGlassBound = true;
         // 文本输入（notes/desc）改变内容高度时重算
         el.addEventListener('input', updateWriteModeGlassBounds);
         // 高度自然变化（描述框自适应、子任务列表增减）时重算
@@ -6703,6 +6308,8 @@ function _initWmGlass() {
             new ResizeObserver(updateWriteModeGlassBounds).observe(el);
         }
     });
+    if (_wmGlassInited) return;
+    _wmGlassInited = true;
     window.addEventListener('resize', () => {
         if (document.body.classList.contains('detail-write-mode')) updateWriteModeGlassBounds();
     });

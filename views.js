@@ -26,13 +26,15 @@ function _playViewSwitchTransition(fxCtx, prevView, newView) {
     // 剥离幽灵层内所有 id，避免过渡期间 getElementById 命中幽灵层副本
     ghost.removeAttribute('id');
     ghost.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
-    // 同步旧视图滚动位置，避免幽灵层跳回顶部
-    const ghostScrolls = ghost.querySelectorAll('.task-list-view');
-    fxCtx.scrolls.forEach((s, i) => { if (ghostScrolls[i]) ghostScrolls[i].scrollTop = s; });
     // 过渡期间裁剪溢出并建立幽灵层定位上下文
     container.style.overflow = 'hidden';
     container.style.position = 'relative';
     container.appendChild(ghost);
+    // 同步旧视图滚动位置（追加后才具备布局，可正确写入 scrollTop），避免幽灵层跳回顶部
+    const ghostScrolls = ghost.querySelectorAll('.task-list-view');
+    fxCtx.scrolls.forEach((s, i) => { if (ghostScrolls[i]) ghostScrolls[i].scrollTop = s; });
+    const ghostScheduleScrolls = ghost.querySelectorAll('.schedule-container');
+    (fxCtx.scheduleScrolls || []).forEach((s, i) => { if (ghostScheduleScrolls[i]) ghostScheduleScrolls[i].scrollTop = s; });
     // 新视图自反方向接续滑入
     container.classList.remove('fx-enter-from-left', 'fx-enter-from-right');
     void container.offsetWidth; // 强制重排以重新触发动画
@@ -54,6 +56,12 @@ function switchView(view) {
     }
     // FR-01-4：视图切换后撤销栈失效
     if (typeof clearUndoStack === 'function') clearUndoStack();
+    // 模板选择器是临时创建面板，切视图时收起，避免跨视图残留
+    const tplPickerPanel = document.getElementById('tpl-picker-panel');
+    if (tplPickerPanel && !tplPickerPanel.classList.contains('hidden')
+        && typeof closeTaskTemplatePicker === 'function') {
+        closeTaskTemplatePicker(true);
+    }
     if (currentDetailTaskId) {
         closeTaskDetailPanel();
     }
@@ -79,8 +87,9 @@ function switchView(view) {
             mainHeader.classList.remove('hidden');
         }
     }
-    if (view === 'schedule') {
-        _scheduleAutoScroll = true;
+    if (view === 'schedule' && prevView !== 'schedule') {
+        // 仅本次页面会话首次进入日程时自动定位今天；之后切回保留上次位置
+        _scheduleAutoScroll = !_scheduleSessionEntered;
     }
     if (!['schedule', 'week', 'month'].includes(view)) {
         closePlanPanel();
@@ -100,7 +109,8 @@ function switchView(view) {
             fxCtx = {
                 el: vc,
                 ghost: vc.cloneNode(true),
-                scrolls: Array.from(vc.querySelectorAll('.task-list-view')).map(s => s.scrollTop)
+                scrolls: Array.from(vc.querySelectorAll('.task-list-view')).map(s => s.scrollTop),
+                scheduleScrolls: Array.from(vc.querySelectorAll(':scope > .schedule-container')).map(s => s.scrollTop)
             };
         }
     }
@@ -265,6 +275,11 @@ function updateViewButtons() {
 
 function renderView() {
     const container = document.getElementById('view-container');
+    // 离开日程视图：在 DOM 被替换前记录视口锚点，供下次切回日程时恢复上次位置
+    if (currentView !== 'schedule' && typeof captureScheduleViewport === 'function') {
+        const viewport = captureScheduleViewport();
+        if (viewport) _scheduleLastViewport = viewport;
+    }
     // 清空底部导航栏（由各视图自行填充）
     const navBar = document.getElementById('view-nav-bar');
     if (navBar) navBar.innerHTML = '';

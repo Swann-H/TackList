@@ -3,9 +3,9 @@
 // 第二象限逾期徽章分档配色：只用文字+图标着色，不叠加底色/描边，
 // 颜色随逾期时长由琥珀渐深至红（第三档与「重要且紧急」标题同色）
 const QUADRANT_STAGNATION_COLORS = {
-    1: 'text-amber-500 dark:text-amber-400',
-    2: 'text-orange-600 dark:text-orange-400',
-    3: 'text-red-600 dark:text-red-400'
+    1: 'tone-ink-amber-500',
+    2: 'tone-ink-orange',
+    3: 'tone-ink-red'
 };
 
 // 四象限视图配置：迁移自全局「视图偏好」
@@ -48,10 +48,10 @@ function _isQuadrantMobile() {
 const QUADRANT_BANNER_KEY = 'quadrantBannerDismissed';
 
 const QUADRANT_BANNER_TONES = {
-    red: 'bg-red-200/60 dark:bg-red-800/40 text-red-700 dark:text-red-300',
-    yellow: 'bg-yellow-200/60 dark:bg-yellow-800/40 text-yellow-700 dark:text-yellow-300',
-    blue: 'bg-blue-200/60 dark:bg-blue-800/40 text-blue-700 dark:text-blue-300',
-    gray: 'bg-gray-200/60 dark:bg-gray-700/40 text-gray-700 dark:text-gray-300'
+    red: 'q-tone-red',
+    yellow: 'q-tone-yellow',
+    blue: 'q-tone-blue',
+    gray: 'q-tone-gray'
 };
 
 function _readQuadrantBannerMap() {
@@ -95,7 +95,7 @@ function quadrantBannerHtml(opts) {
             <i class="fas ${opts.icon || 'fa-info-circle'} flex-shrink-0"></i>
             <span class="flex-1 min-w-0">${opts.text}</span>
             <button type="button" onclick="event.stopPropagation(); dismissQuadrantBanner('${id}', ${lvArg});"
-                    class="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center opacity-60 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 transition"
+                    class="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center opacity-60 hover:opacity-100 q-icon-hover transition"
                     title="关闭提示" aria-label="关闭提示">
                 <i class="fas fa-times text-[10px]"></i>
             </button>
@@ -491,12 +491,10 @@ function renderQuadrantView(container) {
     if (!isOverloaded) _clearQuadrantBannerDismissed('overload-urgent-important');
 
     const colorClasses = {
-        red: isOverloaded
-            ? 'border-red-400 bg-red-100 dark:border-red-500 dark:bg-red-900/50'
-            : 'border-red-300 bg-red-50 dark:border-red-600 dark:bg-red-900/30',
-        blue: 'border-blue-300 bg-blue-50 dark:border-blue-600 dark:bg-blue-900/30',
-        yellow: 'border-yellow-300 bg-yellow-50 dark:border-yellow-600 dark:bg-yellow-900/30',
-        gray: 'border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-700/50'
+        red: isOverloaded ? 'q-zone-red-overload' : 'q-zone-red',
+        blue: 'q-zone-blue',
+        yellow: 'q-zone-yellow',
+        gray: 'q-zone-gray'
     };
 
     const iconColors = {
@@ -785,8 +783,7 @@ function openAddTaskForQuadrant(quadrantKey) {
     const urgent = quadrantKey.includes('urgent') && !quadrantKey.includes('not-urgent');
 
     openAddTaskModal();
-    // 优先级必须走详情面板的状态：面板显示/保存用的是 detailImportantState / detailUrgentState，
-    // 而 #task-important / #task-urgent 属于已废弃的 add-task-modal（永远 hidden），写它们不生效。
+    // 优先级必须走详情面板的状态：面板显示/保存用的是 detailImportantState / detailUrgentState。
     // 同时直接写回任务对象：新建时 saveData() 已排入节流队列，避免首次落库仍是旧优先级。
     const task = tasks.find(t => t.id === currentDetailTaskId);
     if (task) {

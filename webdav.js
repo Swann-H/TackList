@@ -36,7 +36,7 @@ function updateWebdavResetState() {
     btn.disabled = !enabled;
     btn.className = 'flex items-center justify-center w-8 h-8 rounded-lg border transition ' +
         (enabled
-            ? 'border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30'
+            ? 'tone-outline-red'
             : 'border-theme text-theme-muted opacity-40 cursor-not-allowed');
 }
 
@@ -223,9 +223,9 @@ function setWebdavStatusMsg(text, type) {
     if (!el) return;
     el.textContent = text;
     el.className = 'text-xs rounded-lg px-3 py-2 whitespace-pre-line ' + (type === 'error'
-        ? 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+        ? 'tone-soft-red'
         : type === 'success'
-            ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400'
+            ? 'tone-soft-green'
             : 'bg-theme-tertiary text-theme-secondary');
 }
 
@@ -692,20 +692,12 @@ function renderSyncMenu() {
     const hasIcs = (typeof _calSubs === 'function') && _calSubs().some(function (s) { return s.enabled; });
     const rows = [];
 
+    // 只列出已配置的通道；两条都未配置时入口本身隐藏（updateCalendarSyncBtnVisibility）
     // 顺序与配置页子页签一致：WebDAV 云同步在前，ICS 订阅在后
-    if (!_webdavConfigured) {
-        // 未配置时两条通道合并为一条引导，避免出现两个永远不可点的按钮
-        rows.push({
-            icon: 'fas fa-cloud',
-            label: '云同步未配置',
-            color: 'slate',
-            time: '去设置',
-            run: gotoSyncSettingsFromHeader
-        });
-    } else {
+    if (_webdavConfigured) {
         rows.push({
             icon: 'fas fa-cloud-arrow-up',
-            label: '上传到云端',
+            label: '备份到云端',
             color: 'cyan',
             time: _syncTimeText(_webdavLastPushAt) || '未同步',
             attention: (_webdavState === 'local-newer' || _webdavState === 'cloud-missing'),
@@ -713,7 +705,7 @@ function renderSyncMenu() {
         });
         rows.push({
             icon: 'fas fa-cloud-arrow-down',
-            label: '从云端下载',
+            label: '从云端恢复',
             color: 'cyan',
             time: _syncTimeText(_webdavLastPullAt) || '未同步',
             attention: (_webdavState === 'cloud-newer'),
@@ -721,21 +713,21 @@ function renderSyncMenu() {
         });
     }
 
-    rows.push({ sep: true });
-
     // ICS 订阅：拉取外部日程进本系统（只读导入，风险低）
-    rows.push({
-        icon: 'fas fa-calendar-plus',
-        label: '立即同步外部日历',
-        color: 'cyan',
-        time: hasIcs ? (_syncTimeText(_icsLastSyncDate()) || '未同步') : '未启用',
-        disabled: !hasIcs,
-        run: function () {
-            if (typeof triggerCalendarSync === 'function') triggerCalendarSync();
-        }
-    });
+    if (hasIcs) {
+        if (rows.length) rows.push({ sep: true });
+        rows.push({
+            icon: 'fas fa-calendar-plus',
+            label: '刷新外部日历',
+            color: 'cyan',
+            time: _syncTimeText(_icsLastSyncDate()) || '未同步',
+            run: function () {
+                if (typeof triggerCalendarSync === 'function') triggerCalendarSync();
+            }
+        });
+    }
 
-    rows.push({ sep: true });
+    if (rows.length) rows.push({ sep: true });
     rows.push({
         icon: 'fas fa-gear',
         label: '打开外部日历同步设置',

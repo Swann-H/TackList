@@ -59,7 +59,7 @@ function openCommandPalette() {
             <i class="fas fa-terminal text-theme-secondary"></i>
             <input id="command-palette-input" type="text"
                    class="flex-1 bg-transparent outline-none text-theme-primary text-base"
-                   placeholder="快速新建任务 · * 使用模板 · /s 搜索…"
+                   placeholder="准备做什么？"
                    autocomplete="off" spellcheck="false">
         </div>
         <div id="command-palette-results" class="max-h-72 overflow-y-auto"></div>
@@ -75,7 +75,10 @@ function openCommandPalette() {
                 </span>
             </div>
             <div class="ml-auto min-w-0 flex flex-col items-end gap-1 text-right">
-                <span id="cmd-hint-default">${_cmdHintChip('select', '/select 多选')} · ${_cmdHintChip('s', '/s 搜索')} · ~清单 · #标签 · *模板 · !优先级 · |详情</span>
+                <span id="cmd-hint-default"><span class="flex flex-col items-end gap-1">
+                    <span>~清单 · #标签 · !优先级 · |详情</span>
+                    <span>${_cmdHintChip('select', '/select 批量管理')} · ${_cmdHintChip('s', '/s 搜索')} · ${_cmdHintChip('*', '* 从任务模板添加任务')}</span>
+                </span></span>
                 <span id="cmd-hint-search" class="hidden"><span class="flex flex-col items-end gap-1">
                     <span>搜索筛选：~清单 · #标签 · is:已完成/未完成/今天/逾期/无日期/有附件</span>
                     <span>${_cmdHintChip('select', '/select 批量管理')}</span>
@@ -115,7 +118,7 @@ function openCommandPalette() {
         input.setSelectionRange(s, end);
         handleCommandPaletteInput({});
     } else {
-        // 空面板打开即展示首页（最近模板 + 搜索历史），不必等一次输入事件
+        // 空面板打开即展示首页（搜索历史），不必等一次输入事件
         handleCommandPaletteInput({});
     }
 }
@@ -140,7 +143,10 @@ function closeCommandPalette(keepDraft) {
     const overlay = document.getElementById('command-palette-overlay');
     if (overlay) {
         overlay.style.animation = 'fadeOut 0.1s ease-in';
-        setTimeout(() => overlay.remove(), 100);
+        setTimeout(() => {
+            overlay.remove();
+            if (typeof _setupTaskTemplateDetailFit === 'function') _setupTaskTemplateDetailFit();
+        }, 100);
     }
 }
 
@@ -420,7 +426,7 @@ function executeCommandPalette() {
     // FR-09：`*` 模板直建（C9-1：不经 parseNLPInput，否则模板名会被当成任务标题）
     if (value.charAt(0) === '*') {
         const q = value.slice(1).trim();
-        const list = (typeof findTemplatesByQuery === 'function') ? findTemplatesByQuery(q) : [];
+        const list = getCommandPaletteTemplateList(q);
         if (list.length === 0) { showToast('没有匹配的任务模板', 'info'); return; }
         closeCommandPalette();
         createTaskFromTemplate(list[0]);
@@ -457,12 +463,24 @@ function findCommandPaletteCandidateToken(value, cursor) {
     return null;
 }
 
+// 模板入口的统一顺序：无查询时「最近使用」在前，其余按模板顺序；有查询时沿用匹配排序。
+// 候选胶囊、卡片列表与 Enter 必须共用这一顺序，否则「看到的第一个」和「Enter 创建的」会不一致。
+function getCommandPaletteTemplateList(query) {
+    if (typeof getTaskTemplates !== 'function') return [];
+    const q = (query || '').trim();
+    if (q) return (typeof findTemplatesByQuery === 'function') ? findTemplatesByQuery(q) : [];
+    const all = getTaskTemplates();
+    const recents = (typeof getRecentTaskTemplates === 'function') ? getRecentTaskTemplates(4) : [];
+    const ids = recents.map(function (t) { return t.id; });
+    return recents.concat(all.filter(function (t) { return ids.indexOf(t.id) === -1; }));
+}
+
 // 构建候选面板的候选项：过滤（前缀匹配优先于包含匹配）+ 标记已在输入中生效的完整 token（实心）
 function buildCommandPaletteItems(type, query, value) {
     let items;
     if (type === 'template') {
-        // FR-09：`*` 模板候选（前缀优先，其次包含）
-        items = (typeof findTemplatesByQuery === 'function' ? findTemplatesByQuery(query) : [])
+        // FR-09：`*` 模板候选（无查询时最近使用优先）
+        items = getCommandPaletteTemplateList(query)
             .map(function (t) { return { name: t.name, color: '#8b5cf6', tplId: t.id }; });
     } else {
         items = type === 'list'
@@ -732,23 +750,44 @@ function armPreviousCommandPaletteToken() {
     if (chunk) _cpDelToken = { start: chunk.start, text: input.value.slice(chunk.start, chunk.end) };
 }
 
-// FR-09 `*` 模板预览（不走 NLP）
-function renderTemplatePreview(query) {
-    const list = (typeof findTemplatesByQuery === 'function') ? findTemplatesByQuery(query) : [];
-    if (!list.length) {
+// FR-09 `*` 模板列表：直接复用「从模板创建」的卡片（备注 + 子任务 + 信息行）
+function _cmdTemplateRowHTML(tpl) {
+    if (typeof _templatePickerRowHTML !== 'function') return '';
+    const onclick = "closeCommandPalette(); createTaskFromTemplateById('" + _jsStr(tpl.id) + "')";
+    return _templatePickerRowHTML(tpl, { rowClass: 'cmd-tpl-row', onclick: onclick });
+}
+
+function _cmdTemplateSection(title, templates, withTopGap) {
+    if (!templates.length) return '';
+    return '<div class="px-1 pb-1' + (withTopGap ? ' pt-3' : '') + ' text-[11px] font-semibold uppercase tracking-wide text-theme-muted">' + title + '</div>' +
+        '<div class="space-y-1.5">' + templates.map(_cmdTemplateRowHTML).join('') + '</div>';
+}
+
+function renderTemplateCandidates(query) {
+    const all = (typeof getTaskTemplates === 'function') ? getTaskTemplates() : [];
+    if (!all.length) {
         return '<div class="px-5 py-6 text-center text-theme-muted text-sm">' +
-            '<i class="fas fa-layer-group mr-2"></i>没有匹配的任务模板' +
+            '<i class="fas fa-layer-group mr-2"></i>还没有任务模板' +
             '</div>';
     }
-    const top = list[0];
-    const subs = (top.task && top.task.subtasks) || [];
-    const subText = subs.map(function (s) { return s.text; }).join('、');
-    return '<div class="px-5 py-4">' +
-        '<div class="text-xs text-theme-muted mb-2">按 Enter 用模板创建任务</div>' +
-        '<div class="text-sm text-theme-primary font-medium"><i class="fas fa-layer-group mr-1.5 text-purple-400"></i>' + escapeHtml(top.name) + '</div>' +
-        (top.task && top.task.title ? '<div class="text-xs text-theme-secondary mt-1">标题：' + escapeHtml(top.task.title) + '</div>' : '') +
-        (subs.length ? '<div class="text-xs text-theme-muted mt-1 truncate">' + subs.length + ' 个子任务：' + escapeHtml(subText) + '</div>' : '') +
-        (list.length > 1 ? '<div class="text-xs text-theme-muted mt-2">还有 ' + (list.length - 1) + ' 个匹配模板，继续输入以缩小范围</div>' : '') +
+    if (query) {
+        const list = getCommandPaletteTemplateList(query);
+        if (!list.length) {
+            return '<div class="px-5 py-6 text-center text-theme-muted text-sm">' +
+                '<i class="fas fa-layer-group mr-2"></i>没有匹配的任务模板' +
+                '</div>';
+        }
+        return '<div class="p-3">' + _cmdTemplateSection('搜索结果', list) + '</div>';
+    }
+    const recents = (typeof getRecentTaskTemplates === 'function') ? getRecentTaskTemplates(4) : [];
+    if (!recents.length) {
+        return '<div class="p-3">' + _cmdTemplateSection('全部模板', all) + '</div>';
+    }
+    const recentIds = recents.map(function (t) { return t.id; });
+    const rest = all.filter(function (t) { return recentIds.indexOf(t.id) === -1; });
+    return '<div class="p-3">' +
+        _cmdTemplateSection('最近使用', recents) +
+        _cmdTemplateSection('其他模板', rest, true) +
         '</div>';
 }
 
@@ -765,9 +804,10 @@ function renderCommandPalettePreview() {
     // FR-01/FR-02 斜杠指令同理（提示由输入分支渲染）
     if (v.startsWith('/s')) return;
     if (_isSlashDirectiveInput(v)) return;
-    // FR-09：`*` 走模板预览（不走 NLP，避免模板名进入标题解析）
+    // FR-09：`*` 走模板卡片列表（不走 NLP，避免模板名进入标题解析）
     if (v.charAt(0) === '*') {
-        resultsContainer.innerHTML = renderTemplatePreview(v.slice(1).trim());
+        resultsContainer.innerHTML = renderTemplateCandidates(v.slice(1).trim());
+        if (typeof _setupTaskTemplateDetailFit === 'function') _setupTaskTemplateDetailFit();
         return;
     }
     const parsed = parseNLPInput(v);
@@ -862,21 +902,21 @@ function _updateCommandPaletteHint(value) {
     if (en) en.textContent = searchMode ? '打开选中项' : '新建任务';
 }
 
-// 提示条里的可点击命令 chip：点击把命令前缀补进输入框（默认提示的 /s、/select，
+// 提示条里的可点击命令 chip：点击把命令前缀补进输入框（默认提示的 /select、/s、*，
 // 以及 /s 搜索态第 2 行的 /select）
 function _cmdHintChip(cmd, text) {
-    return '<span class="cursor-pointer text-accent-dark dark:text-accent-light hover:underline transition"'
+    return '<span class="cursor-pointer accent-ink-strong hover:underline transition whitespace-nowrap"'
         + ' onclick="event.stopPropagation(); _insertCommandPrefix(\'' + cmd + '\')">' + text + '</span>';
 }
 
-// 点击提示补全命令前缀（cmd: 's' | 'select'）：
+// 点击提示补全命令前缀（cmd: 's' | 'select' | '*'）：
 // ① 已有该前缀 → 只聚焦，不重复插入；
 // ② /s 态下点 /select → 前缀升级为 /select，保留已输入的查询词；
 // ③ 其余情况 → 前缀插到已有文本之前（保留草稿，不清空输入）。
 function _insertCommandPrefix(cmd) {
     const input = document.getElementById('command-palette-input');
     if (!input) return;
-    const prefix = '/' + cmd;
+    const prefix = cmd === '*' ? '*' : '/' + cmd;
     const v = input.value;
     const t = v.trim();
     const low = t.toLowerCase();
@@ -884,7 +924,10 @@ function _insertCommandPrefix(cmd) {
     const isSelect = low === '/select' || low.indexOf('/select ') === 0;
 
     let next = null;
-    if (cmd === 'select') {
+    if (cmd === '*') {
+        if (t.charAt(0) === '*') next = null;                        // 已在模板模式：仅聚焦
+        else next = prefix + t;                                      // 已有文本作为模板名查询
+    } else if (cmd === 'select') {
         if (isSelect) next = null;                                   // 已在该模式：仅聚焦
         else if (isS) next = '/select ' + t.slice(2).replace(/^\s+/, ''); // /s → /select，保留查询词
         else next = prefix + ' ' + v.replace(/^\s+/, '');
@@ -895,7 +938,8 @@ function _insertCommandPrefix(cmd) {
 
     if (next !== null) input.value = next;
     input.focus();
-    const pos = input.value.length;
+    // `*` 的光标紧跟触发符（其后文本即模板名查询），其余命令光标落末尾
+    const pos = (cmd === '*' && next !== null) ? 1 : input.value.length;
     input.setSelectionRange(pos, pos);
     if (next !== null) handleCommandPaletteInput({});
 }
@@ -1059,7 +1103,7 @@ function _highlightText(text, keywords) {
         if (i !== -1) { hit = i; kwLen = kw.length; break; }
     }
     if (hit === -1) return escapeHtml(raw);
-    const MARK_CLS = 'bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded px-0.5';
+    const MARK_CLS = 'accent-chip rounded px-0.5';
     return escapeHtml(raw.slice(0, hit))
         + '<mark class="' + MARK_CLS + '">' + escapeHtml(raw.slice(hit, hit + kwLen)) + '</mark>'
         + escapeHtml(raw.slice(hit + kwLen));
@@ -1128,32 +1172,9 @@ function _useSearchHistory(query) {
     handleCommandPaletteInput({});
 }
 
-// 空输入首页：最近模板 + 搜索历史（模板为 FR-09 的轻量发现入口）
+// 空输入首页：只保留搜索历史；最近模板仅在输入 `*` 后展示
 function renderCommandPaletteHome() {
-    let html = '';
-    if (typeof getRecentTaskTemplates === 'function') {
-        const recents = getRecentTaskTemplates(4);
-        if (recents.length) {
-            html += `<div class="px-5 py-2 text-xs text-theme-muted flex items-center gap-2 border-b border-theme sticky top-0 bg-theme-secondary">
-                    <i class="fas fa-layer-group text-purple-500"></i>最近模板
-                </div>`;
-            html += recents.map(function (t) {
-                const title = (t.task && t.task.title) ? t.task.title : '';
-                return `<div class="px-3 py-1">
-                    <button type="button" class="task-row w-full flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-theme-tertiary transition text-left"
-                            onclick="closeCommandPalette(); createTaskFromTemplateById('${_jsStr(t.id)}')">
-                        <i class="fas fa-layer-group text-xs text-purple-400 flex-shrink-0"></i>
-                        <span class="flex-1 min-w-0">
-                            <span class="block text-sm text-theme-primary truncate">${escapeHtml(t.name)}</span>
-                            ${title && title !== t.name ? `<span class="block text-[11px] text-theme-muted truncate">${escapeHtml(title)}</span>` : ''}
-                        </span>
-                        <i class="fas fa-plus text-xs text-theme-muted flex-shrink-0"></i>
-                    </button>
-                </div>`;
-            }).join('');
-        }
-    }
-    return html + renderSearchHistory();
+    return renderSearchHistory();
 }
 
 // 空输入时展示搜索历史（V8-8）；无历史返回 ''（维持空白）
@@ -1187,7 +1208,7 @@ function _renderSearchSortToggle() {
     return `<div class="flex items-center gap-2 px-5 py-2 border-b border-theme text-xs text-theme-secondary sticky top-0 bg-theme-secondary z-[1]">
         <i class="fas fa-sort-amount-down text-theme-muted"></i><span>排序</span>
         <div class="flex gap-1">
-        ${SEARCH_SORT_MODES.map(m => `<button type="button" class="px-2 py-0.5 rounded transition ${_searchSortMode === m.key ? 'bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light font-bold' : 'hover:bg-theme-tertiary text-theme-secondary'}" onclick="setSearchSortMode('${m.key}')">${m.label}</button>`).join('')}
+        ${SEARCH_SORT_MODES.map(m => `<button type="button" class="px-2 py-0.5 rounded transition ${_searchSortMode === m.key ? 'accent-chip font-bold' : 'hover:bg-theme-tertiary text-theme-secondary'}" onclick="setSearchSortMode('${m.key}')">${m.label}</button>`).join('')}
         </div>
     </div>`;
 }
@@ -1256,7 +1277,7 @@ function _renderSearchRow(task, idx, keywords) {
 function _renderSearchMoreFooter(remain) {
     if (typeof remain !== 'number' || remain <= 0) return '';
     return `<div id="cmd-search-more" class="px-5 py-2.5 text-center text-xs border-t border-theme">
-            <button type="button" class="text-accent-dark dark:text-accent-light hover:underline transition"
+            <button type="button" class="accent-ink-strong hover:underline transition"
                     onclick="expandSearchResults()">+${remain} 更多</button>
         </div>`;
 }
@@ -2222,10 +2243,10 @@ function renderNLPPreview(parsed) {
             const ed = parsed.endTime;
             timeStr += `-${ed.getHours().toString().padStart(2, '0')}:${ed.getMinutes().toString().padStart(2, '0')}`;
         }
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded text-xs"><i class="fas fa-calendar-alt"></i>${dateStr} ${timeStr}</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 accent-chip rounded text-xs"><i class="fas fa-calendar-alt"></i>${dateStr} ${timeStr}</span>`);
         // 模糊时段词命中后冲突回绕：提示该时间点已存在任务
         if (parsed.fuzzyConflict) {
-            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 rounded text-xs"><i class="fas fa-exclamation-circle"></i>时间冲突</span>`);
+            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 tone-soft-yellow rounded text-xs"><i class="fas fa-exclamation-circle"></i>时间冲突</span>`);
         }
     }
 
@@ -2254,7 +2275,7 @@ function renderNLPPreview(parsed) {
         }
         if (parsed.repeat.workdayOnly) repeatLabel = '每个工作日';
         if (parsed.repeat.beforeHoliday) repeatLabel = '节假日假期前一天';
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded text-xs"><i class="fas fa-redo"></i>${repeatLabel}</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 tone-soft-purple rounded text-xs"><i class="fas fa-redo"></i>${repeatLabel}</span>`);
     }
 
     // 清单预览
@@ -2276,17 +2297,17 @@ function renderNLPPreview(parsed) {
     // 待创建标签预览（用灰色占位）
     if (parsed.tagNamesToCreate && parsed.tagNamesToCreate.length > 0) {
         parsed.tagNamesToCreate.forEach(tagName => {
-            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-theme-secondary rounded text-xs"><i class="fas fa-tag"></i>${escapeHtml(tagName)}<span class="text-[10px] opacity-60">新建</span></span>`);
+            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-theme-tertiary text-theme-secondary rounded text-xs"><i class="fas fa-tag"></i>${escapeHtml(tagName)}<span class="text-[10px] opacity-60">新建</span></span>`);
         });
     }
 
     // 优先级预览
     if (parsed.important && parsed.urgent) {
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded text-xs"><i class="fas fa-exclamation-triangle"></i>重要且紧急</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 tone-soft-red rounded text-xs"><i class="fas fa-exclamation-triangle"></i>重要且紧急</span>`);
     } else if (parsed.important) {
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-accent-soft dark:bg-accent-strong text-accent-dark dark:text-accent-light rounded text-xs"><i class="fas fa-star"></i>重要不紧急</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 accent-chip rounded text-xs"><i class="fas fa-star"></i>重要不紧急</span>`);
     } else if (parsed.urgent) {
-        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 rounded text-xs"><i class="fas fa-clock"></i>紧急不重要</span>`);
+        parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 tone-soft-yellow rounded text-xs"><i class="fas fa-clock"></i>紧急不重要</span>`);
     }
 
     const tagsHtml = parts.length > 0 ? `<div class="flex flex-wrap gap-1.5 mb-2">${parts.join('')}</div>` : '';
@@ -2294,7 +2315,7 @@ function renderNLPPreview(parsed) {
     // 结构与下方「创建任务」行保持一致（外层不设 text-*，图标按继承渲染；文字用 text-sm），
     // 使提示图标与 fa-plus-circle 同尺寸、提示文字与「创建任务」同字号。
     const lateNightHtml = parsed.lateNightWarning
-        ? `<div class="flex items-center gap-2 mb-2 text-amber-500 dark:text-amber-400"><i class="fas fa-exclamation-circle"></i><span class="text-sm">当前已过凌晨0点，注意任务时间设置是否符合预期。</span></div>`
+        ? `<div class="flex items-center gap-2 mb-2 tone-ink-amber-500"><i class="fas fa-exclamation-circle"></i><span class="text-sm">当前已过凌晨0点，注意任务时间设置是否符合预期。</span></div>`
         : '';
     const notesHtml = parsed.notes ? `<div class="text-xs text-theme-secondary mt-1 ml-7 truncate"><i class="fas fa-align-left mr-1"></i>${escapeHtml(parsed.notes)}</div>` : '';
 

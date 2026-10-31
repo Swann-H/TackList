@@ -334,6 +334,34 @@
             background-color: var(--bg-secondary);
             color: var(--text-primary);
         }
+        /* 摘要视图筛选下拉：统一外观 + 主题箭头，避免原生 select 混搭 */
+        .summary-filter-select {
+            appearance: none;
+            -webkit-appearance: none;
+            font-family: inherit;
+            padding: 8px 32px 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background-color: var(--bg-secondary);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 10px 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.4;
+            cursor: pointer;
+            transition: border-color .15s ease, background-color .15s ease;
+        }
+        .summary-filter-select:hover { border-color: var(--text-muted); }
+        .summary-filter-select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px var(--accent-bg);
+        }
+        [data-theme="dark"] .summary-filter-select {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239ca3af' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+        }
         /* 周视图周末背景：深色模式统一配色 */
         [data-theme="dark"] .week-weekend-bg {
             background-color: rgba(156, 163, 175, 0.08) !important;
@@ -1142,6 +1170,35 @@
             backdrop-filter: blur(4px);
         }
 
+        /* 二级浮层（快捷键 / Markdown 语法）：不压暗、不模糊窗口外背景，
+           可读性由不透明面板本身保证（壁纸模式下的实色处理见下方背景图片模式段） */
+        #shortcuts-help-modal.modal-no-scrim,
+        #markdown-help-modal.modal-no-scrim {
+            background: transparent;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+
+        /* 二级浮层整体实色：面板与其内部主题面层都不再叠背景、不做毛玻璃 */
+        #shortcuts-help-modal .modal-panel-solid,
+        #markdown-help-modal .modal-panel-solid {
+            background-color: var(--bg-secondary, #ffffff) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        #shortcuts-help-modal .modal-panel-solid .bg-theme-secondary,
+        #markdown-help-modal .modal-panel-solid .bg-theme-secondary {
+            background-color: var(--bg-secondary, #ffffff) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        #shortcuts-help-modal .modal-panel-solid .bg-theme-tertiary,
+        #markdown-help-modal .modal-panel-solid .bg-theme-tertiary {
+            background-color: var(--bg-tertiary, #f3f4f6) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
         .fade-in {
             animation: fadeIn 0.3s ease;
         }
@@ -1525,7 +1582,222 @@
             border-color: var(--border-color);
         }
 
-        /* 命令面板输入框占位符：跟随 data-theme，避免依赖 Tailwind 的 dark: 变体（其基于系统配色，可能与应用主题不一致） */
+        /* ==================== 主题化语义色层（不使用 Tailwind 深色变体） ====================
+           约定：组件只使用 .tone-* / .accent-* / .q-* 类；颜色随 [data-theme] 变化。
+           禁止再用 Tailwind 的深色变体（它跟随系统配色，与应用主题脱节）。
+           - soft：浅底 + 文字       - bg：仅浅底
+           - ink：仅文字             - outline：1px 描边 + 文字，hover 浅底
+           - solid：实底 + 白字      - bordered：浅底 + 描边 + 文字
+           - banner：浅底 + 下边框 + 文字
+        */
+        :root {
+            --tone-red-bg: #fef2f2; --tone-red-border: #fecaca; --tone-red-text: #dc2626; --tone-red-text-500: #ef4444; --tone-red-solid: #dc2626; --tone-red-solid-hover: #b91c1c;
+            --tone-amber-bg: #fffbeb; --tone-amber-border: #fde68a; --tone-amber-text: #d97706; --tone-amber-text-500: #f59e0b; --tone-amber-solid: #d97706; --tone-amber-solid-hover: #b45309;
+            --tone-yellow-bg: #fefce8; --tone-yellow-border: #fde047; --tone-yellow-text: #ca8a04; --tone-yellow-text-500: #eab308; --tone-yellow-solid: #ca8a04; --tone-yellow-solid-hover: #a16207;
+            --tone-orange-bg: #fff7ed; --tone-orange-border: #fed7aa; --tone-orange-text: #ea580c; --tone-orange-text-500: #f97316; --tone-orange-solid: #ea580c; --tone-orange-solid-hover: #c2410c;
+            --tone-green-bg: #f0fdf4; --tone-green-border: #bbf7d0; --tone-green-text: #16a34a; --tone-green-text-500: #22c55e; --tone-green-solid: #16a34a; --tone-green-solid-hover: #15803d;
+            --tone-emerald-bg: #ecfdf5; --tone-emerald-border: #a7f3d0; --tone-emerald-text: #059669; --tone-emerald-text-500: #10b981; --tone-emerald-solid: #059669; --tone-emerald-solid-hover: #047857;
+            --tone-sky-bg: #f0f9ff; --tone-sky-border: #bae6fd; --tone-sky-text: #0284c7; --tone-sky-text-500: #0ea5e9; --tone-sky-solid: #0284c7; --tone-sky-solid-hover: #0369a1;
+            --tone-purple-bg: #faf5ff; --tone-purple-border: #e9d5ff; --tone-purple-text: #9333ea; --tone-purple-text-500: #a855f7; --tone-purple-solid: #9333ea; --tone-purple-solid-hover: #7e22ce;
+            --tone-blue-bg: #eff6ff; --tone-blue-border: #bfdbfe; --tone-blue-text: #2563eb; --tone-blue-text-500: #3b82f6; --tone-blue-solid: #2563eb; --tone-blue-solid-hover: #1d4ed8;
+            --tone-cyan-bg: #ecfeff; --tone-cyan-border: #a5f3fc; --tone-cyan-text: #0891b2; --tone-cyan-text-500: #06b6d4; --tone-cyan-solid: #0891b2; --tone-cyan-solid-hover: #0e7490;
+            --tone-gray-bg: #f3f4f6; --tone-gray-border: #e5e7eb; --tone-gray-text: #4b5563; --tone-gray-text-500: #6b7280; --tone-gray-solid: #4b5563; --tone-gray-solid-hover: #374151;
+        }
+        [data-theme="dark"] {
+            --tone-red-bg: rgba(127,29,29,.30); --tone-red-border: rgba(248,113,113,.45); --tone-red-text: #f87171; --tone-red-text-500: #f87171; --tone-red-solid: #b91c1c; --tone-red-solid-hover: #991b1b;
+            --tone-amber-bg: rgba(120,53,15,.32); --tone-amber-border: rgba(251,191,36,.40); --tone-amber-text: #fbbf24; --tone-amber-text-500: #fbbf24; --tone-amber-solid: #b45309; --tone-amber-solid-hover: #92400e;
+            --tone-yellow-bg: rgba(113,63,18,.32); --tone-yellow-border: rgba(250,204,21,.40); --tone-yellow-text: #facc15; --tone-yellow-text-500: #facc15; --tone-yellow-solid: #a16207; --tone-yellow-solid-hover: #854d0e;
+            --tone-orange-bg: rgba(124,45,18,.32); --tone-orange-border: rgba(251,146,60,.40); --tone-orange-text: #fb923c; --tone-orange-text-500: #fb923c; --tone-orange-solid: #c2410c; --tone-orange-solid-hover: #9a3412;
+            --tone-green-bg: rgba(20,83,45,.32); --tone-green-border: rgba(74,222,128,.40); --tone-green-text: #4ade80; --tone-green-text-500: #4ade80; --tone-green-solid: #15803d; --tone-green-solid-hover: #166534;
+            --tone-emerald-bg: rgba(6,78,59,.32); --tone-emerald-border: rgba(52,211,153,.40); --tone-emerald-text: #34d399; --tone-emerald-text-500: #34d399; --tone-emerald-solid: #047857; --tone-emerald-solid-hover: #065f46;
+            --tone-sky-bg: rgba(12,74,110,.32); --tone-sky-border: rgba(56,189,248,.40); --tone-sky-text: #38bdf8; --tone-sky-text-500: #38bdf8; --tone-sky-solid: #0369a1; --tone-sky-solid-hover: #075985;
+            --tone-purple-bg: rgba(88,28,135,.32); --tone-purple-border: rgba(192,132,252,.40); --tone-purple-text: #c084fc; --tone-purple-text-500: #c084fc; --tone-purple-solid: #7e22ce; --tone-purple-solid-hover: #6b21a8;
+            --tone-blue-bg: rgba(30,58,138,.32); --tone-blue-border: rgba(96,165,250,.40); --tone-blue-text: #60a5fa; --tone-blue-text-500: #60a5fa; --tone-blue-solid: #1d4ed8; --tone-blue-solid-hover: #1e40af;
+            --tone-cyan-bg: rgba(22,78,99,.32); --tone-cyan-border: rgba(34,211,238,.40); --tone-cyan-text: #22d3ee; --tone-cyan-text-500: #22d3ee; --tone-cyan-solid: #0e7490; --tone-cyan-solid-hover: #155e75;
+            --tone-gray-bg: rgba(55,65,81,.50); --tone-gray-border: #4b5563; --tone-gray-text: #d1d5db; --tone-gray-text-500: #d1d5db; --tone-gray-solid: #374151; --tone-gray-solid-hover: #1f2937;
+        }
+
+        .tone-soft-red { background-color: var(--tone-red-bg); color: var(--tone-red-text); }
+        .tone-bg-red { background-color: var(--tone-red-bg); }
+        .tone-ink-red { color: var(--tone-red-text); }
+        .tone-ink-red-500 { color: var(--tone-red-text-500); }
+        .tone-outline-red { border: 1px solid var(--tone-red-text-500); color: var(--tone-red-text-500); }
+        .tone-outline-red:hover { background-color: var(--tone-red-bg); }
+        .tone-solid-red { background-color: var(--tone-red-solid); border-color: var(--tone-red-solid); color: #fff; }
+        .tone-solid-red:hover { background-color: var(--tone-red-solid-hover); border-color: var(--tone-red-solid-hover); }
+        .tone-soft-amber { background-color: var(--tone-amber-bg); color: var(--tone-amber-text); }
+        .tone-bg-amber { background-color: var(--tone-amber-bg); }
+        .tone-ink-amber { color: var(--tone-amber-text); }
+        .tone-ink-amber-500 { color: var(--tone-amber-text-500); }
+        .tone-outline-amber { border: 1px solid var(--tone-amber-text-500); color: var(--tone-amber-text-500); }
+        .tone-outline-amber:hover { background-color: var(--tone-amber-bg); }
+        .tone-solid-amber { background-color: var(--tone-amber-solid); border-color: var(--tone-amber-solid); color: #fff; }
+        .tone-solid-amber:hover { background-color: var(--tone-amber-solid-hover); border-color: var(--tone-amber-solid-hover); }
+        .tone-soft-yellow { background-color: var(--tone-yellow-bg); color: var(--tone-yellow-text); }
+        .tone-bg-yellow { background-color: var(--tone-yellow-bg); }
+        .tone-ink-yellow { color: var(--tone-yellow-text); }
+        .tone-ink-yellow-500 { color: var(--tone-yellow-text-500); }
+        .tone-outline-yellow { border: 1px solid var(--tone-yellow-text-500); color: var(--tone-yellow-text-500); }
+        .tone-outline-yellow:hover { background-color: var(--tone-yellow-bg); }
+        .tone-solid-yellow { background-color: var(--tone-yellow-solid); border-color: var(--tone-yellow-solid); color: #fff; }
+        .tone-solid-yellow:hover { background-color: var(--tone-yellow-solid-hover); border-color: var(--tone-yellow-solid-hover); }
+        .tone-soft-orange { background-color: var(--tone-orange-bg); color: var(--tone-orange-text); }
+        .tone-bg-orange { background-color: var(--tone-orange-bg); }
+        .tone-ink-orange { color: var(--tone-orange-text); }
+        .tone-ink-orange-500 { color: var(--tone-orange-text-500); }
+        .tone-outline-orange { border: 1px solid var(--tone-orange-text-500); color: var(--tone-orange-text-500); }
+        .tone-outline-orange:hover { background-color: var(--tone-orange-bg); }
+        .tone-solid-orange { background-color: var(--tone-orange-solid); border-color: var(--tone-orange-solid); color: #fff; }
+        .tone-solid-orange:hover { background-color: var(--tone-orange-solid-hover); border-color: var(--tone-orange-solid-hover); }
+        .tone-soft-green { background-color: var(--tone-green-bg); color: var(--tone-green-text); }
+        .tone-bg-green { background-color: var(--tone-green-bg); }
+        .tone-ink-green { color: var(--tone-green-text); }
+        .tone-ink-green-500 { color: var(--tone-green-text-500); }
+        .tone-outline-green { border: 1px solid var(--tone-green-text-500); color: var(--tone-green-text-500); }
+        .tone-outline-green:hover { background-color: var(--tone-green-bg); }
+        .tone-solid-green { background-color: var(--tone-green-solid); border-color: var(--tone-green-solid); color: #fff; }
+        .tone-solid-green:hover { background-color: var(--tone-green-solid-hover); border-color: var(--tone-green-solid-hover); }
+        .tone-soft-emerald { background-color: var(--tone-emerald-bg); color: var(--tone-emerald-text); }
+        .tone-bg-emerald { background-color: var(--tone-emerald-bg); }
+        .tone-ink-emerald { color: var(--tone-emerald-text); }
+        .tone-ink-emerald-500 { color: var(--tone-emerald-text-500); }
+        .tone-outline-emerald { border: 1px solid var(--tone-emerald-text-500); color: var(--tone-emerald-text-500); }
+        .tone-outline-emerald:hover { background-color: var(--tone-emerald-bg); }
+        .tone-solid-emerald { background-color: var(--tone-emerald-solid); border-color: var(--tone-emerald-solid); color: #fff; }
+        .tone-solid-emerald:hover { background-color: var(--tone-emerald-solid-hover); border-color: var(--tone-emerald-solid-hover); }
+        .tone-soft-sky { background-color: var(--tone-sky-bg); color: var(--tone-sky-text); }
+        .tone-bg-sky { background-color: var(--tone-sky-bg); }
+        .tone-ink-sky { color: var(--tone-sky-text); }
+        .tone-ink-sky-500 { color: var(--tone-sky-text-500); }
+        .tone-outline-sky { border: 1px solid var(--tone-sky-text-500); color: var(--tone-sky-text-500); }
+        .tone-outline-sky:hover { background-color: var(--tone-sky-bg); }
+        .tone-solid-sky { background-color: var(--tone-sky-solid); border-color: var(--tone-sky-solid); color: #fff; }
+        .tone-solid-sky:hover { background-color: var(--tone-sky-solid-hover); border-color: var(--tone-sky-solid-hover); }
+        .tone-soft-purple { background-color: var(--tone-purple-bg); color: var(--tone-purple-text); }
+        .tone-bg-purple { background-color: var(--tone-purple-bg); }
+        .tone-ink-purple { color: var(--tone-purple-text); }
+        .tone-ink-purple-500 { color: var(--tone-purple-text-500); }
+        .tone-outline-purple { border: 1px solid var(--tone-purple-text-500); color: var(--tone-purple-text-500); }
+        .tone-outline-purple:hover { background-color: var(--tone-purple-bg); }
+        .tone-solid-purple { background-color: var(--tone-purple-solid); border-color: var(--tone-purple-solid); color: #fff; }
+        .tone-solid-purple:hover { background-color: var(--tone-purple-solid-hover); border-color: var(--tone-purple-solid-hover); }
+        .tone-soft-blue { background-color: var(--tone-blue-bg); color: var(--tone-blue-text); }
+        .tone-bg-blue { background-color: var(--tone-blue-bg); }
+        .tone-ink-blue { color: var(--tone-blue-text); }
+        .tone-ink-blue-500 { color: var(--tone-blue-text-500); }
+        .tone-outline-blue { border: 1px solid var(--tone-blue-text-500); color: var(--tone-blue-text-500); }
+        .tone-outline-blue:hover { background-color: var(--tone-blue-bg); }
+        .tone-solid-blue { background-color: var(--tone-blue-solid); border-color: var(--tone-blue-solid); color: #fff; }
+        .tone-solid-blue:hover { background-color: var(--tone-blue-solid-hover); border-color: var(--tone-blue-solid-hover); }
+        .tone-soft-cyan { background-color: var(--tone-cyan-bg); color: var(--tone-cyan-text); }
+        .tone-bg-cyan { background-color: var(--tone-cyan-bg); }
+        .tone-ink-cyan { color: var(--tone-cyan-text); }
+        .tone-ink-cyan-500 { color: var(--tone-cyan-text-500); }
+        .tone-outline-cyan { border: 1px solid var(--tone-cyan-text-500); color: var(--tone-cyan-text-500); }
+        .tone-outline-cyan:hover { background-color: var(--tone-cyan-bg); }
+        .tone-solid-cyan { background-color: var(--tone-cyan-solid); border-color: var(--tone-cyan-solid); color: #fff; }
+        .tone-solid-cyan:hover { background-color: var(--tone-cyan-solid-hover); border-color: var(--tone-cyan-solid-hover); }
+        .tone-soft-gray { background-color: var(--tone-gray-bg); color: var(--tone-gray-text); }
+        .tone-bg-gray { background-color: var(--tone-gray-bg); }
+        .tone-ink-gray { color: var(--tone-gray-text); }
+        .tone-ink-gray-500 { color: var(--tone-gray-text-500); }
+        .tone-outline-gray { border: 1px solid var(--tone-gray-text-500); color: var(--tone-gray-text-500); }
+        .tone-outline-gray:hover { background-color: var(--tone-gray-bg); }
+        .tone-solid-gray { background-color: var(--tone-gray-solid); border-color: var(--tone-gray-solid); color: #fff; }
+        .tone-solid-gray:hover { background-color: var(--tone-gray-solid-hover); border-color: var(--tone-gray-solid-hover); }
+
+        /* 强调色系：浅色态用 accent-bg，深色态提升一级 */
+        .accent-soft-bg { background-color: var(--accent-bg); }
+        [data-theme="dark"] .accent-soft-bg { background-color: var(--accent-bg-strong); }
+        .accent-ink { color: var(--accent-color); }
+        [data-theme="dark"] .accent-ink { color: var(--accent-secondary); }
+        .accent-ink-strong { color: var(--accent-text-dark); }
+        [data-theme="dark"] .accent-ink-strong { color: var(--accent-light); }
+        .accent-chip { background-color: var(--accent-bg); color: var(--accent-text-dark); }
+        [data-theme="dark"] .accent-chip { background-color: var(--accent-bg-strong); color: var(--accent-light); }
+        .accent-chip-strong { background-color: var(--accent-bg-strong); color: var(--accent-text-dark); }
+        [data-theme="dark"] .accent-chip-strong { background-color: var(--accent-bg-strong); color: var(--accent-light); }
+        .tone-outline-accent { border: 1px solid var(--accent-color); color: var(--accent-color); }
+        .tone-outline-accent:hover { background-color: var(--accent-bg); }
+        [data-theme="dark"] .tone-outline-accent { border-color: var(--accent-secondary); color: var(--accent-light); }
+        [data-theme="dark"] .tone-outline-accent:hover { background-color: var(--accent-bg-strong); }
+
+        /* 特殊组合 */
+        .tone-bordered-purple { background-color: var(--tone-purple-bg); border: 1px solid var(--tone-purple-border); color: var(--tone-purple-text); }
+        .tone-ink-purple-strong { color: #581c87; }
+        [data-theme="dark"] .tone-ink-purple-strong { color: #f3e8ff; }
+        .tone-bordered-purple:hover { filter: brightness(0.97); }
+        [data-theme="dark"] .tone-bordered-purple:hover { filter: brightness(1.08); }
+        .tone-banner-cyan { background-color: var(--tone-cyan-bg); border-bottom: 1px solid var(--tone-cyan-border); color: var(--tone-cyan-text); }
+        .tone-soft-green-strong { background-color: #dcfce7; color: #15803d; }
+        [data-theme="dark"] .tone-soft-green-strong { background-color: rgba(20,83,45,.45); color: #86efac; }
+        .tone-soft-orange-strong { background-color: #ffedd5; color: #c2410c; }
+        [data-theme="dark"] .tone-soft-orange-strong { background-color: rgba(124,45,18,.45); color: #fdba74; }
+
+        /* 周视图周末底色（深色/壁纸规则已在上方单独定义） */
+        .week-weekend-bg { background-color: rgba(156,163,175,.08); }
+
+        /* 象限视图：提示胶囊与拖放区配色 */
+        .q-tone-red { background-color: rgba(254,202,202,.6); color: #b91c1c; }
+        [data-theme="dark"] .q-tone-red { background-color: rgba(153,27,27,.4); color: #fca5a5; }
+        .q-tone-yellow { background-color: rgba(254,240,138,.6); color: #a16207; }
+        [data-theme="dark"] .q-tone-yellow { background-color: rgba(133,77,14,.4); color: #fde047; }
+        .q-tone-blue { background-color: rgba(191,219,254,.6); color: #1d4ed8; }
+        [data-theme="dark"] .q-tone-blue { background-color: rgba(30,64,175,.4); color: #93c5fd; }
+        .q-tone-gray { background-color: rgba(229,231,235,.6); color: #374151; }
+        [data-theme="dark"] .q-tone-gray { background-color: rgba(55,65,81,.4); color: #d1d5db; }
+        .q-zone-red { border-color: #fca5a5; background-color: #fef2f2; }
+        [data-theme="dark"] .q-zone-red { border-color: #dc2626; background-color: rgba(127,29,29,.3); }
+        .q-zone-red-overload { border-color: #f87171; background-color: #fee2e2; }
+        [data-theme="dark"] .q-zone-red-overload { border-color: #ef4444; background-color: rgba(127,29,29,.5); }
+        .q-zone-blue { border-color: #93c5fd; background-color: #eff6ff; }
+        [data-theme="dark"] .q-zone-blue { border-color: #2563eb; background-color: rgba(30,58,138,.3); }
+        .q-zone-yellow { border-color: #fde047; background-color: #fefce8; }
+        [data-theme="dark"] .q-zone-yellow { border-color: #ca8a04; background-color: rgba(113,63,18,.3); }
+        .q-zone-gray { border-color: #d1d5db; background-color: #f9fafb; }
+        [data-theme="dark"] .q-zone-gray { border-color: #4b5563; background-color: rgba(55,65,81,.5); }
+        .q-icon-hover:hover { background-color: rgba(0,0,0,.1); }
+        [data-theme="dark"] .q-icon-hover:hover { background-color: rgba(255,255,255,.1); }
+
+        /* 任务优先级复选框描边 */
+        .priority-border-red { border-color: #ef4444; }
+        .priority-border-red:hover { border-color: #dc2626; }
+        [data-theme="dark"] .priority-border-red { border-color: #f87171; }
+        [data-theme="dark"] .priority-border-red:hover { border-color: #ef4444; }
+        .priority-border-blue { border-color: #3b82f6; }
+        .priority-border-blue:hover { border-color: #2563eb; }
+        [data-theme="dark"] .priority-border-blue { border-color: #60a5fa; }
+        [data-theme="dark"] .priority-border-blue:hover { border-color: #3b82f6; }
+        .priority-border-yellow { border-color: #eab308; }
+        .priority-border-yellow:hover { border-color: #ca8a04; }
+        [data-theme="dark"] .priority-border-yellow { border-color: #facc15; }
+        [data-theme="dark"] .priority-border-yellow:hover { border-color: #eab308; }
+        .priority-border-gray { border-color: #9ca3af; }
+        .priority-border-gray:hover { border-color: #6b7280; }
+        [data-theme="dark"] .priority-border-gray { border-color: #6b7280; }
+        [data-theme="dark"] .priority-border-gray:hover { border-color: #9ca3af; }
+
+        /* ==================== Header 响应式：Tab 不换行，动作按钮按可用宽度提前收纳 ==================== */
+        #header-left { flex: 0 0 auto; max-width: 100%; min-width: 0; }
+        #header-actions { flex-shrink: 0; }
+        #view-tabs {
+            flex: 0 0 auto;
+            max-width: 100%;
+            min-width: 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            white-space: nowrap;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        #view-tabs::-webkit-scrollbar { display: none; }
+        #view-tabs > button {
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+
+        /* 命令面板输入框占位符：跟随 data-theme，避免依赖 Tailwind 的深色变体（其基于系统配色，可能与应用主题不一致） */
         #command-palette-input::placeholder {
             color: var(--text-muted);
             opacity: 1;
@@ -1582,6 +1854,10 @@
         input.peer:checked + .switch-on-red { background: #ef4444; }
         input.peer:checked + .switch-on-red:hover { background: #dc2626; }
         [data-theme="dark"] .ui-switch::after { background: #e5e7eb; }
+
+        /* 设置面板滑杆：跟随主题强调色，避免浏览器默认蓝色 */
+        #settings-bg-opacity,
+        #settings-bg-blur { accent-color: var(--accent-color); }
 
         /* 分段控件（浮起式）：替代 ≤4 选项的原生 select；隐藏 input 保留原 id，load/save 仍读写 el.value */
         .seg {
@@ -2375,7 +2651,7 @@
             width: 100%;
             height: 2px;
             border-radius: 2px;
-            background: #3b82f6;
+            background: var(--accent-color, #3b82f6);
             transform-origin: left center;
             transform: scaleX(0);
             pointer-events: none;
@@ -3155,11 +3431,11 @@
             body.detail-write-mode #toggle-mode-btn:hover { background: #6366f1 !important; border-color: #6366f1 !important; color: #fff !important; }
             body.detail-write-mode #toggle-mode-btn:active { background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important; transform: scale(.95); }
             /* 返回 —— 直接沿用「设置节假日与调休」界面返回按钮：
-               border-slate-400 text-slate-500 hover:bg-slate-500 hover:text-white
-               active:bg-slate-600 active:scale-95 */
+               border-slate-400 text-slate-500 hover:bg-slate-400 hover:text-white
+               active:bg-slate-500 active:scale-95（悬浮填充 = 轮廓色） */
             body.detail-write-mode #detail-dismiss-btn { border-color: #94a3b8 !important; color: #64748b !important; }
-            body.detail-write-mode #detail-dismiss-btn:hover { background: #64748b !important; border-color: #64748b !important; color: #fff !important; }
-            body.detail-write-mode #detail-dismiss-btn:active { background: #475569 !important; border-color: #475569 !important; color: #fff !important; transform: scale(.95); }
+            body.detail-write-mode #detail-dismiss-btn:hover { background: #94a3b8 !important; border-color: #94a3b8 !important; color: #fff !important; }
+            body.detail-write-mode #detail-dismiss-btn:active { background: #64748b !important; border-color: #64748b !important; color: #fff !important; transform: scale(.95); }
 
             /* 标题：从 20px 放大为 32px 一级标题，与正文同容器同左边缘 */
             body.detail-write-mode #detail-title-row { border-bottom: none !important; padding-top: 8px; padding-bottom: 4px; }
@@ -3855,7 +4131,7 @@
             width: 100%;
             height: 2px;
             border-radius: 2px;
-            background: #3b82f6;
+            background: var(--accent-color, #3b82f6);
             transform-origin: left center;
             transform: scaleX(0);
             pointer-events: none;
@@ -4277,8 +4553,8 @@ border: none !important;
 #task-detail-panel input[type="date"], #task-detail-panel input[type="time"] { min-height: 40px; }
 
 /* ---- 5.12 设置/弹窗：全屏页 ---- */
-#settings-modal, #add-task-modal { padding: 0 !important; align-items: stretch !important; }
-#settings-modal > div:first-child, #add-task-modal > div:first-child {
+#settings-modal { padding: 0 !important; align-items: stretch !important; }
+#settings-modal > div:first-child {
 width: 100% !important;
 max-width: 100% !important;
 margin: 0 !important;
@@ -4478,7 +4754,7 @@ padding-bottom: 0 !important;
 #mobile-bottom-nav { display: flex !important; }
 #view-tabs { display: none !important; }
 .mobile-nav-item { transition: color 0.15s ease; }
-.mobile-nav-item.active { color: var(--accent, #3b82f6) !important; }
+.mobile-nav-item.active { color: var(--accent-color) !important; }
 /* 底部导航栏显示时，月份导航抬高到其上方 */
 body:has(#mobile-bottom-nav) #view-nav-bar:not(:empty) { bottom: 60px !important; }
 /* FAB 抬高到底部导航上方 */
@@ -4497,6 +4773,81 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
 #main-content h2.text-2xl { font-size: 20px !important; }
 #pomodoro-circle { width: min(70vw, 240px) !important; height: min(70vw, 240px) !important; }
 }
+
+/* ============ FR-10 Markdown 备注（行级失焦渲染，代码块整体保留） ============ */
+#detail-notes-md-editor {
+width: 100%;
+flex: 1 1 0%;
+min-height: 120px;
+overflow-y: auto;
+color: var(--text-primary);
+font-size: 16px;
+line-height: 1.7;
+cursor: text;
+}
+#detail-notes-md-editor.hidden { display: none !important; }
+        .md-block { position: relative; }
+        .md-block-editing { margin: 0; }
+        .md-block-input {
+            display: block;
+            width: 100%;
+            min-height: 1.7em;
+            margin: 0;
+            padding: 0;
+            border: none;
+            outline: none;
+            resize: none;
+            overflow: hidden;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            line-height: inherit;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+        }
+        .md-p { margin: 0.35em 0; white-space: pre-wrap; overflow-wrap: break-word; }
+        .md-p-line { margin: 0; min-height: 1.7em; }
+        .md-blank { height: 1.7em; cursor: text; }
+        .md-h1, .md-h2, .md-h3 { margin: 0.6em 0 0.35em; font-weight: 600; line-height: 1.35; color: var(--text-primary); }
+        .md-h1 { font-size: 1.5em; }
+        .md-h2 { font-size: 1.3em; }
+        .md-h3 { font-size: 1.15em; }
+        .md-li-row { display: flex; align-items: flex-start; min-height: 1.7em; margin: 0.08em 0; }
+        .md-li-indent { flex: 0 0 auto; white-space: pre; }
+        .md-li-marker { flex: 0 0 auto; color: var(--text-secondary); white-space: pre; }
+        .md-li-bullet { position: relative; color: transparent; }
+        .md-li-bullet::before { content: attr(data-md-bullet); position: absolute; left: 0; top: 0; color: var(--text-secondary); }
+        .md-li-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; overflow-wrap: break-word; }
+        .md-task-item { display: flex; align-items: flex-start; min-height: 1.7em; margin: 0.08em 0; list-style: none; }
+        .md-task-checkbox { flex-shrink: 0; width: 14px; height: 14px; margin-top: 0.35em; accent-color: var(--accent-color); cursor: pointer; }
+        .md-task-checkbox:disabled { cursor: default; }
+        .md-task-text { flex: 1 1 auto; min-width: 0; margin-left: 0.5em; white-space: pre-wrap; overflow-wrap: break-word; }
+        .md-task-done .md-task-text { color: var(--text-muted); text-decoration: line-through; }
+        .md-quote-row { min-height: 1.7em; padding-left: 0.8em; border-left: 3px solid var(--border-color); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: break-word; }
+.md-code { margin: 0.5em 0; padding: 0.6em 0.75em; border-radius: 0.5em; background: var(--bg-tertiary); color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; line-height: 1.55; overflow-x: auto; white-space: pre; }
+.md-inline-code { padding: 0.08em 0.32em; border-radius: 0.3em; background: var(--bg-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+.md-hr { margin: 0.8em 0; border: none; border-top: 1px solid var(--border-color); }
+.md-link { color: var(--accent-color); text-decoration: underline; text-underline-offset: 2px; }
+.md-link:hover { color: var(--accent-hover); }
+.md-img { max-width: 100%; height: auto; border-radius: 0.5em; margin: 0.35em 0; cursor: zoom-in; }
+.md-empty-placeholder { min-height: 2em; color: var(--text-muted); cursor: text; }
+body.detail-write-mode #detail-notes-md-editor {
+flex: 0 0 auto;
+min-height: 42vh;
+overflow: visible;
+padding-bottom: 46vh;
+font-size: 16px;
+line-height: 1.8;
+}
+body.detail-write-mode #detail-notes-md-editor .md-h1 { font-size: 1.7em; }
+body.detail-write-mode #detail-notes-md-editor .md-h2 { font-size: 1.45em; }
+body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
+        body.detail-write-mode #detail-notes-md-editor .md-p-line,
+        body.detail-write-mode #detail-notes-md-editor .md-li-row,
+        body.detail-write-mode #detail-notes-md-editor .md-task-item,
+        body.detail-write-mode #detail-notes-md-editor .md-quote-row { min-height: 1.8em; }
+        body.detail-write-mode #detail-notes-md-editor .md-blank { height: 1.8em; }
+        body.detail-write-mode #detail-notes-md-editor .md-block-input { min-height: 1.8em; }
 </style>
 </head>
 <body class="min-h-screen" data-page-node-id="Khpy1QduUTCqoTqs7npBZF">
@@ -5132,156 +5483,6 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
     <div id="toast-container" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex flex-col-reverse items-center gap-4 pointer-events-none w-[90%] max-w-sm" data-page-node-id="M1EbX3XvD4fQFsOe5Sisdr">
     </div>
 
-    <div id="add-task-modal" class="fixed inset-0 modal-overlay z-50 hidden items-center justify-center overflow-y-auto py-8" data-page-node-id="wpuvzAPWZ4EXzPfN7bQ1Bp">
-        <div class="bg-theme-secondary rounded-2xl w-full max-w-lg mx-4 fade-in shadow-2xl" data-page-node-id="WBq2g5NLKP6qmcAEg0senX">
-            <div class="p-6 border-b border-theme" data-page-node-id="wct21pYqxZb13qSAVC3fp9">
-                <div class="flex items-center justify-between" data-page-node-id="vU8QOAD0w4dUBYueJyJmT5">
-                    <h2 class="text-xl font-bold text-theme-primary" id="task-modal-title" data-page-node-id="tVy7Xdt3jflF4tuBmZSUuF">添加任务</h2>
-                    <button onclick="closeAddTaskModal()" class="text-theme-muted hover:text-theme-primary" data-page-node-id="kSV8TFJa4q8IzLfXSDtg9O">
-                        <i class="fas fa-times text-xl" data-page-node-id="xCxdDcPaiq3W83du4RvoG2"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="p-6" data-page-node-id="psPiftbivT64zWHXMVOpKT">
-                <form id="task-form" data-page-node-id="LibJXUgPAxLmMzgXtsk6P6">
-                    <input type="hidden" id="task-id" data-page-node-id="4D65HaLfohs47iBaZA44vo">
-                    <div class="space-y-4" data-page-node-id="T1Jy8e1a8mVT8Bf7DkfDow">
-                        <div data-page-node-id="N2B7go3B9orU3QRrAtCeDn">
-                            <input type="text" id="task-title" required maxlength="100" class="task-name-input w-full border-0 border-b-2 border-theme bg-transparent focus:border-accent focus:ring-0 outline-none transition pb-2 text-theme-primary" placeholder="任务名称" autofocus data-page-node-id="SKsVisBy10JZpWxu3hei98">
-                        </div>
-
-                        <div id="task-details-section" class="hidden" data-page-node-id="zdgo85kCS7nluEm5BROd2C">
-                            <textarea id="task-notes" rows="3" class="task-details-input w-full border-0 border-b-2 border-theme bg-transparent focus:border-accent focus:ring-0 outline-none transition pb-2 resize-none text-theme-primary" placeholder="添加详情..."></textarea>
-                        </div>
-
-                        <div class="flex flex-wrap gap-2 pt-2" data-page-node-id="hRXfAKvtzFY0vl9fAH2Lbi">
-                            <button type="button" onclick="toggleTimePicker()" id="time-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary" data-page-node-id="HLjeyU3I24zEn0pBquoSdI">
-                                <i class="fas fa-clock" data-page-node-id="It3olpXh5taDe2v2FhPC9Y"></i>
-                                <span id="time-btn-text" data-page-node-id="iW5pXT3LMZ3rcFruuKChBh">设置时间</span>
-                            </button>
-
-                            <button type="button" onclick="toggleImportantUrgent()" id="priority-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary" data-page-node-id="bLJYAJn41dTPLW2Qj46bt3">
-                                <i class="fas fa-star" data-page-node-id="kVQhMfXPf5H6BRf30Uoi71"></i>
-                                <span id="priority-btn-text" data-page-node-id="Pv728BpRlMnMGRigUa9Ol9">重要/紧急</span>
-                            </button>
-
-                            <button type="button" onclick="toggleListPicker()" id="list-btn" class="flex items-center gap-2 px-4 py-2 rounded-lg border border-theme hover:bg-theme-tertiary transition text-theme-secondary" data-page-node-id="ugGLne9AUti6LawegE0VqS">
-                                <i class="fas fa-inbox" data-page-node-id="ebqOoZAmvdktfJGluMSndy"></i>
-                                <span id="list-btn-text" data-page-node-id="qh3hevuGQq7fE2rKqxRPfI">选择清单</span>
-                            </button>
-                        </div>
-
-                        <div id="time-picker" class="hidden bg-theme-tertiary rounded-xl p-4 space-y-4" data-page-node-id="wk13nro44K1FW1jm4q19xB">
-                            <div class="flex gap-2 mb-3" data-page-node-id="yK0Ia9eFQ5V9sox96eJ47z">
-                                <button type="button" onclick="setTimeMode('single')" class="time-mode-btn px-4 py-2 rounded-lg" style="background-color: var(--accent-color); color: white;" data-mode="single" data-page-node-id="A8Brkxh8wMvwuA9qYyj3mb">时间</button>
-                                <button type="button" onclick="setTimeMode('range')" class="time-mode-btn px-4 py-2 rounded-lg bg-gray-200 text-gray-700" data-mode="range" data-page-node-id="6RXkLYVFZrQjLyqX2dJ620">时间段</button>
-                            </div>
-
-                            <div id="calendar-container" class="grid grid-cols-7 gap-1 mb-3" data-page-node-id="FSpAmYQen4j12kGMrQmigh">
-                            </div>
-
-                            <div class="flex gap-3" data-page-node-id="EnIarBM1ODrKvj6tebQNCS">
-                                <div class="flex-1" data-page-node-id="q8bUNGHcnBj0GPpUJjdYbF">
-                                    <label class="text-xs text-theme-secondary" data-page-node-id="iLrxTDrjvzjSecOwlLCt6I">开始时间</label>
-                                    <input type="time" id="task-start-time" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" data-page-node-id="EY8dz1ZmjCF5tTXPXXbxDM">
-                                </div>
-                                <div id="end-time-container" class="flex-1 hidden" data-page-node-id="medE2uuPjSjYOlOHTP7qWq">
-                                    <label class="text-xs text-theme-secondary" data-page-node-id="bSdiCNDgmEEEnMt4BEQuEi">结束时间</label>
-                                    <input type="time" id="task-end-time" class="w-full px-3 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" data-page-node-id="nn4fOkKvss0QPQ30EypXiB">
-                                </div>
-                            </div>
-
-                            <div class="border-t border-theme pt-3" data-page-node-id="eaysUkKUAOmidHu63BVbwx">
-                                <div class="flex flex-col lg:flex-row gap-4" data-page-node-id="aGwLmfqDohwiWGqnubBn2l">
-                                    <div class="flex-1" data-page-node-id="ZkqRfVE3jdE5Q3xcfeBVvN">
-                                        <button type="button" onclick="toggleReminderPicker()" class="w-full px-3 py-2 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-secondary flex items-center justify-between" data-page-node-id="N1WleUk3urp5YuiDlzQxQW">
-                                            <span data-page-node-id="gYzkDsMWJeY2HcDNSwjgAI"><i class="fas fa-bell mr-2" data-page-node-id="RWGqWkZGpAouOag92gC6nA"></i><span id="reminder-text" data-page-node-id="pE4DY7mG1OkZTO1DYtrSCa">提醒</span></span>
-                                            <i class="fas fa-chevron-down text-xs" data-page-node-id="3uA1PQxsK0mofB7Bg4Nbww"></i>
-                                        </button>
-                                        <div id="reminder-picker" class="hidden mt-2 p-3 bg-theme-secondary rounded-lg border space-y-2" data-page-node-id="ACaRMCEeNPt8f9hOZdTuDU">
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="ww45bwT5NoWJcCXd5euUPM">
-                                                <input type="radio" name="reminder" value="5" class="reminder-option" onchange="updateReminderText()" data-page-node-id="RgJFx908co4wmfJezLrHG7"> 提前5分钟
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="9s5exQnoTqJEZVKgXKruzl">
-                                                <input type="radio" name="reminder" value="1440" class="reminder-option" onchange="updateReminderText()" data-page-node-id="tKV42QDHGtOlI5z9r07Waz"> 提前1天
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="2Qq4scsjK3miH9l4k2I9OA">
-                                                <input type="radio" name="reminder" value="custom" class="reminder-option" onchange="updateReminderText()" data-page-node-id="CA2SsA9tregASS3a3JOHXc"> 自定义
-                                            </label>
-                                            <input type="number" id="custom-reminder" class="hidden w-full px-2 py-1 border border-theme rounded bg-theme-tertiary text-theme-primary" placeholder="分钟数" onchange="updateReminderText()" data-page-node-id="u0n3syAq5H17JtlFic87YV">
-                                        </div>
-                                    </div>
-                                    <div class="flex-1" data-page-node-id="mmqJS4daXDcpjCz34nbiQx">
-                                        <button type="button" onclick="toggleRepeatPicker()" class="w-full px-3 py-2 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-secondary flex items-center justify-between" data-page-node-id="gk9nyzr9iBClQw22UtTiz8">
-                                            <span data-page-node-id="4W95dUHnWwWlPydakltkyY"><i class="fas fa-redo mr-2" data-page-node-id="ppM2kypPEhrje4dvZwnIeg"></i><span id="repeat-text" data-page-node-id="UtQmNIYyk7kr4QlNNNDtes">重复</span></span>
-                                            <i class="fas fa-chevron-down text-xs" data-page-node-id="E3WQFcKQanaLcCEfSdJOFp"></i>
-                                        </button>
-                                        <div id="repeat-picker" class="hidden mt-2 p-3 bg-theme-secondary rounded-lg border space-y-2" data-page-node-id="Fl4w0fm5NE3IudJlkBmsDX">
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="73AFwjQhh2EmWZI1ZiNa70">
-                                                <input type="radio" name="repeat" value="" class="repeat-option" checked onchange="updateRepeatText()" data-page-node-id="zaS95Em2sq0mEbFWtJohAt"> 不重复
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="chfBSQx2AZTVtMvde7YoEp">
-                                                <input type="radio" name="repeat" value="daily" class="repeat-option" onchange="updateRepeatText()" data-page-node-id="KEw9SBPagGGjxNOpfUgX0i"> 每天
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="3JG1fsqV60747mM8rfHCIn">
-                                                <input type="radio" name="repeat" value="weekly" class="repeat-option" onchange="updateRepeatText()" data-page-node-id="MAMp0Sj40N3eLQiqTfFcI8"> 每周
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="I2Tj11tnSsnNRUG8pjF2kH">
-                                                <input type="radio" name="repeat" value="monthly" class="repeat-option" onchange="updateRepeatText()" data-page-node-id="CzRo7UjGORZYKd7xGYQ9OU"> 每月
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="13sx5d2ZjG0qHttC19g5M0">
-                                                <input type="radio" name="repeat" value="yearly" class="repeat-option" onchange="updateRepeatText()" data-page-node-id="7Izxfk8zFDLEtmrfqfXHBh"> 每年
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer text-theme-secondary hover:text-theme-primary" data-page-node-id="Maj5UnX09yCAj0cOXd0SgC">
-                                                <input type="radio" name="repeat" value="custom" class="repeat-option" onchange="updateRepeatText()" data-page-node-id="xFvjgt25MAhWKv4Iqx58jh"> 自定义
-                                            </label>
-                                            <div id="custom-repeat-container" class="hidden space-y-2" data-page-node-id="BB159nl3zzo2kyWPjQWBjg">
-                                                <input type="number" id="custom-repeat-interval" class="w-full px-2 py-1 border border-theme rounded bg-theme-tertiary text-theme-primary" placeholder="间隔" onchange="updateRepeatText()" data-page-node-id="0HRCaOfITBWt2Wj2v1ySd7">
-                                                <select id="custom-repeat-unit" class="w-full px-2 py-1 border border-theme rounded bg-theme-tertiary text-theme-primary" onchange="updateRepeatText()" data-page-node-id="f9ogHHmMqzE7yXxADPXB1Q">
-                                                    <option value="days" data-page-node-id="JIShETzansGmR0sMSPScBm">天</option>
-                                                    <option value="weeks" data-page-node-id="2KaXRGL2X9XR5ad11pi3e1">周</option>
-                                                    <option value="months" data-page-node-id="YveDHxH1UelETtPKCu9skh">月</option>
-                                                    <option value="years" data-page-node-id="wBK5pnGqa6kqAIXQhHXLGR">年</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div id="priority-picker" class="hidden bg-theme-tertiary rounded-xl p-4 space-y-3" data-page-node-id="V6ncXPCa8w5FGJSc5MekEu">
-                            <label class="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-theme-secondary text-theme-primary" data-page-node-id="pqT2jmhFTaf6jcKuxtd39E">
-                                <input type="checkbox" id="task-important" class="w-5 h-5 text-yellow-500 rounded" data-page-node-id="WGuVXRGUPmG4BMRgFthPP9">
-                                <i class="fas fa-star text-yellow-500" data-page-node-id="cHYUHC9YFnI98zhazkwJg4"></i>
-                                <span class="font-medium" data-page-node-id="WMAgoYxi6eTAeWkWVEYIQ3">重要</span>
-                            </label>
-                            <label class="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-theme-secondary text-theme-primary" data-page-node-id="CzSC0m7P1XBxsoPzfKePgH">
-                                <input type="checkbox" id="task-urgent" class="w-5 h-5 text-red-500 rounded" data-page-node-id="4HucHDwD5nKhJFHGPSkq4z">
-                                <i class="fas fa-fire text-red-500" data-page-node-id="3LkMPb52iq7Z1iGUZeIHfE"></i>
-                                <span class="font-medium" data-page-node-id="jzsY1Y067paAbcOFpMMD0S">紧急</span>
-                            </label>
-                        </div>
-
-                        <div id="list-picker" class="hidden bg-theme-tertiary rounded-xl p-4" data-page-node-id="AsUKPpWnWWDk8afvLQEESu">
-                            <select id="task-list" class="w-full px-4 py-2 border border-theme rounded-lg bg-theme-secondary text-theme-primary" data-page-node-id="6EW1BgEuicofwcXRuX9t3D">
-                            </select>
-                        </div>
-                    </div>
-
-                    <input type="hidden" id="task-selected-date" data-page-node-id="WC5mFH5aHpVSwzGekEMvNp">
-                    <input type="hidden" id="task-reminder" data-page-node-id="YAXSskwfCEjMMXCMTl7Edq">
-                    <input type="hidden" id="task-repeat" data-page-node-id="Q9CrmdmKt75MqA51X5ussZ">
-
-                    <div class="flex gap-3 mt-6" data-page-node-id="l3HNaFiusBmON4BRhPn8Wu">
-                        <button type="button" onclick="closeAddTaskModal()" class="flex-1 px-4 py-2 border border-theme text-theme-secondary rounded-lg hover:bg-theme-tertiary transition" data-page-node-id="HZCkmomqf29KPIwaiAzvjm">取消</button>
-                        <button type="submit" class="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition" style="background-color: var(--accent-color)" data-page-node-id="mmUw56vBKRmR1shZWYWqK0">保存</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
     <!-- 功能页过渡动画遮罩层（景深推近时主内容后退变暗，仅 fx-feature 开启时可见） -->
     <div id="fx-feature-overlay" data-page-node-id="K10Cgd8mZ4uCYbbUhLzFD9"></div>
 
@@ -5660,8 +5861,8 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
     </div>
 
     <!-- 快捷键帮助浮层（FR-04 一期）：新增节点刻意不带 data-page-node-id，避免打乱离线版镜像脚本的 node id 顺序映射 -->
-    <div id="shortcuts-help-modal" class="fixed inset-0 modal-overlay hidden items-center justify-center" style="z-index: 55;" onclick="closeShortcutsHelp()">
-        <div class="bg-theme-secondary rounded-2xl w-full max-w-xl mx-4 shadow-2xl flex flex-col max-h-[80vh]" onclick="event.stopPropagation()">
+    <div id="shortcuts-help-modal" class="fixed inset-0 modal-overlay modal-no-scrim hidden items-center justify-center" style="z-index: 55;" onclick="closeShortcutsHelp()">
+        <div class="modal-panel-solid bg-theme-secondary rounded-2xl w-full max-w-xl mx-4 shadow-2xl flex flex-col max-h-[80vh]" onclick="event.stopPropagation()">
             <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
                 <h2 class="text-lg font-bold text-theme-primary"><i class="fas fa-keyboard text-theme-muted mr-2"></i>快捷键</h2>
                 <button type="button" onclick="closeShortcutsHelp()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
@@ -5670,6 +5871,22 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
             </div>
             <div id="shortcuts-help-content" class="flex-1 overflow-y-auto p-4 space-y-5">
                 <!-- 动态生成（renderShortcutsHelpContent） -->
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Markdown 语法帮助浮层：与快捷键帮助同款结构 -->
+    <div id="markdown-help-modal" class="fixed inset-0 modal-overlay modal-no-scrim hidden items-center justify-center" style="z-index: 55;" onclick="closeMarkdownHelp()">
+        <div class="modal-panel-solid bg-theme-secondary rounded-2xl w-full max-w-xl mx-4 shadow-2xl flex flex-col max-h-[80vh]" onclick="event.stopPropagation()">
+            <div class="p-4 border-b border-theme flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-bold text-theme-primary"><i class="fas fa-code text-theme-muted mr-2"></i>Markdown 语法</h2>
+                <button type="button" onclick="closeMarkdownHelp()" class="p-2 hover:bg-theme-tertiary rounded-lg transition">
+                    <i class="fas fa-times text-theme-muted"></i>
+                </button>
+            </div>
+            <div id="markdown-help-content" class="flex-1 overflow-y-auto p-4 space-y-5">
+                <!-- 动态生成（renderMarkdownHelpContent） -->
             </div>
         </div>
     </div>
@@ -5973,10 +6190,10 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             <div data-page-node-id="9KxjIDYYFSAeTx7K90PQKH">
                                 <label class="block text-sm font-medium text-theme-primary mb-2" data-page-node-id="Nu8a4QIo2krVGIB5qgstfp">视图自定义</label>
                                 <p class="text-xs text-theme-muted mb-2" data-page-node-id="baQnt1CD5jIuglOUGRI0qR">单击启用/禁用视图，双击设置默认视图；可拖拽调整已启用视图顺序。</p>
-                                <div class="rounded-lg border border-dashed border-theme p-3 bg-theme-secondary space-y-3" data-page-node-id="zotAroiOWs0efxvTAgvaTn">
+                                <div class="space-y-3" data-page-node-id="zotAroiOWs0efxvTAgvaTn">
                                     <div data-page-node-id="ngL1Rc2WTdkBIKxalPgZYL">
                                         <div class="text-xs font-semibold text-theme-secondary mb-1" data-page-node-id="UWXPWsH6KZ4ecu0YVItFAU">已启用视图</div>
-                                        <div id="view-customize-enabled" class="flex flex-wrap gap-2 min-h-[2.25rem]" data-page-node-id="DF8FBIHVnOmDzsoEcVgc8w"></div>
+                                        <div id="view-customize-enabled" class="flex flex-wrap gap-2 min-h-[2.25rem] rounded-lg border border-dashed border-theme p-3 bg-theme-secondary" data-page-node-id="DF8FBIHVnOmDzsoEcVgc8w"></div>
                                     </div>
                                     <div data-page-node-id="cAmGmMNej6BtwjWeq51XN4">
                                         <div class="text-xs font-semibold text-theme-secondary mb-1" data-page-node-id="cHmTQwDdDReNKUjGBhYAXf">可添加视图</div>
@@ -6010,6 +6227,16 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                     <p class="text-xs text-theme-muted">沉浸书写态下正文的可读宽度，顶栏图标可随时循环切换</p>
                                 </div>
                                 <input type="hidden" id="settings-write-mode-width" value="standard"><div class="seg" data-seg-for="settings-write-mode-width"><button type="button" data-value="standard">标准</button><button type="button" data-value="wide">宽</button><button type="button" data-value="full">全屏</button></div>
+                            </div>
+                            <div class="flex items-center justify-between gap-3" id="settings-notes-markdown-row">
+                                <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                                    <label class="text-sm font-medium text-theme-primary">任务内容 Markdown 渲染</label>
+                                    <button type="button" onclick="openMarkdownHelp()" class="text-xs text-theme-muted hover:text-theme-primary border border-theme rounded-lg px-2 py-0.5 transition whitespace-nowrap">查看支持语法</button>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                                    <input type="checkbox" id="settings-notes-markdown" class="sr-only peer" checked>
+                                    <div class="ui-switch"></div>
+                                </label>
                             </div>
                             <div class="flex items-center justify-between" data-page-node-id="SmdbUtszLMaEVzWyNjq8pH">
                                 <div data-page-node-id="rA2oEmmir1dxgAETj2iwnv">
@@ -6362,7 +6589,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="LnLGWy2RrF9cElXNreaJpF">系统桌面通知</label>
                                     <p class="text-xs text-theme-muted" data-page-node-id="7HaR32BkLVxIq2kcIe1pFJ">通过系统通知服务发送桌面提醒</p>
                                 </div>
-                                <button id="settings-notification-perm-btn" class="px-4 py-2 text-sm border border-theme rounded-lg text-theme-secondary hover:bg-accent-soft dark:hover:bg-accent-soft cursor-pointer" onclick="testNotification()" data-page-node-id="Oho6EuaXZbZsSdYgT6PeBg">
+                                <button id="settings-notification-perm-btn" class="px-4 py-2 text-sm border border-theme rounded-lg text-theme-secondary hover:bg-accent-soft cursor-pointer" onclick="testNotification()" data-page-node-id="Oho6EuaXZbZsSdYgT6PeBg">
                                     通知测试
                                 </button>
                             </div>
@@ -6440,7 +6667,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                                 </div>
                             </div>
                             <div id="network-restart-hint" class="hidden px-3 py-2" data-page-node-id="EPbACMGYeHVFGLWx0XoWqu">
-                                <p class="text-xs text-amber-600 dark:text-amber-400" data-page-node-id="bZceIvmYRWWeEl3yE3ZAze"><i class="fas fa-exclamation-triangle mr-1" data-page-node-id="U8QgR7kOBFAIIBIOr2J0Bs"></i>网络配置已更改，点击底部「重启服务」按钮即可生效（无需单独保存）。</p>
+                                <p class="text-xs tone-ink-amber" data-page-node-id="bZceIvmYRWWeEl3yE3ZAze"><i class="fas fa-exclamation-triangle mr-1" data-page-node-id="U8QgR7kOBFAIIBIOr2J0Bs"></i>网络配置已更改，点击底部「重启服务」按钮即可生效（无需单独保存）。</p>
                             </div>
                         </div>
                     </div>
@@ -6460,9 +6687,10 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
                             
                             <div class="pt-1" data-page-node-id="yk2goE6qUCVsR9ZDKhY0JN">
                                 <div class="flex items-center justify-between mb-3" data-page-node-id="b3AGtTwYO5BBHwX2UjOeHw">
-                                    <label class="flex items-center gap-2 text-sm font-medium text-theme-primary" data-page-node-id="VDeZmFgJTTKmKWj8AwOYJT">
-                                        <input type="checkbox" id="backup-enabled" onchange="toggleAutoBackup()" class="w-4 h-4 rounded" data-page-node-id="yvaIGorkTZi2sldpI729jR">
-                                        <span data-page-node-id="3AQvcxveFhCQe88PRZ9EVW">启用自动备份</span>
+                                    <span class="flex items-center gap-2 text-sm font-medium text-theme-primary" data-page-node-id="VDeZmFgJTTKmKWj8AwOYJT"><span data-page-node-id="3AQvcxveFhCQe88PRZ9EVW">启用自动备份</span></span>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="backup-enabled" onchange="toggleAutoBackup()" class="sr-only peer" data-page-node-id="yvaIGorkTZi2sldpI729jR">
+                                        <div class="ui-switch"></div>
                                     </label>
                                 </div>
                                 <div class="space-y-3" data-page-node-id="HhMiQVQv16jOKPh4nWCZx0">
@@ -6520,13 +6748,13 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
 
                             <div class="mt-4" data-page-node-id="HtO4iXSiG0oJbpPReaNVAe">
                                 <div class="flex gap-3" data-page-node-id="en80qtUHzxDJUCvN2ZqJJ1">
-                                    <button onclick="resetAllData()" id="reset-data-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30 transition text-sm" data-page-node-id="CuZaBAAhMDgo0KqMA6HVRO">
+                                    <button onclick="resetAllData()" id="reset-data-btn" class="flex-1 px-4 py-2 tone-outline-red rounded-lg transition text-sm" data-page-node-id="CuZaBAAhMDgo0KqMA6HVRO">
                                         <i class="fas fa-exclamation-triangle mr-1" data-page-node-id="Th4oYYUsOa14KvFYQTOR9O"></i>重置数据
                                     </button>
-                                    <button onclick="restartServer()" id="restart-btn" class="flex-1 px-4 py-2 border border-amber-500 text-amber-500 rounded-lg hover:bg-amber-50 dark:border-amber-400 dark:text-amber-400 dark:hover:bg-amber-900/30 transition text-sm" data-page-node-id="c8HHY6i4OqiN4zVeFkYjv3">
+                                    <button onclick="restartServer()" id="restart-btn" class="flex-1 px-4 py-2 tone-outline-amber rounded-lg transition text-sm" data-page-node-id="c8HHY6i4OqiN4zVeFkYjv3">
                                         <i class="fas fa-redo mr-1" data-page-node-id="CqeuROVcmbNwlMLzGCCm4S"></i>重启服务
                                     </button>
-                                    <button onclick="shutdownServer()" id="shutdown-btn" class="flex-1 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30 transition text-sm" data-page-node-id="98nBu26tvwhi06pJCWIAyK">
+                                    <button onclick="shutdownServer()" id="shutdown-btn" class="flex-1 px-4 py-2 tone-outline-red rounded-lg transition text-sm" data-page-node-id="98nBu26tvwhi06pJCWIAyK">
                                         <i class="fas fa-power-off mr-1" data-page-node-id="QX3KkD0uRlvZVDNe90rEnA"></i>结束服务
                                     </button>
                                 </div>
@@ -6708,6 +6936,7 @@ body:has(#mobile-bottom-nav) #mobile-fab { bottom: calc(64px + env(safe-area-ins
     <script src="tasks.js"></script>
     <script src="taskTemplates.js"></script>
     <script src="attachments.js"></script>
+    <script src="markdown.js"></script>
     <script src="pomodoro.js"></script>
     <script src="commandPalette.js"></script>
     <script src="onboarding.js"></script>

@@ -127,7 +127,7 @@ function renderCalendarSyncView(container) {
                             '<button onclick="webdavPush()" class="w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white active:bg-cyan-600 active:scale-95 transition" title="上传到云端"><i class="fas fa-cloud-arrow-up"></i></button>' +
                             '<button onclick="webdavPull()" class="w-10 h-10 rounded-full border-2 border-cyan-500 text-cyan-500 flex items-center justify-center hover:bg-cyan-500 hover:text-white active:bg-cyan-600 active:scale-95 transition" title="从云端下载"><i class="fas fa-cloud-arrow-down"></i></button>' +
                         '</div>' +
-                        '<button onclick="closeCalendarSyncView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
+                        '<button onclick="closeCalendarSyncView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="px-4 pb-3 flex-shrink-0">' +
@@ -404,8 +404,8 @@ function renderCalendarSubscriptions() {
 // 默认态描边红字 → 鼠标悬浮浅红底 → 二次确认态实心红底白字
 function _confirmBtnClass(isConfirming) {
     return isConfirming
-        ? 'bg-red-600 text-white border-red-600 dark:bg-red-700 dark:border-red-700'
-        : 'border border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30';
+        ? 'tone-solid-red'
+        : 'tone-outline-red';
 }
 
 // 统一的删除按钮样式（与清单 deleteListInput 一致：默认红边框红字+浅红悬浮；二次确认实心红底白字；图标始终 fa-trash）
@@ -463,7 +463,7 @@ function _renderSubCard(sub, isDraft) {
         div.ondblclick = () => enterCalendarSubEditMode(sub.id);
         div.title = '双击编辑';
         const blBtn = deletedCount
-            ? `<button onclick="clearCalendarSubscriptionBlacklist('${sub.id}')" class="flex items-center justify-center w-7 h-7 rounded-lg border ${isBlConfirming ? 'bg-amber-600 text-white border-amber-600' : 'border-amber-500 text-amber-600 hover:bg-amber-50 dark:border-amber-400 dark:text-amber-400 dark:hover:bg-amber-900/30'} opacity-0 group-hover:opacity-100 transition" title="${isBlConfirming ? '再次点击确认清空' : '清空屏蔽名单'}"><i class="fas fa-broom text-xs"></i></button>`
+            ? `<button onclick="clearCalendarSubscriptionBlacklist('${sub.id}')" class="flex items-center justify-center w-7 h-7 rounded-lg border ${isBlConfirming ? 'tone-solid-amber' : 'tone-outline-amber'} opacity-0 group-hover:opacity-100 transition" title="${isBlConfirming ? '再次点击确认清空' : '清空屏蔽名单'}"><i class="fas fa-broom text-xs"></i></button>`
             : '';
         div.innerHTML = `
             <div class="flex items-center gap-2">

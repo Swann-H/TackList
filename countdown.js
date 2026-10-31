@@ -401,7 +401,7 @@ function renderCountdownView(container) {
     if (!container) return;
 
     // 右上角返回按钮（样式与「设置节假日与调休」右上角返回一致）
-    const backBtn = '<button onclick="closeCountdownView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>';
+    const backBtn = '<button onclick="closeCountdownView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>';
 
     container.innerHTML =
         '<div class="countdown-container">' +
@@ -702,7 +702,7 @@ function cdEditFormHtml(c) {
                         const confirming = countdownDeleteConfirming === c.id;
                         const cls = confirming
                             ? 'bg-red-600 text-white border-red-600'
-                            : 'border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30';
+                            : 'tone-outline-red';
                         const icon = confirming ? 'fa-check' : 'fa-trash';
                         const title = confirming ? '再次点击确认删除' : '删除';
                         return '<button type="button" onclick="deleteCountdown(\'' + c.id + '\')" class="flex items-center justify-center w-8 h-8 rounded-lg border transition ' + cls + '" title="' + title + '"><i class="fas ' + icon + ' text-sm"></i></button>';

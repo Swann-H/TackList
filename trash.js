@@ -280,7 +280,7 @@ function renderTrashView(container) {
     const isMobile = typeof isMobileView === 'function' && isMobileView();
 
     // 返回按钮（样式与「倒计时」右上角返回一致），悬浮实底填充+图标变白（与工具栏其他按钮一致）
-    const backBtn = '<button onclick="closeTrashView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>';
+    const backBtn = '<button onclick="closeTrashView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>';
     // 搜索开关按钮：单击显示/隐藏搜索框（悬浮沿用按下态样式：实底填充+图标变白）
     const searchBtn = '<button onclick="toggleTrashSearch()" class="w-10 h-10 rounded-full flex items-center justify-center transition ' +
         (_trashSearchVisible

@@ -1210,12 +1210,12 @@ function getTaskCheckboxClass(task) {
         return 'border-accent hover:border-accent-hover';
     }
     if (task.important && task.urgent)
-        return 'border-red-500 dark:border-red-400 hover:border-red-600 dark:hover:border-red-500';
+        return 'priority-border-red';
     if (task.important && !task.urgent)
-        return 'border-blue-500 dark:border-blue-400 hover:border-blue-600 dark:hover:border-blue-500';
+        return 'priority-border-blue';
     if (!task.important && task.urgent)
-        return 'border-yellow-500 dark:border-yellow-400 hover:border-yellow-600 dark:hover:border-yellow-500';
-    return 'border-gray-400 dark:border-gray-500 hover:border-gray-500 dark:hover:border-gray-400';
+        return 'priority-border-yellow';
+    return 'priority-border-gray';
 }
 
 // 统一渲染任务勾选框（各视图共享）

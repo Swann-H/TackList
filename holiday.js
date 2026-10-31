@@ -111,9 +111,9 @@ function renderHolidayView(container) {
                 '<div class="flex items-center justify-between p-4 pb-2 flex-shrink-0">' +
                     '<h1 class="text-2xl font-bold text-theme-primary">设置节假日与调休</h1>' +
                     '<div class="flex items-center gap-3">' +
-                        '<label for="holiday-import-file" id="holiday-import-btn" class="w-10 h-10 rounded-full border-2 border-blue-500 text-blue-500 flex items-center justify-center hover:bg-blue-500 hover:text-white transition cursor-pointer" title="导入 JSON"><i class="fas fa-download"></i></label>' +
+                        '<label for="holiday-import-file" id="holiday-import-btn" class="w-10 h-10 rounded-full border-2 border-accent text-accent flex items-center justify-center hover:bg-accent hover:text-white transition cursor-pointer" title="导入 JSON"><i class="fas fa-download"></i></label>' +
                         '<button onclick="exportHolidayJSON()" class="w-10 h-10 rounded-full border-2 border-green-500 text-green-500 flex items-center justify-center hover:bg-green-500 hover:text-white transition" title="导出 JSON"><i class="fas fa-upload"></i></button>' +
-                        '<button onclick="closeHolidayView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-500 hover:text-white active:bg-slate-600 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
+                        '<button onclick="closeHolidayView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>' +
                         '<input type="file" id="holiday-import-file" accept=".json" class="hidden" onchange="handleHolidayImport(this.files[0])">' +
                     '</div>' +
                 '</div>' +
@@ -533,8 +533,8 @@ function renderSectionView(group, section) {
 
     const typeLabel = section.type === 'holiday' ? '假期' : '调休';
     const typeBadgeClass = section.type === 'holiday'
-        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-        : 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300';
+        ? 'tone-soft-green-strong'
+        : 'tone-soft-orange-strong';
 
     const datesText = formatRangeChinese(section.ranges);
 
@@ -545,10 +545,10 @@ function renderSectionView(group, section) {
         holidayDeleteConfirming.festival === section.festival;
 
     const deleteBtnClass = isDeleteConfirming
-        ? 'bg-red-600 text-white border-red-600 dark:bg-red-700 dark:border-red-700'
-        : 'border border-red-500 text-red-500 hover:bg-red-50 dark:border-red-400 dark:text-red-400 dark:hover:bg-red-900/30';
+        ? 'tone-solid-red'
+        : 'tone-outline-red';
     const deleteBtnTitle = isDeleteConfirming ? '确认删除' : '删除';
-    const editBtnClass = 'border border-accent text-accent hover:bg-accent-soft dark:border-accent-secondary dark:text-accent-light dark:hover:bg-accent-strong';
+    const editBtnClass = 'tone-outline-accent';
 
     // "其他"分组显示名称
     const nameSpan = group.isOther
