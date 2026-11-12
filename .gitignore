@@ -58,3 +58,7 @@ tmp/
 
 # Reference/backup app copy
 TackList-reference/
+
+# Only README*.md are tracked; all other markdown docs stay local
+*.md
+!README*.md

@@ -180,11 +180,6 @@ function startFlowAnimation() {
 // 全部走 transform/opacity/clip-path 合成层；主内容后退变暗用独立遮罩层而非 filter
 const FX_FEATURE = { pomoEnter: 420, pomoExit: 380, modalOut: 480 };
 
-function _fxFeatureOn() {
-    return typeof settings !== 'undefined' && settings.featureAnimations === true
-        && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
-}
-
 // 光圈扩散原点：取触发按钮中心视口坐标；按钮不可见（如命令面板触发）时回退屏幕中心
 function _fxBtnOrigin(btnId) {
     const btn = document.getElementById(btnId);
@@ -312,13 +307,11 @@ let _pomodoroDetailTaskId = null;
 let _pomodoroRightSyncing = false;
 
 /** 当前右栏内容模式。 */
-function pomodoroRightMode() { return _pomodoroRightMode; }
 
 /** 供 tasks.js 判定：详情面板此刻是否被番茄右栏托管。 */
 function isDetailPanelHostedInPomodoro() { return !!_pomodoroDetailHosted; }
 
 /** 供 tasks.js 判定：当前托管展示的任务 id。 */
-function pomodoroDetailHostedTaskId() { return _pomodoroDetailHosted ? _pomodoroDetailTaskId : null; }
 
 /** 一次性入场动效类（仅在 body.fx-smooth 下由 CSS 真正播放）。
  * 必须清掉上一次的清理 timer —— 同一元素在 400ms 内被多次触发时，
@@ -449,6 +442,12 @@ function _mountDetailIntoRight(taskId) {
         _withPomodoroRenderSuppressed(() => openTaskDetailPanel(taskId, false, false));
     }
     panel.classList.remove('hidden');
+    // 描述区空态占位（子任务模式）需按当前任务内容同步：
+    // 「已在同一任务上」时会跳过 openTaskDetailPanel，面板搬入右栏后
+    // 行级编辑器仍是旧的占位文案，会残留「任务详情描述」提示。
+    if (typeof updateDetailDescriptionPlaceholder === 'function') {
+        updateDetailDescriptionPlaceholder();
+    }
     // 描述框高度依赖容器宽度，搬入后需按新宽度重新挂一次自适应监听
     if (typeof _initDescAutoResize === 'function') _initDescAutoResize();
 }
@@ -463,6 +462,8 @@ function _unmountDetailFromRight(keepOpen) {
     // 先摘标记：后续 closeTaskDetailPanel() 不应再被「托管」语义拦截
     _pomodoroDetailHosted = false;
     _pomodoroDetailTaskId = null;
+    // 番茄右栏整体隐藏「…」更多入口；物料回主视图后恢复「展开书写」等条目
+    if (typeof renderDetailMoreMenu === 'function') renderDetailMoreMenu();
     if (panel) {
         // 切走前把待落盘的编辑立即写回（标题/备注走防抖，不走这里会丢最后一次输入）。
         // ⚠️ 这句必须在抑制范围内：实测有 pending 编辑时它内部走 saveTaskDetailWithoutClose()
@@ -691,7 +692,17 @@ function _hidePomodoroPage() {
     }
 }
 
-function closePomodoroPage() {
+/**
+ * 关闭番茄专注页，返回主视图。
+ * @param {{ detailTaskId?: string }} [opts]
+ *   detailTaskId 由「任务提醒 Toast 卡片单击」传入：返回主视图后要打开的是**被提醒的任务**详情。
+ *   与「返回按钮」按点击位置区分 —— 返回按钮 / Esc / 命令面板 / 内部切换一律无参调用，
+ *   仍恢复「专注关联任务 / 进入番茄页前的任务」详情；只有 Toast 走显式目标任务。
+ *   打开动作统一收口在 restoreDetailPanel()（退出动画结束后），避免两侧各自调
+ *   openTaskDetailPanel 互相覆盖（原 bug：Toast 的目标被随后恢复的专注任务覆盖）。
+ */
+function closePomodoroPage(opts) {
+    const targetDetailId = (opts && opts.detailTaskId) || null;
     // 仅在番茄页真实可见（即用户主动「返回」）时消费恢复标记；
     // startPomodoroForTask 内部的预防性 close 调用发生在页面隐藏时，不触发恢复
     const pageEl = document.getElementById('pomodoro-page');
@@ -720,6 +731,14 @@ function closePomodoroPage() {
         }
         // 下次再进入番茄页时入场动画要重新播 —— 重置渲染 key
         _pomodoroRightRenderKey = null;
+        // Toast 卡片单击是一次明确的「跳转到这个提醒任务」意图，优先级高于所有恢复口径：
+        // 无论右栏是否正托管「专注关联任务」详情、进入番茄页前是否展开过别的任务，
+        // 最终都停在提醒任务上。放在这里也保证了打开时机 = 退出动画结束后，
+        // 不会被 Toast 侧的 setTimeout(0) 抢先、更不会被本函数随后的恢复动作覆盖。
+        if (targetDetailId) {
+            restoreDetailId = targetDetailId;
+            restoreDetailReadOnly = false;
+        }
         if (!restoreDetailId) return;
         if (typeof tasks !== 'undefined' && Array.isArray(tasks) && !tasks.some(t => t.id === restoreDetailId)) return;
         if (typeof openTaskDetailPanel === 'function') openTaskDetailPanel(restoreDetailId, restoreDetailReadOnly);
@@ -2976,87 +2995,31 @@ function relinkTask(recordIdx, taskId) {
 
 // 新增记录弹窗专用日期选择器：今天/昨天/前天/上周最后一个工作日
 function openAddRecordDatePicker(inputEl, pickerId) {
-    const picker = document.getElementById(pickerId);
-    if (!picker) return;
+    _openDateQuickPicker(inputEl, pickerId, function (addDateOption, now) {
+        const shortDayNames = ['日', '一', '二', '三', '四', '五', '六'];
+        const weekStartsOnMonday = settings.weekStart === 'monday';
 
-    document.querySelectorAll('.date-picker-dropdown').forEach(p => {
-        if (p.id !== pickerId) p.classList.add('hidden');
-    });
-    document.querySelectorAll('.time-picker-dropdown').forEach(p => {
-        p.classList.add('hidden');
-    });
+        // 1. 今天
+        addDateOption('今天', now);
 
-    if (!picker.classList.contains('hidden')) {
-        picker.classList.add('hidden');
-        return;
-    }
+        // 2. 昨天
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        addDateOption('昨天', yesterday);
 
-    picker.innerHTML = '';
-    const now = new Date();
-    const shortDayNames = ['日', '一', '二', '三', '四', '五', '六'];
-    const weekStartsOnMonday = settings.weekStart === 'monday';
+        // 3. 前天
+        const dayBeforeYesterday = new Date(now);
+        dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
+        addDateOption('前天', dayBeforeYesterday);
 
-    function formatDate(date) {
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-    }
-
-    function addDateOption(label, date) {
-        const dateStr = formatDate(date);
-        const item = document.createElement('div');
-        item.className = 'px-3 py-1.5 text-sm cursor-pointer text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition flex justify-between items-center';
-        const labelSpan = document.createElement('span');
-        labelSpan.textContent = label;
-        const dateSpan = document.createElement('span');
-        dateSpan.className = 'text-xs opacity-60';
-        dateSpan.textContent = dateStr;
-        item.appendChild(labelSpan);
-        item.appendChild(dateSpan);
-        item.dataset.value = dateStr;
-        item.onclick = (e) => {
-            e.stopPropagation();
-            inputEl.value = dateStr;
-            picker.classList.add('hidden');
-            inputEl.dispatchEvent(new Event('change'));
-        };
-        picker.appendChild(item);
-    }
-
-    // 1. 今天
-    addDateOption('今天', now);
-
-    // 2. 昨天
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    addDateOption('昨天', yesterday);
-
-    // 3. 前天
-    const dayBeforeYesterday = new Date(now);
-    dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
-    addDateOption('前天', dayBeforeYesterday);
-
-    // 4. 上周期最后一个工作日（显示为"上周X"；当天上班且次日休息者为周期末）
-    const currentWeekStart = getWeekStartDate(now, weekStartsOnMonday);
-    const lastWeekStart = new Date(currentWeekStart);
-    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-    const lastWeekLastWorkday = findLastWorkdayOfWeek(lastWeekStart);
-    if (lastWeekLastWorkday) {
-        const dayName = shortDayNames[lastWeekLastWorkday.getDay()];
-        addDateOption('上周' + dayName, lastWeekLastWorkday);
-    }
-
-    picker.classList.remove('hidden');
-    picker.classList.add('date-picker-dropdown');
-
-    requestAnimationFrame(() => {
-        const currentValue = inputEl.value;
-        if (currentValue) {
-            const targetItem = picker.querySelector(`[data-value="${currentValue}"]`);
-            if (targetItem) {
-                targetItem.scrollIntoView({ block: 'center' });
-            }
+        // 4. 上周期最后一个工作日（显示为"上周X"；当天上班且次日休息者为周期末）
+        const currentWeekStart = getWeekStartDate(now, weekStartsOnMonday);
+        const lastWeekStart = new Date(currentWeekStart);
+        lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+        const lastWeekLastWorkday = findLastWorkdayOfWeek(lastWeekStart);
+        if (lastWeekLastWorkday) {
+            const dayName = shortDayNames[lastWeekLastWorkday.getDay()];
+            addDateOption('上周' + dayName, lastWeekLastWorkday);
         }
     });
 }

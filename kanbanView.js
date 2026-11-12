@@ -7,7 +7,6 @@
 let _kanbanExpanded = {};      // colKey -> number：已展开并渲染的任务数（懒加载累进；无条目 = 折叠态）
 let _kanbanLazyIO = null;      // 列内滚动懒加载 IntersectionObserver（重渲染前 disconnect 防泄漏）
 let _kanbanDefaultCount = 8;   // 折叠态每列默认显示数（渲染后按屏幕高度动态校准，见 calibrateKanbanDefaultCount）
-let _kanbanShowList = true;    // 渲染时的 showList 快照（懒加载追加卡片时复用）
 const KANBAN_LAZY_BATCH = 10;  // 懒加载每批追加的任务数
 let _draggedKanbanCol = null;  // 正在拖拽的自定义分组列 key
 let _kanbanLeafMap = {};       // colKey -> 列元数据（含 type / listId / groupId / tagId / bucket / priorityLevel）
@@ -16,9 +15,6 @@ let _kanbanGroupConfigOpen = false;    // 分组配置子面板是否打开
 let _kanbanNewGroupIds = new Set(); // 刚由「新增分组」创建、尚未命名（正在编辑）的分组 id 集合（失焦/关闭未命名则视为误操作删除）
 let _kanbanEditingGroupId = null; // 当前正在进行行内改名（input 编辑中）的分组 id；编辑期间禁用该列拖拽并阻止看板整板重渲染销毁输入框
 
-const KANBAN_GROUP_BY_LABEL = {
-    custom: '自定义', time: '时间', createdTime: '创建时间', tag: '标签', priority: '优先级'
-};
 const KANBAN_TIME_TITLE = { nodate: '无日期', overdue: '已过期', today: '今天', tomorrow: '明天', dayAfterTomorrow: '后天', recent7: '最近7天', later: '更远' };
 const KANBAN_CREATED_TITLE = { today: '今天', past7: '过去7天', past30: '过去30天', earlier: '更早' };
 // 自定义模式下列顺序：list.customColumnOrder（groupId 或 'ungrouped'）；缺省按 groups 顺序 + 末位未分组
@@ -306,30 +302,10 @@ function computeKanbanColumns() {
 }
 
 // ---------- 排序 ----------
+// 排序规则与任务视图共用一份实现（taskListView.js sortTaskListTasks：按 sortBy 取值、已完成置底、
+// sortDir 反向），此处只保留看板本地名称，避免两份规则各改一半导致漂移。
 function sortKanbanTasks(arr, cfg) {
-    const dir = cfg.sortDir === 'desc' ? -1 : 1;
-    const getVal = (t) => {
-        switch (cfg.sortBy) {
-            case 'time': return t.startTime ? new Date(t.startTime).getTime() : (cfg.sortDir === 'asc' ? Infinity : -Infinity);
-            case 'createdTime': return t.createdAt ? new Date(t.createdAt).getTime() : 0;
-            case 'modifiedTime': return new Date(t.modifiedAt || t.createdAt).getTime();
-            case 'title': return (t.title || '').toLowerCase();
-            case 'tag': {
-                const tg = (t.tags || [])[0];
-                const def = (settings.tags || []).find(x => x.id === tg);
-                return def ? def.name.toLowerCase() : '';
-            }
-            case 'priority': return (t.important ? 2 : 0) + (t.urgent ? 1 : 0);
-            default: return 0;
-        }
-    };
-    return arr.slice().sort((a, b) => {
-        if (a.completed !== b.completed) return a.completed ? 1 : -1; // 已完成置底
-        const va = getVal(a), vb = getVal(b);
-        if (va < vb) return -1 * dir;
-        if (va > vb) return 1 * dir;
-        return 0;
-    });
+    return sortTaskListTasks(arr, cfg);
 }
 
 // ---------- 卡片 ----------
@@ -337,7 +313,8 @@ function sortKanbanTasks(arr, cfg) {
 // - 左缘 4px 色条（getTaskBarColor：优先级色条模式下显示优先级色，否则清单色），无四周边框，rounded-r-lg 左圆角为 0
 // - 完成勾选框置于卡片内左侧（色条右侧），随卡片内容 items-center 垂直居中；右侧信息列左对齐
 // - hover 统一为 opacity-80（与日程一致）；信息排布保持看板原有顺序：
-//   第1行 元信息(时间/清单/专注/进度) → 第2行 标题 → 第3行 详情(子任务/备注) → 第4行 标签
+//   第1行 元信息(时间/专注/进度) → 第2行 标题 → 第3行 详情(子任务/备注) → 第4行 标签
+//   任务所属清单只由左侧色条提示，不在第1行重复「圆点+清单名」（腾出宽度给时间等元信息）
 // 卡片限高（方案 A）：元信息行 nowrap 不再折行；标题最多 2 行（line-clamp-2），
 // 备注最多 2 行（line-clamp-2）。截断部分在点开详情面板后仍可看到完整内容。
 // 注意：标题外层为 flex（承载外部日历图标），line-clamp 的 display:-webkit-box 需加在
@@ -345,29 +322,27 @@ function sortKanbanTasks(arr, cfg) {
 // 「显示任务详情」开启时展示子任务列表（renderSubtaskListDisplay，参照日程视图）与备注文本；关闭时二者均不展示。
 // 完成圆环配色跟随「优先级显示方式」（getTaskCheckboxClass）。
 // 外层 kanban-task-row（含 task-row 语义类）保留：完成消失动画通过 closest('.task-row') 定位整行。
-function renderKanbanCard(task, showDetails, showList, showFocusButton) {
+function renderKanbanCard(task, showDetails, showFocusButton) {
     const showFocus = (typeof showFocusButton === 'boolean') ? showFocusButton : (getKanbanConfig().showFocusButton !== false);
     const list = getList(task.listId);
     const listColor = list ? list.color : '#9ca3af';
-    const timeDisplay = formatTaskTimeLabel(task, false);
+    // 时间表达与任务视图统一走 formatTaskListTime：近端用相对词（昨天/前天/明天/后天），
+    // 更早的过期任务与远期任务带绝对日期，避免看板列头无日期上下文时丢失时间归属
+    const timeDisplay = formatTaskListTime(task, { withAllDayTag: false });
     const focusMinutes = getTaskFocusMinutes(task.id);
     const isOverdue = isTaskOverdue(task);
     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
-    // 「显示任务详情」关闭时，既不显示子任务列表，也不显示备注文本
+    // 「显示任务详情」关闭时，既不显示子任务列表，也不显示备注/描述文本
+    // 组合规则见 renderTaskDetailsBlock；看板只有 2 行预算（卡片限高方案 A），
+    // 有子任务时只看子任务，没有子任务时才把 2 行给描述
     let details = '';
     if (showDetails) {
-        const subtaskHtml = renderSubtaskListDisplay(task);
-        details = subtaskHtml
-            ? subtaskHtml
-            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1 whitespace-pre-wrap break-words line-clamp-2">${escapeHtml(task.notes)}</div>` : '');
+        details = renderTaskDetailsBlock(task, { maxLines: 2 });
     }
-    const listBadge = (showList && list)
-        ? `<span class="flex items-center gap-1 min-w-0 max-w-[9rem]"><span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color:${listColor}"></span><span class="truncate">${escapeHtml(list.name)}</span></span>`
-        : '';
     const tagHtml = renderTagCapsules(task, 3, 'left');
     const colors = getQuadrantColorClass(task);
     const meta = `
-        ${listBadge}
+        ${typeof renderRecurringTaskBadge === 'function' ? renderRecurringTaskBadge(task) : ''}
         ${timeDisplay ? `<span class="${timeTextClass} flex items-center gap-1 whitespace-nowrap"><i class="far fa-clock"></i>${timeDisplay}</span>` : ''}
         ${focusMinutes > 0 ? `<span class="flex items-center gap-1 text-red-500/90 whitespace-nowrap"><i class="fas fa-stopwatch"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1 text-accent whitespace-nowrap"><i class="fas fa-flag"></i>${task.progress}%</span>` : ''}`;
@@ -398,7 +373,7 @@ function renderKanbanCard(task, showDetails, showList, showFocusButton) {
 function getKanbanCount(tasks, cfg) {
     return cfg.countOnlyUncompleted ? tasks.filter(t => !t.completed).length : tasks.length;
 }
-function renderKanbanSubColumn(ch, cfg, showList) {
+function renderKanbanSubColumn(ch, cfg) {
     const showDetails = cfg.showDetails;
     const total = ch.tasks.length;
     const visible = getKanbanVisibleCount(ch.key, total);
@@ -420,13 +395,13 @@ function renderKanbanSubColumn(ch, cfg, showList) {
             <div class="px-2 pb-2 kanban-col-body drop-zone" ondragover="handleTaskDragOver(event)" ondrop="handleKanbanDrop(event, '${ch.key}')">
                 ${visibleTasks.length === 0
                     ? `<div class="text-center py-3 text-theme-muted text-xs">空</div>`
-                    : visibleTasks.map(t => renderKanbanCard(t, showDetails, showList)).join('') + footerHtml}
+                    : visibleTasks.map(t => renderKanbanCard(t, showDetails)).join('') + footerHtml}
                 ${expanded ? renderKanbanCollapseBtn(ch.key, '-mx-2', 'calc(100% + 1rem)') : ''}
             </div>
         </div>`;
 }
 
-function renderKanbanColumn(col, cfg, showList) {
+function renderKanbanColumn(col, cfg) {
     const showDetails = cfg.showDetails;
     const total = col.tasks.length;
     const visible = getKanbanVisibleCount(col.key, total);
@@ -463,11 +438,11 @@ function renderKanbanColumn(col, cfg, showList) {
 
     let bodyHtml = `<div class="flex-1 overflow-y-auto kanban-col-body drop-zone px-4" ondragover="handleTaskDragOver(event)" ondrop="handleKanbanDrop(event, '${col.key}')">`;
     if (col.children && col.children.length) {
-        bodyHtml += col.children.map(ch => renderKanbanSubColumn(ch, cfg, showList)).join('');
+        bodyHtml += col.children.map(ch => renderKanbanSubColumn(ch, cfg)).join('');
     } else if (visibleTasks.length === 0) {
         bodyHtml += `<div class="text-center py-6 mb-2.5 text-theme-muted text-sm border-2 border-dashed border-theme rounded-lg">暂无任务</div>`;
     } else {
-        bodyHtml += visibleTasks.map(t => renderKanbanCard(t, showDetails, showList)).join('');
+        bodyHtml += visibleTasks.map(t => renderKanbanCard(t, showDetails)).join('');
         if (remaining > 0) {
             // 展开态用哨兵元素配合 IntersectionObserver 懒加载；折叠态保留「+N更多」按钮
             bodyHtml += _kanbanExpanded[col.key]
@@ -628,11 +603,9 @@ function renderKanbanView(container) {
     })(columns);
 
     // 改进1：去掉「阅读 · 看板」这类标题栏，让看板铺满整屏
-    const showList = ctx.mode !== 'groups';          // 单清单(自定义分组)场景下卡片无需重复显示清单名
-    _kanbanShowList = showList;                       // 快照：懒加载追加卡片时复用
     const canAddGroup = cfg.groupBy === 'custom' && ctx.mode === 'groups';
     const boardHtml = columns.length
-        ? columns.map(c => renderKanbanColumn(c, cfg, showList)).join('')
+        ? columns.map(c => renderKanbanColumn(c, cfg)).join('')
         : '<div class="text-theme-muted py-10">暂无清单，请先在左侧创建清单。</div>';
 
     // 改进3：看板界面直接提供「新增分组」按钮（仅自定义分组且选中单清单时显示）
@@ -945,7 +918,7 @@ function loadKanbanBatch(sentinel) {
     }
     const next = Math.min(total, cur + KANBAN_LAZY_BATCH);
     const cfg = getKanbanConfig();
-    const html = leaf.tasks.slice(cur, next).map(t => renderKanbanCard(t, cfg.showDetails, _kanbanShowList)).join('');
+    const html = leaf.tasks.slice(cur, next).map(t => renderKanbanCard(t, cfg.showDetails)).join('');
     sentinel.insertAdjacentHTML('beforebegin', html);
     _kanbanExpanded[key] = next;
     if (next >= total) {

@@ -18,6 +18,7 @@ function getWeekConfig() {
     // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
     if (typeof c.blockMinutes !== 'number') c.blockMinutes = 30;
     // per-list 回退链
     const listPrefs = _getCurrentListViewPrefs('week');
@@ -39,6 +40,8 @@ function getMonthConfig() {
     // 回退读取：视图配置未显式设置时，继承全局默认值（无感升级）
     if (typeof c.showCompleted !== 'boolean') c.showCompleted = settings.showCompleted !== false;
     if (typeof c.showLunar !== 'boolean') c.showLunar = settings.showLunar !== false;
+    // 显示任务条上的「开始专注」按钮（悬浮时出现在勾选框同一行最右侧）
+    if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
     // 显示调休信息：月视图日期数字左侧的「班/休」标记（新配置项，默认显示）
     if (typeof c.showSwapInfo !== 'boolean') c.showSwapInfo = true;
     // per-list 回退链
@@ -139,8 +142,10 @@ function openWeekConfig() {
     const cfg = getWeekConfig();
     const scEl = document.getElementById('wc-showcompleted');
     const slEl = document.getElementById('wc-showlunar');
+    const sfEl = document.getElementById('wc-showfocus');
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (slEl) slEl.checked = cfg.showLunar !== false;
+    if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
     const blockEl = document.getElementById('wc-block-minutes');
     if (blockEl) blockEl.value = getWeekTaskBlockMinutes();
     // 显示天数：回填分段控件选中态（归一化后的值，非法值显示为「7 天」）
@@ -173,8 +178,11 @@ function onWeekConfigChange() {
     const target = _ensureListViewPrefs('week') || settings.weekConfig;
     const scEl = document.getElementById('wc-showcompleted');
     const slEl = document.getElementById('wc-showlunar');
+    const sfEl = document.getElementById('wc-showfocus');
     if (scEl) target.showCompleted = scEl.checked;
     if (slEl) target.showLunar = slEl.checked;
+    if (sfEl) target.showFocusButton = sfEl.checked;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
     const blockEl = document.getElementById('wc-block-minutes');
     if (blockEl) {
         const n = parseInt(blockEl.value, 10);
@@ -197,7 +205,7 @@ function resetWeekViewConfig() {
         openWeekConfig();
         showToast('已恢复该清单的周视图配置（继承全局）', 'success');
     } else {
-        _resetViewConfigToDefault('weekConfig', { showCompleted: true, showLunar: true });
+        _resetViewConfigToDefault('weekConfig', { showCompleted: true, showLunar: true, showFocusButton: true });
         saveData();
         renderView();
         openWeekConfig();
@@ -216,9 +224,11 @@ function openMonthConfig() {
     const scEl = document.getElementById('mc-showcompleted');
     const slEl = document.getElementById('mc-showlunar');
     const ssEl = document.getElementById('mc-showswapinfo');
+    const sfEl = document.getElementById('mc-showfocus');
     if (scEl) scEl.checked = cfg.showCompleted !== false;
     if (slEl) slEl.checked = cfg.showLunar !== false;
     if (ssEl) ssEl.checked = cfg.showSwapInfo !== false;
+    if (sfEl) sfEl.checked = cfg.showFocusButton !== false;
     openViewConfigPanel('month', (forSwitch) => {
         saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
         if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
@@ -230,9 +240,12 @@ function onMonthConfigChange() {
     const scEl = document.getElementById('mc-showcompleted');
     const slEl = document.getElementById('mc-showlunar');
     const ssEl = document.getElementById('mc-showswapinfo');
+    const sfEl = document.getElementById('mc-showfocus');
     if (scEl) target.showCompleted = scEl.checked;
     if (slEl) target.showLunar = slEl.checked;
     if (ssEl) target.showSwapInfo = ssEl.checked;
+    if (sfEl) target.showFocusButton = sfEl.checked;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
@@ -244,7 +257,7 @@ function resetMonthViewConfig() {
         openMonthConfig();
         showToast('已恢复该清单的月视图配置（继承全局）', 'success');
     } else {
-        _resetViewConfigToDefault('monthConfig', { showCompleted: true, showLunar: true });
+        _resetViewConfigToDefault('monthConfig', { showCompleted: true, showLunar: true, showFocusButton: true });
         saveData();
         renderView();
         openMonthConfig();
@@ -252,16 +265,39 @@ function resetMonthViewConfig() {
     }
 }
 
+// 周/月视图任务条上的「开始专注」按钮：统一规格为「与各自任务条的完成勾选框同尺寸」
+// （16×16 外框 + 10px 图标）。与其他视图的差别只在显隐时机——
+// 其他视图是 group-hover 直出，周/月视图要按各自规则出现，故 base 不用 group-hover 方案，
+// 显隐交给双 HTML 里的视图级 CSS（.week-task-item / .week-allday-task / .month-task-item）。
+const CALENDAR_FOCUS_OPTS = { box: 'w-4 h-4', icon: 'text-[10px]', base: 'flex-shrink-0' };
+function renderCalendarFocusButton(view, taskId) {
+    const cfg = (view === 'month') ? getMonthConfig() : getWeekConfig();
+    if (cfg.showFocusButton === false) return '';
+    return renderFocusButton(taskId, true, (view === 'month') ? 'month-focus-btn' : 'week-focus-btn', CALENDAR_FOCUS_OPTS);
+}
+
 // 月视图网格单元格内的任务条目（渲染循环与完成揭示动画共用，保证两处 HTML 完全一致）
 function buildMonthGridTaskItemHtml(task) {
     const list = lists.find(l => l.id === task.listId);
     const startTime = task.startTime ? new Date(task.startTime) : null;
     const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}` : '');
+    if (task._projected && typeof renderRecurringGhostMonthItemHtml === 'function') {
+        return renderRecurringGhostMonthItemHtml(task, timeStr);
+    }
     const isOverdue = isTaskOverdue(task);
     const titleClass = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : '');
     // 外部任务色条改订阅色（统一标识 3.3.1）
     const barColor = _extTaskBarColor(task, list?.color || '#3b82f6');
     const extIcon = _extTaskIconHtml(task).replace('text-xs', 'text-[10px]');
+    // 开始专注按钮：与勾选框同尺寸，替身式占位——hover 时时间淡出、按钮原地淡入（见 CSS .month-task-slot）
+    const focusHtml = renderCalendarFocusButton('month', task.id);
+    // 右侧动作位只在「有时间」或「有按钮」时才渲染：两者都没有时整行保持原样，
+    // 不额外插入一个空 span（gap-1 会给它留 4px 间距，白白压缩标题）
+    const slotHtml = (focusHtml || timeStr) ? `
+            <span class="month-task-slot flex-shrink-0 flex items-center" style="${focusHtml ? 'min-width: 16px;' : ''}">
+                ${timeStr ? `<span class="month-task-time flex-shrink-0 text-theme-muted">${timeStr}</span>` : ''}
+                ${focusHtml}
+            </span>` : '';
     return `
         <div draggable="true" data-task-id="${task.id}"
              ondragstart="handleTaskDragStart(event, '${task.id}')"
@@ -272,21 +308,23 @@ function buildMonthGridTaskItemHtml(task) {
             <div class="flex items-center gap-1 min-w-0 flex-1">
                 ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
                 ${extIcon}<span class="truncate ${titleClass}" title="${escapeHtml(task.title || '新任务')}">${task.title || '新任务'}</span>
-            </div>
-            ${timeStr ? `<span class="flex-shrink-0 text-theme-muted">${timeStr}</span>` : ''}
+            </div>${slotHtml}
         </div>
     `;
 }
 
 // 周视图全天区任务条目（渲染循环与完成揭示动画共用）
 function buildWeekAllDayTaskItemHtml(task) {
+    if (task._projected && typeof renderRecurringGhostWeekAllDayHtml === 'function') {
+        return renderRecurringGhostWeekAllDayHtml(task);
+    }
     const list = lists.find(l => l.id === task.listId);
     const isOverdue = isTaskOverdue(task);
     const titleClass = task.completed ? 'opacity-55 text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
     // 外部任务色条改订阅色 + 标题前图标（统一标识 3.3.1）
     const barColor = _extTaskBarColor(task, list?.color || '#3b82f6');
     const extIcon = _extTaskIconHtml(task).replace('text-xs', 'text-[10px]');
-    return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer task-row ${titleClass} flex items-center gap-1 min-w-0"
+    return `<div class="text-xs px-1 py-0.5 rounded-r cursor-pointer task-row week-allday-task relative ${titleClass} flex items-center gap-1 min-w-0"
                  style="background-color: ${list?.color || '#3b82f6'}20; border-left: 2px solid ${barColor};"
                  title="${escapeHtml(task.title || '新任务')}"
                  onclick="event.stopPropagation(); openTaskDetailPanel('${task.id}', false, true)"
@@ -294,7 +332,8 @@ function buildWeekAllDayTaskItemHtml(task) {
                  ondragstart="handleTaskDragStart(event, '${task.id}')"
                  ondragend="handleTaskDragEnd(event)">
                  ${renderTaskCheckbox(task, { taskId: task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                 ${extIcon}<span class="truncate">${task.title || '新任务'}</span>
+                 ${extIcon}<span class="week-fit-title truncate flex-1 min-w-0">${task.title || '新任务'}</span>
+                 ${renderCalendarFocusButton('week', task.id)}
              </div>`;
 }
 
@@ -354,6 +393,8 @@ function _getWeekAggSig() {
         currentFilterId || '',
         settings.weekStart === 'monday' ? 'mon' : 'sun',
         getWeekConfig().showCompleted !== false ? '1' : '0',
+        (typeof isRecurringFutureEnabled === 'function' && isRecurringFutureEnabled('week')) ? '1' : '0',
+        (typeof getRecurringRangeKey === 'function') ? getRecurringRangeKey() : '',
         (typeof shouldHideExternalTasks === 'function' && shouldHideExternalTasks()) ? '1' : '0',
         new Date().toDateString(), // 跨零点后「今天」基准与特殊时间筛选边界变化
         _getHolidayFingerprint()   // 调休/放假数据变化 → 工作周的日期集合随之变化
@@ -364,6 +405,7 @@ function _getWeekAggSig() {
 function invalidateWeekViewCache() {
     _weekAggCache.clear();
     _weekAggSig = null;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
 }
 
 // 取某个窗口的聚合结果：dates 中的每一天 × { 全天任务、定时任务、时间块布局 } + hasAnyTasks。
@@ -399,7 +441,7 @@ function getWeekAggregate(range) {
 
     weekDays.forEach(date => {
         const dateStr = formatDate(date);
-        const dayAllTasks = getTasksForDate(date, { includeCompleted: showCompleted });
+        const dayAllTasks = getTasksForDate(date, { includeCompleted: showCompleted, includeRecurringGhosts: true, recurringGhostView: 'week' });
         const allDay = dayAllTasks.filter(t => t.isAllDay || isMultiDayTask(t));
         const timed = dayAllTasks.filter(t => !t.isAllDay && !isMultiDayTask(t) && t.startTime);
         allDayTasks[dateStr] = allDay;
@@ -533,6 +575,78 @@ function _observeWeekNavPill() {
     // 提示条为绝对定位、不影响导航栏尺寸，故不会触发观察回调自激
     _weekHintRO = new ResizeObserver(() => _placeWeekEmptyHint());
     _weekHintRO.observe(pill);
+}
+
+// ==================== 周视图「开始专注」按钮的显示门槛 ====================
+// 规则（与月视图不同）：只有当任务条标题**没有被截断**、右侧仍空得下一颗按钮时才显示。
+// 「标题是否被截断」只能靠真实布局实测，纯 CSS 无从判断，因此这里在渲染后逐个量一次，
+// 把结论打成 .pf-fits 类，由双 HTML 的 CSS 决定悬浮时是否淡入按钮。
+//
+// 测量口径：标题节点已统一改为 flex-1 min-w-0 撑满剩余宽度，于是
+//   「可用宽（clientWidth） - 文案自然宽」= 标题右侧的空白。
+// 文案自然宽必须用 Range 包围盒：.truncate 元素的 scrollWidth 在未截断时恒等于 clientWidth，
+// 拿不到真实文案宽（这正是不能直接用 scrollWidth 判断的原因）。
+const WEEK_FOCUS_BTN_W = 16;    // 按钮外框宽（与任务条的完成勾选框同尺寸）
+const WEEK_FOCUS_BTN_GAP = 3;   // 按钮与文案之间的最小呼吸间距
+let _weekFocusFitRO = null;
+let _weekFocusFitRAF = null;
+let _weekFocusFitTimer = null;
+
+function _focusFitTextWidth(el) {
+    if (!el) return 0;
+    try {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const w = range.getBoundingClientRect().width;
+        if (typeof range.detach === 'function') range.detach();
+        return w;
+    } catch (e) {
+        return el.scrollWidth;
+    }
+}
+
+// 逐个任务条判定「右侧是否还有富余空间」，结果写成 .pf-fits。
+// 幂等、纯读取（写 class 不改变布局：按钮是绝对定位），可任意次重跑。
+function syncWeekFocusFit() {
+    const bars = document.querySelectorAll('.week-task-item, .week-allday-task');
+    for (let i = 0; i < bars.length; i++) {
+        const bar = bars[i];
+        const titleEl = bar.querySelector('.week-fit-title');
+        if (!titleEl) continue;
+        const free = titleEl.clientWidth - _focusFitTextWidth(titleEl);
+        bar.classList.toggle('pf-fits', free >= WEEK_FOCUS_BTN_W + WEEK_FOCUS_BTN_GAP);
+    }
+}
+
+// 合并同一帧内的多次触发（ResizeObserver 连续回调 / 渲染 + 尺寸变化同时发生）
+function _scheduleWeekFocusFit() {
+    if (_weekFocusFitRAF !== null) return;
+    const raf = (typeof requestAnimationFrame === 'function')
+        ? requestAnimationFrame
+        : (fn => setTimeout(fn, 16));
+    _weekFocusFitRAF = raf(() => {
+        _weekFocusFitRAF = null;
+        syncWeekFocusFit();
+    });
+}
+
+// 列宽变化即重测：面板开合、侧栏展开、窗口缩放、移动端切换都会改变任务条宽度。
+// 观察网格容器本身（不观察单个任务条），一次覆盖全部列。
+function _observeWeekFocusFit(grid) {
+    if (!grid || typeof ResizeObserver === 'undefined') return;
+    if (!_weekFocusFitRO) _weekFocusFitRO = new ResizeObserver(_scheduleWeekFocusFit);
+    _weekFocusFitRO.disconnect();
+    _weekFocusFitRO.observe(grid);
+}
+
+// 渲染后的一次兜底重测：在线版 Tailwind 是运行时 JIT、字体也可能晚到一步，
+// 同步测量那一帧的布局未必是最终布局，延迟再量一次即可自愈。
+function _scheduleWeekFocusFitLater() {
+    if (_weekFocusFitTimer) clearTimeout(_weekFocusFitTimer);
+    _weekFocusFitTimer = setTimeout(() => {
+        _weekFocusFitTimer = null;
+        syncWeekFocusFit();
+    }, 320);
 }
 
 function renderWeekView(container) {
@@ -672,6 +786,18 @@ function renderWeekView(container) {
                     const isOverdue = isTaskOverdue(taskLayout.task);
                     const titleClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
 
+                    if (taskLayout.task._projected) {
+                        return `<div class="absolute rounded-r px-1 py-0.5 overflow-hidden cursor-pointer week-task-item recurring-ghost-row text-theme-primary"
+                                     style="top: ${topPx}px; height: ${heightPx}px; width: ${widthPercent}%; left: ${leftPercent}%; background-color: ${color}20; border: 1px dashed currentColor; border-left: 2px dashed ${_extBarColor}; z-index: 5;"
+                                     onclick="event.stopPropagation(); openRecurringGhostPreview('${taskLayout.task._projectedFrom}')">
+                                <div class="flex items-center gap-1 min-w-0">
+                                    ${typeof renderRecurringGhostIcon === 'function' ? renderRecurringGhostIcon(taskLayout.task, 'text-theme-muted flex-shrink-0') : '<i class="fa-solid fa-repeat text-[10px] text-theme-muted flex-shrink-0"></i>'}
+                                    <div class="week-fit-title text-xs font-medium truncate flex-1 min-w-0" title="${escapeHtml(taskLayout.task.title || '新任务')}">${escapeHtml(taskLayout.task.title || '新任务')}</div>
+                                </div>
+                                ${heightPx > 30 ? `<div class="text-xs text-theme-muted truncate pl-5">${formatTime(taskLayout.task.startTime)}${taskLayout.task.endTime ? ' - ' + formatTime(taskLayout.task.endTime) : ''}</div>` : ''}
+                            </div>`;
+                    }
+
                     return `<div class="absolute rounded-r px-1 py-0.5 overflow-hidden cursor-pointer task-item week-task-item ${taskLayout.task.completed ? 'opacity-55' : ''}"
                                  style="top: ${topPx}px; height: ${heightPx}px; width: ${widthPercent}%; left: ${leftPercent}%; background-color: ${color}20; border-left: 3px solid ${_extBarColor}; z-index: 5;"
                                  onclick="event.stopPropagation(); openTaskDetailPanel('${taskLayout.task.id}', false, true)"
@@ -680,9 +806,10 @@ function renderWeekView(container) {
                                  ondragend="handleTaskDragEnd(event)">
                         <div class="flex items-center gap-1 min-w-0">
                             ${renderTaskCheckbox(taskLayout.task, { taskId: taskLayout.task.id, iconSize: 'text-[10px]', boxClass: 'w-4 h-4', extraClass: 'flex-shrink-0' })}
-                            ${_extIcon}<div class="text-xs font-medium truncate ${titleClass}" title="${escapeHtml(taskLayout.task.title || '新任务')}">${taskLayout.task.title || '新任务'}</div>
+                            ${_extIcon}<div class="week-fit-title text-xs font-medium truncate flex-1 min-w-0 ${titleClass}" title="${escapeHtml(taskLayout.task.title || '新任务')}">${taskLayout.task.title || '新任务'}</div>
                         </div>
                         ${heightPx > 30 ? `<div class="text-xs text-theme-muted truncate pl-5">${formatTime(taskLayout.task.startTime)}${taskLayout.task.endTime ? ' - ' + formatTime(taskLayout.task.endTime) : ''}</div>` : ''}
+                        ${renderCalendarFocusButton('week', taskLayout.task.id)}
                     </div>`;
                 }).join('')}
             </div>
@@ -734,6 +861,13 @@ function renderWeekView(container) {
 
     // 空周提示条落位：读取真实布局，与底部导航栏同高同线、左对齐「周一」列、右停于导航栏左侧
     _placeWeekEmptyHint();
+
+    // 开始专注按钮的显示门槛：按真实布局实测每个任务条标题右侧是否还有空白。
+    // 必须在 innerHTML 落地后同步测一次（否则首次悬浮时没有 .pf-fits，按钮永远出不来），
+    // 再由 ResizeObserver 覆盖「面板开合 / 窗口缩放 / 侧栏展开」等列宽变化。
+    syncWeekFocusFit();
+    _observeWeekFocusFit(document.getElementById('week-time-grid'));
+    _scheduleWeekFocusFitLater();
 
     // 同步恢复滚动位置，消除自动刷新时的跳动
     const newGrid = document.getElementById('week-time-grid');
@@ -1172,7 +1306,7 @@ function renderMonthView(container) {
             <div class="grid grid-cols-7 gap-2" id="month-grid" style="grid-auto-rows: 150px;">
                 ${days.map(date => {
                     const dateStr = formatDate(date);
-                    const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false });
+                    const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false, includeRecurringGhosts: true, recurringGhostView: 'month' });
                     const isToday = isSameDay(date, new Date());
                     const isCurrentMonth = date.getMonth() === month;
                     const displayCount = 3;
@@ -1226,7 +1360,7 @@ function renderMonthView(container) {
                              ondrop="handleMonthDrop(event, '${dateStr}')">
                             <div class="grid items-center mb-2" style="grid-template-columns: 1fr auto 1fr">
                                 <div class="flex justify-start">${holidayBadge || weekBadge || ''}</div>
-                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-accent text-white font-bold' : 'font-medium text-theme-primary'} ${dayTasks.length > displayCount ? (isToday ? 'cursor-pointer hover:bg-accent-hover' : 'cursor-pointer hover:text-accent') : ''}" ${dayTasks.length > displayCount ? `onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')"` : ''}>${date.getDate()}</span>
+                                <span class="${isToday ? 'w-7 h-7 inline-flex items-center justify-center rounded-full bg-accent text-white font-bold cursor-pointer hover:bg-accent-hover' : 'font-medium text-theme-primary cursor-pointer hover:text-accent'}" title="查看当日详情" onclick="event.stopPropagation(); openMonthDayPopover('${dateStr}')">${date.getDate()}</span>
                                 <div class="flex justify-end">${lunarHtml || ''}</div>
                             </div>
                             <div class="space-y-1">
@@ -1306,26 +1440,54 @@ function renderMonthView(container) {
 let _monthPopoverEscHandler = null;
 let _monthPopoverOutsideHandler = null;
 
+// 「当天」浮层进出场动画（归「场景过渡动效」管）：容器淡入 + 卡片自下轻浮，
+// 时间尺度对齐视图切换（0.22s 级），只动 opacity/transform。
+// 门控额外排除窄屏：移动端浮层已并入返回键层栈与手势返回（.fx-day-* 不挂载），
+// 且窄屏下 #month-day-popover 被强制成 transform:none 的全屏页，位移类动画无意义。
+const FX_DAY_POPOVER = { cardIn: 240, out: 200 };
+let _fxDayPopoverTimer = null;
+function _fxDayPopoverEnabled() {
+    if (typeof _fxFeatureOn !== 'function' || !_fxFeatureOn()) return false;
+    return !(typeof matchMedia === 'function' && matchMedia('(max-width: 768px)').matches);
+}
+function _fxDayPopoverClearTimer() {
+    if (_fxDayPopoverTimer) { clearTimeout(_fxDayPopoverTimer); _fxDayPopoverTimer = null; }
+}
+// 入场：动画播完即摘类，避免残留类干扰后续退场（与 _fxModalCleanup 同一思路）
+function _fxDayPopoverPlayIn(wrapper) {
+    if (!wrapper || !_fxDayPopoverEnabled()) return;
+    void wrapper.offsetWidth; // 首次插入即渲染，强制重排确保动画从首帧起跑
+    wrapper.classList.add('fx-day-in');
+    _fxDayPopoverClearTimer();
+    _fxDayPopoverTimer = setTimeout(() => {
+        _fxDayPopoverTimer = null;
+        wrapper.classList.remove('fx-day-in');
+    }, FX_DAY_POPOVER.cardIn + 40);
+}
+
 function openMonthDayPopover(dateStr) {
-    // 先关闭已有浮层
-    closeMonthDayPopover();
+    // 先关闭已有浮层（换日期属「换内容」而非「退出」，立即移除，不等退场）
+    closeMonthDayPopover(true);
 
     const date = new Date(dateStr + 'T00:00:00');
-    const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false });
+    // 本浮层属于月视图语境：显隐口径与月视图任务条一致（含 per-list 覆盖）
+    const mCfg = getMonthConfig();
+    const dayTasks = getTasksForDate(date, { includeCompleted: mCfg.showCompleted !== false, includeRecurringGhosts: true, recurringGhostView: 'month' });
     const isToday = isSameDay(date, new Date());
     const weekDayNames = ['日', '一', '二', '三', '四', '五', '六'];
-    const lunarText = getLunarDisplayText(date, getMonthConfig().showLunar);
+    const lunarText = getLunarDisplayText(date, mCfg.showLunar);
 
-    // 节假日徽章
+    // 节假日标记（「班/休」）：纯色加粗文字，与农历同处一行，仅靠颜色区分，不占额外行高
     const holidayInfo = getHolidayInfo(dateStr);
     let holidayBadge = '';
     if (holidayInfo) {
-        if (holidayInfo.type === 'work') {
-            holidayBadge = `<span class="text-xs text-red-500 font-bold px-2 py-0.5 rounded tone-bg-red" title="${holidayInfo.name}">班</span>`;
-        } else {
-            holidayBadge = `<span class="text-xs text-green-500 font-bold px-2 py-0.5 rounded tone-bg-green" title="${holidayInfo.name}">休</span>`;
-        }
+        const isWork = holidayInfo.type === 'work';
+        holidayBadge = `<span class="text-xs font-bold ${isWork ? 'text-red-500' : 'text-green-500'}" title="${holidayInfo.name}">${isWork ? '班' : '休'}</span>`;
     }
+
+    // 「显示任务详情」跟随日程视图配置（月视图不提供独立入口）：
+    // 关闭时子任务列表与备注文本一并隐藏——二者在用户侧同属「任务详情」，不可拆开处理
+    const showTaskDetails = getScheduleConfig().showDetails !== false;
 
     // 任务列表（使用日程视图样式）。点击任务不关闭浮层，方便切换查看
     const tasksHtml = dayTasks.length > 0 ? dayTasks.map((task, taskIndex) => {
@@ -1333,6 +1495,9 @@ function openMonthDayPopover(dateStr) {
         const colors = getQuadrantColorClass(task);
         const list = lists.find(l => l.id === task.listId);
         const timeDisplay = task.isAllDay ? '全天' : (startTime ? `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}` : '');
+        if (task._projected && typeof renderRecurringGhostScheduleHtml === 'function') {
+            return renderRecurringGhostScheduleHtml(task, timeDisplay);
+        }
         const focusMinutes = getTaskFocusMinutes(task.id);
         const isOverdue = isTaskOverdue(task);
         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
@@ -1341,7 +1506,7 @@ function openMonthDayPopover(dateStr) {
             <div class="schedule-task-item task-row group flex items-start gap-4 mb-3 task-item ${taskIndex > 0 ? 'pt-3' : ''} ${task.completed ? 'opacity-55' : ''}" onclick="event.stopPropagation(); _openTaskDetailFromMonthPopover('${task.id}')">
                 <div class="w-8 flex-shrink-0 flex flex-col items-center justify-between self-stretch relative">
                     ${renderTaskCheckbox(task, { taskId: task.id })}
-                    ${renderFocusButton(task.id)}
+                    ${renderFocusButton(task.id, mCfg.showFocusButton !== false)}
                 </div>
                 <div class="${colors.bg} rounded-r-lg p-3 flex-1 hover:opacity-80 transition schedule-task-card" style="border-left: 4px solid ${_extTaskBarColor(task, getTaskBarColor(task, list && list.color ? list.color : '#9ca3af'))}; border-top-left-radius: 0; border-bottom-left-radius: 0;">
                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary flex-wrap">
@@ -1354,11 +1519,11 @@ function openMonthDayPopover(dateStr) {
                     <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} flex items-center">
                         ${_extTaskIconHtml(task)}${escapeHtml(task.title || '新任务')}
                     </div>
-                    ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '')}
+                    ${showTaskDetails ? renderTaskDetailsBlock(task) : ''}
                 </div>
             </div>
         `;
-    }).join('') : `<div class="text-center text-theme-muted py-12">当日暂无任务</div>`;
+    }).join('') : '';
 
     // 浮层 HTML：不使用全屏遮罩（避免遮挡任务详情栏 z-40），改用 document click 监听外部点击
     // z-[55] 高于底部导航栏(z-50)，低于 toast(z-60)
@@ -1366,19 +1531,22 @@ function openMonthDayPopover(dateStr) {
         <div id="month-day-popover" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[55] w-[92%] max-w-lg bg-theme-secondary rounded-2xl shadow-2xl border border-theme flex flex-col" style="max-height: 75vh;">
             <!-- 头部：日期 + 农历 + 添加按钮 + 关闭按钮 -->
             <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
-                <div class="flex items-center gap-3">
-                    <div class="text-center">
-                        <div class="${isToday ? 'text-accent-dark font-bold' : 'text-theme-primary'} text-2xl">${date.getDate()}</div>
-                        <div class="text-xs text-theme-muted">周${weekDayNames[date.getDay()]}</div>
-                    </div>
-                    <div class="flex flex-col gap-1">
+                <!-- 日期信息区：按「行」左右对齐，而非并排两列各自堆叠。
+                     第 1 行「日期数字 ↔ 年月」、第 2 行「周X ↔ 农历 + 班/休」；
+                     每行用 items-baseline 让左右两格共用文字基线，数字与文字的底部因此视觉齐平。
+                     附加信息（班/休等）一律并入「廿六」这一行，8px 间隔依次往后排，不另起一行。 -->
+                <div class="flex flex-col">
+                    <div class="flex items-baseline gap-3">
+                        <div class="w-8 text-center ${isToday ? 'text-accent-dark font-bold' : 'text-theme-primary'} text-2xl">${date.getDate()}</div>
                         <div class="text-sm text-theme-secondary">${date.getFullYear()}年${date.getMonth() + 1}月</div>
-                        ${lunarText ? `<div class="text-xs text-theme-muted">${lunarText}</div>` : ''}
-                        ${holidayBadge}
+                    </div>
+                    <div class="flex items-baseline gap-3">
+                        <div class="w-8 text-center text-xs text-theme-muted">周${weekDayNames[date.getDay()]}</div>
+                        <div class="text-xs text-theme-muted flex items-baseline gap-2">${lunarText ? `<span>${lunarText}</span>` : ''}${holidayBadge}</div>
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
-                    <button onclick="event.stopPropagation(); closeMonthDayPopover(); openAddTaskModal('${dateStr}')" class="w-8 h-8 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition" title="添加任务">
+                    <button onclick="event.stopPropagation(); closeMonthDayPopover(true); openAddTaskModal('${dateStr}')" class="w-8 h-8 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition" title="添加任务">
                         <i class="fas fa-plus"></i>
                     </button>
                     <button onclick="event.stopPropagation(); closeMonthDayPopover()" class="w-8 h-8 rounded-full hover:bg-theme-tertiary text-theme-secondary flex items-center justify-center transition" title="关闭">
@@ -1386,12 +1554,14 @@ function openMonthDayPopover(dateStr) {
                     </button>
                 </div>
             </div>
-            <!-- 任务列表 -->
+            <!-- 任务列表；当日无任务时不画时间轴，只留一行居中纯文本提示 -->
             <div class="flex-1 overflow-y-auto p-4">
+                ${dayTasks.length > 0 ? `
                 <div class="relative pl-6">
                     <div class="absolute left-0 top-0 bottom-0 w-0.5 bg-theme"></div>
                     ${tasksHtml}
-                </div>
+                </div>` : `
+                <div class="text-center text-theme-muted py-8">当日无任务</div>`}
             </div>
         </div>
     `;
@@ -1401,6 +1571,9 @@ function openMonthDayPopover(dateStr) {
     wrapper.id = 'month-day-popover-wrapper';
     wrapper.innerHTML = popoverHtml;
     document.body.appendChild(wrapper);
+
+    // 场景过渡动效：容器淡入 + 卡片自下轻浮
+    _fxDayPopoverPlayIn(wrapper);
 
     // ESC 关闭
     _monthPopoverEscHandler = (e) => {
@@ -1433,9 +1606,12 @@ function _openTaskDetailFromMonthPopover(taskId) {
     openTaskDetailPanel(taskId, false, true);
 }
 
-function closeMonthDayPopover() {
-    const wrapper = document.getElementById('month-day-popover-wrapper');
-    if (wrapper) wrapper.remove();
+// 关闭「当天」浮层。
+// immediate=true：立即移除，用于「换一天 / 翻月 / 切视图 / 打开添加任务弹窗」等属于
+//   「换内容或场景切换」的路径——退场动画在这些路径上会与随后的重渲染/新弹层打架。
+// 不带参：主动关闭（Esc / 点浮层外 / 关闭按钮），场景过渡动效开启且非窄屏时播放退场动画。
+function closeMonthDayPopover(immediate) {
+    // 监听与详情栏收尾立即执行，不等待退场动画（否则退场期间 Esc/外部点击会重复触发）
     if (_monthPopoverEscHandler) {
         document.removeEventListener('keydown', _monthPopoverEscHandler, true);
         _monthPopoverEscHandler = null;
@@ -1448,6 +1624,25 @@ function closeMonthDayPopover() {
     if (currentDetailTaskId) {
         closeTaskDetailPanel();
     }
+
+    const wrapper = document.getElementById('month-day-popover-wrapper');
+    if (!wrapper) { _fxDayPopoverClearTimer(); return; }
+    // 已在退场中（快速连按 Esc/关闭）：保持原计时，避免重复挂动画
+    if (!immediate && wrapper.classList.contains('fx-day-out')) return;
+
+    if (immediate || !_fxDayPopoverEnabled()) {
+        _fxDayPopoverClearTimer();
+        wrapper.remove();
+        return;
+    }
+    // 主动关闭：摘下入场类 → 播放退场，结束后再真正移除（退场期间点击穿透，见 CSS）
+    wrapper.classList.remove('fx-day-in');
+    wrapper.classList.add('fx-day-out');
+    _fxDayPopoverClearTimer();
+    _fxDayPopoverTimer = setTimeout(() => {
+        _fxDayPopoverTimer = null;
+        wrapper.remove();
+    }, FX_DAY_POPOVER.out + 60);
 }
 
 // ==================== 任务完成动效预案（月视图网格 / 周视图全天区） ====================
@@ -1568,7 +1763,8 @@ function renderMonthViewMobile(container) {
     const today = new Date();
     const sel = _mobileMonthSelectedDate;
     const selStr = formatDate(sel);
-    const selTasks = getTasksForDate(sel, { includeCompleted: getMonthConfig().showCompleted !== false }).sort((a, b) => {
+    const selTasks = getTasksForDate(sel, { includeCompleted: getMonthConfig().showCompleted !== false, includeRecurringGhosts: true, recurringGhostView: 'month' }).sort((a, b) => {
+        if (a._projected !== b._projected) return a._projected ? 1 : -1;
         if (a.completed !== b.completed) return a.completed ? 1 : -1;
         return (a.originalOrder || 0) - (b.originalOrder || 0);
     });
@@ -1578,7 +1774,7 @@ function renderMonthViewMobile(container) {
     // 日历网格 HTML
     const gridHtml = days.map(date => {
         const dateStr = formatDate(date);
-        const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false });
+        const dayTasks = getTasksForDate(date, { includeCompleted: getMonthConfig().showCompleted !== false, includeRecurringGhosts: true, recurringGhostView: 'month' });
         const isToday = isSameDay(date, today);
         const isSelected = isSameDay(date, sel);
         const isCurrentMonth = date.getMonth() === month;
@@ -1620,6 +1816,9 @@ function renderMonthViewMobile(container) {
         const list = lists.find(l => l.id === task.listId);
         const startTime = task.startTime ? new Date(task.startTime) : null;
         const timeStr = task.isAllDay ? '' : (startTime ? `${startTime.getHours().toString().padStart(2,'0')}:${startTime.getMinutes().toString().padStart(2,'0')}` : '');
+        if (task._projected && typeof renderRecurringGhostScheduleHtml === 'function') {
+            return renderRecurringGhostScheduleHtml(task, timeStr || '全天', { simple: true });
+        }
         const isOverdue = isTaskOverdue(task);
         const titleCls = task.completed ? 'text-theme-secondary' : (isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary');
         const checked = task.completed ? 'checked' : '';
@@ -1708,7 +1907,7 @@ function isSameMonth(d1, d2) {
 }
 
 function navigateMonth(direction) {
-    closeMonthDayPopover();
+    closeMonthDayPopover(true);
     // 修复日期溢出：直接 setMonth 会在 "31日 + 目标月无31天" 时跳到下下月
     // （如 1月31日 +1 → 3月3日）。改为先计算目标月的天数上限，
     // 取 min(原日期, 目标月天数) 作为目标日期，避免溢出。

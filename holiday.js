@@ -1254,14 +1254,6 @@ function exportHolidayJSON() {
     showToast('已导出节假日', 'success');
 }
 
-// 导入 JSON
-function importHolidayJSON() {
-    const input = document.getElementById('holiday-import-file');
-    if (input) {
-        input.value = '';
-        input.click();
-    }
-}
 
 // 处理导入文件
 function handleHolidayImport(file) {

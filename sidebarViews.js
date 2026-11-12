@@ -36,21 +36,6 @@ document.addEventListener('click', function(e) {
 // ==================== 清单树（多级层级）辅助 ====================
 function getList(id) { return lists.find(l => l.id === id); }
 
-// 选中外部日历订阅筛选视图（3.4）：按 extSourceId 跨清单聚合；所有主视图均支持聚合（含看板）
-function selectExtSourceView(subId) {
-    const _supported = ['task', 'schedule', 'week', 'month', 'quadrant', 'kanban'];
-    if (_supported.indexOf(currentView) === -1 && typeof userSwitchView === 'function') {
-        userSwitchView('task');
-    }
-    // FR-01-4：筛选上下文变化后撤销栈失效
-    if (typeof clearUndoStack === 'function') clearUndoStack();
-    currentListId = '__extsrc__:' + subId;
-    currentTagIds = [];
-    currentFilter = '';
-    currentFilterId = null;
-    renderView();
-    updateSidebarHighlight();
-}
 
 // 将 lists 重排为树的前序遍历，保证父节点总在其子节点之前；
 // 同时把 parentId 指向不存在节点的孤儿回退顶层，避免悬空引用。
@@ -168,9 +153,16 @@ function appendListGap(parentEl, parentId, index) {
 
 // 行内名称输入框：编辑态下替换行内名称文本为 input（方案A：名称原地编辑，其余控件留在下方表单）
 // saveCall / cancelCall 为内联 JS 表达式（如 saveListInput() / editingListId=null; renderLists();）
-function inlineNameInput(id, value, saveCall, cancelCall) {
+function inlineNameInput(id, value, saveCall, cancelCall, options = {}) {
     // onblur 时先确认自身仍存在（避免 Enter 保存后元素被移除再次触发 blur 导致二次保存报错）
-    return `<input id="${id}" type="text" value="${escapeHtml(value)}" maxlength="20" class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault(); ${saveCall}} else if(event.key==='Escape'){event.preventDefault(); ${cancelCall}}" onblur="if(document.getElementById('${id}') && !(event.relatedTarget && event.relatedTarget.closest('[data-edit-form]'))){ ${saveCall} }">`;
+    // options.blurSave === false：关闭失焦自动提交。用于带独立配置面板的编辑态（过滤器），
+    //   配置面板里的清单/标签胶囊、单选框等点击会让名称框失焦，若自动提交会误触发整份保存；
+    //   此类表单统一由底部「保存」按钮提交，Enter 仍作为明确的提交动作保留。
+    // options.stopClick === true：阻止点击输入框冒泡到外层侧边栏按钮（避免误触发筛选并重渲染表单）。
+    const blurAttr = options.blurSave === false ? '' :
+        ` onblur="if(document.getElementById('${id}') && !(event.relatedTarget && event.relatedTarget.closest('[data-edit-form]'))){ ${saveCall} }"`;
+    const clickAttr = options.stopClick === true ? ' onclick="event.stopPropagation()"' : '';
+    return `<input id="${id}" type="text" value="${escapeHtml(value)}" maxlength="20" class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm"${clickAttr} onkeydown="if(event.key==='Enter'){event.preventDefault(); ${saveCall}} else if(event.key==='Escape'){event.preventDefault(); ${cancelCall}}"${blurAttr}>`;
 }
 
 function renderListNode(node, depth, container, uncompletedMap) {
@@ -767,7 +759,7 @@ function renderArchivedTaskCard(task) {
                     ${task.important ? '<i class="fas fa-star text-yellow-500 text-sm ml-1"></i>' : ''}
                     ${task.urgent ? '<i class="fas fa-fire text-red-500 text-sm ml-1"></i>' : ''}
                 </div>
-                ${renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${task.notes}</div>` : '')}
+                ${(typeof renderTaskDetailsBlock === 'function') ? renderTaskDetailsBlock(task, { maxLines: 4 }) : ''}
             </div>
         </div>
     `;
@@ -1361,19 +1353,6 @@ function toggleTagFilter(tagId) {
     updateSidebarHighlight();
 }
 
-// 清除标签筛选
-function clearTagFilter() {
-    // FR-01-4：筛选上下文变化后撤销栈失效
-    if (typeof clearUndoStack === 'function') clearUndoStack();
-    currentTagIds = [];
-    currentFilterId = null;
-    _saveFilterState();
-    renderView();
-    renderLists();
-    renderTags();
-    renderFilters();
-    updateSidebarHighlight();
-}
 
 // ==================== 过滤器渲染与筛选 ====================
 
@@ -1406,7 +1385,7 @@ function renderFilters() {
         btn.id = `sidebar-filter-${filter.id}`;
         btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'sidebar-active' : ''}`;
         const filterNameHtml = editingFilterId === filter.id
-            ? inlineNameInput('new-filter-name', filter.name || '', 'saveFilterInput()', 'editingFilterId=null; renderFilters();')
+            ? inlineNameInput('new-filter-name', filter.name || '', 'saveFilterInput()', 'editingFilterId=null; renderFilters();', { blurSave: false, stopClick: true })
             : `<span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer" ondblclick="event.stopPropagation(); editFilter('${filter.id}')" title="双击编辑名称">${filter.name}</span>`;
         btn.innerHTML = `
             <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')"></span>
@@ -1536,6 +1515,10 @@ function createFilterEditForm(existingFilter) {
 
     form.innerHTML = `
         <input type="hidden" id="edit-filter-id" value="${existingFilter ? existingFilter.id : ''}">
+        ${existingFilter ? '' : `<div class="flex items-center gap-2 mb-3">
+            <label class="text-xs text-theme-muted flex-shrink-0">名称</label>
+            <input id="new-filter-name" type="text" value="" maxlength="20" placeholder="过滤器名称" class="flex-1 min-w-0 px-2 py-1 rounded border border-accent bg-theme-secondary text-theme-primary text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveFilterInput()} else if(event.key==='Escape'){event.preventDefault(); hideFilterInput()}">
+        </div>`}
         <div class="flex gap-2 mb-3">
             <input type="color" id="new-filter-color" value="${existingFilter ? existingFilter.color : '#8b5cf6'}" class="w-8 h-8 rounded cursor-pointer flex-shrink-0">
             <div class="flex-1">
@@ -1569,25 +1552,22 @@ function createFilterEditForm(existingFilter) {
         </div>
         <div class="mb-2">
             <label class="text-xs text-theme-muted block mb-1">清单</label>
-            <div class="flex flex-wrap gap-1">
-                ${activeLists.map(list => `
-                    <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-theme-secondary transition ${c.listIds && c.listIds.includes(list.id) ? 'accent-chip-strong' : 'text-theme-secondary'}">
-                        <input type="checkbox" class="filter-list-check hidden" value="${list.id}" ${c.listIds && c.listIds.includes(list.id) ? 'checked' : ''}>
-                        <span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>
-                        ${list.name}
-                    </label>
-                `).join('')}
+            <div class="flex flex-wrap gap-1.5 filter-pill-group" data-kind="list">
+                ${activeLists.length > 0 ? activeLists.map(list => {
+                    const color = list.color || '#6b7280';
+                    const on = !!(c.listIds && c.listIds.includes(list.id));
+                    return `<button type="button" class="filter-pill ${on ? 'detail-tag-pill-selected' : 'detail-tag-pill'}" data-id="${list.id}" aria-pressed="${on}" style="--tag-color:${color};${getTagSolidStyle(color)}" title="${on ? '已选中，点击取消' : '点击选择'}">${escapeHtml(list.name || '')}</button>`;
+                }).join('') : '<span class="text-xs text-theme-muted">暂无清单</span>'}
             </div>
         </div>
         <div class="mb-2">
             <label class="text-xs text-theme-muted block mb-1">标签</label>
-            <div class="flex flex-wrap gap-1">
-                ${allTags.length > 0 ? allTags.map(tag => `
-                    <label class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-theme-secondary transition ${c.tagIds && c.tagIds.includes(tag.id) ? 'text-white' : 'text-theme-secondary'}" style="${c.tagIds && c.tagIds.includes(tag.id) ? `background-color: ${tag.color}` : ''}">
-                        <input type="checkbox" class="filter-tag-check hidden" value="${tag.id}" ${c.tagIds && c.tagIds.includes(tag.id) ? 'checked' : ''}>
-                        ${tag.name}
-                    </label>
-                `).join('') : '<span class="text-xs text-theme-muted">暂无标签</span>'}
+            <div class="flex flex-wrap gap-1.5 filter-pill-group" data-kind="tag">
+                ${allTags.length > 0 ? allTags.map(tag => {
+                    const color = tag.color || '#6b7280';
+                    const on = !!(c.tagIds && c.tagIds.includes(tag.id));
+                    return `<button type="button" class="filter-pill ${on ? 'detail-tag-pill-selected' : 'detail-tag-pill'}" data-id="${tag.id}" aria-pressed="${on}" style="--tag-color:${color};${getTagSolidStyle(color)}" title="${on ? '已选中，点击取消' : '点击选择'}">${escapeHtml(tag.name || '')}</button>`;
+                }).join('') : '<span class="text-xs text-theme-muted">暂无标签</span>'}
             </div>
         </div>
         <div class="mb-3">
@@ -1615,44 +1595,37 @@ function createFilterEditForm(existingFilter) {
                 </label>
             </div>
         </div>
-        <div class="flex gap-2">
-            <button onclick="saveFilterInput()" class="flex-1 px-3 py-1.5 bg-accent text-white rounded-lg hover:bg-accent-hover text-sm">${existingFilter ? '保存' : '添加'}</button>
-            <button onclick="hideFilterInput()" class="px-3 py-1.5 border border-theme rounded-lg hover:bg-theme-tertiary text-sm">取消</button>
+        <div class="flex items-center gap-2">
+            ${existingFilter ? `
+                <button onclick="deleteFilterInput()" id="filter-delete-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border ${filterDeleteConfirming === existingFilter.id ? 'bg-red-600 text-white border-red-600' : 'border-red-500 text-red-500 hover:bg-red-50'} transition" title="${filterDeleteConfirming === existingFilter.id ? '确认删除' : '删除过滤器'}">
+                    <i class="fas fa-trash text-sm"></i>
+                </button>
+            ` : ''}
+            <div class="flex-1"></div>
+            <button onclick="saveFilterInput()" id="filter-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white hover:bg-accent-hover transition" title="${existingFilter ? '保存' : '添加'}">
+                <i class="fas fa-check text-sm"></i>
+            </button>
+            <button onclick="hideFilterInput()" class="flex items-center justify-center w-8 h-8 rounded-lg border border-theme text-theme-secondary hover:bg-theme-secondary transition" title="取消">
+                <i class="fas fa-times text-sm"></i>
+            </button>
         </div>
-        ${existingFilter ? `<button onclick="deleteFilterInput()" id="filter-delete-inline-btn" class="w-full mt-2 px-3 py-1.5 border border-red-500 text-red-500 rounded-lg hover:bg-red-50 transition text-sm">删除过滤器</button>` : ''}
     `;
 
-    // 清单标签点击切换样式
-    setTimeout(() => {
-        form.querySelectorAll('.filter-list-check').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const label = cb.closest('label');
-                if (cb.checked) {
-                    label.classList.add('accent-chip-strong');
-                    label.classList.remove('text-theme-secondary');
-                } else {
-                    label.classList.remove('accent-chip-strong');
-                    label.classList.add('text-theme-secondary');
-                }
-            });
+    // 清单 / 标签胶囊：点击只切换本地选中态（可多选、可取消），不写盘、不弹提示；
+    // 整份配置统一由表单底部「保存」按钮调用 saveFilterInput() 提交。
+    // 事件在此直接绑定（form.innerHTML 已生成），避免延时窗口内点击丢失。
+    form.querySelectorAll('.filter-pill').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const on = btn.classList.toggle('detail-tag-pill-selected');
+            btn.classList.toggle('detail-tag-pill', !on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            btn.title = on ? '已选中，点击取消' : '点击选择';
         });
-        form.querySelectorAll('.filter-tag-check').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const label = cb.closest('label');
-                const tagId = cb.value;
-                const tag = (settings.tags || []).find(t => t.id === tagId);
-                if (cb.checked && tag) {
-                    label.style.backgroundColor = tag.color;
-                    label.classList.add('text-white');
-                    label.classList.remove('text-theme-secondary');
-                } else {
-                    label.style.backgroundColor = '';
-                    label.classList.remove('text-white');
-                    label.classList.add('text-theme-secondary');
-                }
-            });
-        });
+    });
 
+    // 名称输入框需等 form 插入文档后才能聚焦
+    setTimeout(() => {
         const nameInput = document.getElementById('new-filter-name');
         if (nameInput) nameInput.focus();
     }, 50);
@@ -1743,17 +1716,15 @@ function saveFilterInput() {
         }
     }
 
-    // 收集清单选择
-    const listIds = [];
-    document.querySelectorAll('.filter-list-check:checked').forEach(cb => {
-        listIds.push(cb.value);
-    });
-
-    // 收集标签选择
-    const tagIds = [];
-    document.querySelectorAll('.filter-tag-check:checked').forEach(cb => {
-        tagIds.push(cb.value);
-    });
+    // 收集清单 / 标签选择：读取胶囊面板的选中态（支持多选），不再依赖 checkbox
+    const editForm = document.querySelector('[data-edit-form="filter"]');
+    const collectPills = (kind) => {
+        if (!editForm) return [];
+        return Array.from(editForm.querySelectorAll(`.filter-pill-group[data-kind="${kind}"] .detail-tag-pill-selected`))
+            .map(btn => btn.dataset.id);
+    };
+    const listIds = collectPills('list');
+    const tagIds = collectPills('tag');
 
     // 收集优先级
     const importantRadio = document.querySelector('input[name="filter-important"]:checked');
@@ -1830,17 +1801,23 @@ function deleteFilterInput() {
     filterDeleteConfirming = filterId;
     const btn = document.getElementById('filter-delete-inline-btn');
     if (btn) {
-        btn.textContent = '确认删除';
-        btn.classList.add('bg-red-600', 'text-white', 'border-red-600');
-        btn.classList.remove('text-red-500', 'border-red-500', 'hover:bg-red-50');
+        btn.classList.add('bg-red-600', 'border-red-600', 'text-white');
+        btn.classList.remove('border-red-500', 'text-red-500', 'hover:bg-red-50');
+        btn.title = '确认删除';
     }
 
     setTimeout(() => {
         filterDeleteConfirming = null;
         if (btn) {
-            btn.textContent = '删除过滤器';
-            btn.classList.remove('bg-red-600', 'text-white', 'border-red-600');
-            btn.classList.add('text-red-500', 'border-red-500', 'hover:bg-red-50');
+            btn.classList.remove('bg-red-600', 'border-red-600', 'text-white');
+            btn.classList.add('border-red-500', 'text-red-500', 'hover:bg-red-50');
+            btn.title = '删除过滤器';
         }
     }, 3000);
 }
+
+// 统一跨天事件：侧边栏「今日 / 最近3天 / 未来7天」固定项计数按 getDateBounds() 计算，
+// 原来只在数据变更时更新，挂机过夜后会停在昨天，需随日期变化重算。
+document.addEventListener('tacklist:daychange', function () {
+    if (typeof updateSidebarCounts === 'function') updateSidebarCounts();
+});

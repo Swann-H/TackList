@@ -121,6 +121,7 @@ function getTaskTemplateRepeatLabel(repeat) {
     if (type === 'weeklyFirstWorkday') return '每周首个工作日';
     if (type === 'weeklyLastWorkday') return '工作周期最后一个工作日';
     if (type === 'monthly') {
+        if (repeat.lunar) return '每月（农历）';
         if (repeat.dayOfMonth) return '每月' + repeat.dayOfMonth + '号';
         return '每月';
     }
@@ -128,6 +129,7 @@ function getTaskTemplateRepeatLabel(repeat) {
     if (type === 'monthlyLastWorkday') return '每月最后一个工作日';
     if (type === 'yearly') {
         if (repeat.beforeHoliday) return '每个节假日前一天';
+        if (repeat.lunar) return '每年（农历）';
         if (repeat.month && repeat.day) return '每年' + repeat.month + '月' + repeat.day + '日';
         return '每年';
     }
@@ -2616,6 +2618,9 @@ function _taskTemplatePanelHtml() {
                                 <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
                                     <input type="radio" name="tpl-panel-repeat" value="monthly" class="tpl-repeat-option" onchange="onTaskTemplatePanelRepeatChange()"> 每月
                                 </label>
+                                <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                    <input type="radio" name="tpl-panel-repeat" value="monthlyLunar" class="tpl-repeat-option" data-repeat-props='{"type":"monthly","lunar":true}' onchange="onTaskTemplatePanelRepeatChange()"> 每月（农历）
+                                </label>
                                 <div class="border-t border-theme my-1"></div>
                                 <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
                                     <input type="radio" name="tpl-panel-repeat" value="monthlyFirstWorkday" class="tpl-repeat-option" onchange="onTaskTemplatePanelRepeatChange()"> 每月首个工作日
@@ -2634,6 +2639,9 @@ function _taskTemplatePanelHtml() {
                                 <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
                                     <input type="radio" name="tpl-panel-repeat" value="yearly" class="tpl-repeat-option" onchange="onTaskTemplatePanelRepeatChange()"> 每年
                                 </label>
+                                <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
+                                    <input type="radio" name="tpl-panel-repeat" value="yearlyLunar" class="tpl-repeat-option" data-repeat-props='{"type":"yearly","lunar":true}' onchange="onTaskTemplatePanelRepeatChange()"> 每年（农历）
+                                </label>
                                 <div class="border-t border-theme my-1"></div>
                                 <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">
                                     <input type="radio" name="tpl-panel-repeat" value="yearlyBeforeHoliday" class="tpl-repeat-option" data-repeat-props='{"type":"yearly","beforeHoliday":true}' onchange="onTaskTemplatePanelRepeatChange()"> 每个节假日前一天
@@ -2644,7 +2652,7 @@ function _taskTemplatePanelHtml() {
                             <input type="radio" name="tpl-panel-repeat" value="custom" class="tpl-repeat-option" onchange="onTaskTemplatePanelRepeatChange()"> 自定义
                         </label>
                         <div id="tpl-panel-custom-repeat-container" class="hidden space-y-2 pl-5">
-                            <input type="number" id="tpl-panel-custom-repeat-interval" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="间隔" onchange="onTaskTemplatePanelRepeatChange()">
+                            <input type="number" id="tpl-panel-custom-repeat-interval" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="间隔" min="1" step="1" inputmode="numeric" onchange="onTaskTemplatePanelRepeatChange()">
                             <select id="tpl-panel-custom-repeat-unit" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" onchange="onTaskTemplatePanelRepeatChange()">
                                 <option value="days">天</option>
                                 <option value="weeks">周</option>
@@ -2954,6 +2962,8 @@ function _tplPanelInitRepeatPicker() {
         if (repeat.type === 'custom') value = 'custom';
         else if (repeat.type === 'daily' && repeat.workdayOnly) value = 'dailyWorkday';
         else if (repeat.type === 'dailyWorkday') value = 'dailyWorkday';
+        else if (repeat.type === 'monthly' && repeat.lunar) value = 'monthlyLunar';
+        else if (repeat.type === 'yearly' && repeat.lunar) value = 'yearlyLunar';
         else if (repeat.type === 'yearly' && repeat.beforeHoliday) value = 'yearlyBeforeHoliday';
         else if (repeat.type === 'yearlyBeforeHoliday') value = 'yearlyBeforeHoliday';
         else value = repeat.type;
@@ -2963,7 +2973,10 @@ function _tplPanelInitRepeatPicker() {
         if (customBox) customBox.classList.remove('hidden');
         const interval = document.getElementById('tpl-panel-custom-repeat-interval');
         const unit = document.getElementById('tpl-panel-custom-repeat-unit');
-        if (interval) interval.value = repeat.interval || '';
+        if (interval) {
+            const storedInterval = parsePositiveInt(repeat.interval);
+            interval.value = storedInterval > 0 ? String(storedInterval) : '';
+        }
         if (unit) unit.value = repeat.unit || 'days';
     }
     if (!target) target = picker.querySelector('.tpl-repeat-option[value=""]');
@@ -2992,9 +3005,9 @@ function _tplPanelRepeatValueFromForm() {
     const modeEl = picker.querySelector('.tpl-repeat-mode-option:checked');
     const repeatMode = modeEl ? modeEl.value : 'startTime';
     if (selected.value === 'custom') {
-        const interval = parseInt(document.getElementById('tpl-panel-custom-repeat-interval').value, 10);
+        const interval = parsePositiveInt(document.getElementById('tpl-panel-custom-repeat-interval').value);
         const unit = document.getElementById('tpl-panel-custom-repeat-unit').value;
-        if (!interval || interval <= 0) return null;
+        if (interval <= 0) return null;
         return { type: 'custom', interval: interval, unit: unit, repeatMode: repeatMode };
     }
     const propsAttr = selected.getAttribute('data-repeat-props');
@@ -3007,13 +3020,12 @@ function _tplPanelRepeatValueFromForm() {
     }
     value.repeatMode = repeatMode;
     const original = _tplPanelState ? _tplPanelState.originalRepeat : null;
-    if (original && original.type === value.type) {
+    if (original && original.type === value.type && !!original.lunar === !!value.lunar) {
         if (value.type === 'weekly' && original.dayOfWeek !== undefined) value.dayOfWeek = original.dayOfWeek;
-        if (value.type === 'monthly' && original.dayOfMonth !== undefined) value.dayOfMonth = original.dayOfMonth;
-        if (value.type === 'yearly') {
+        if (value.type === 'monthly' && !value.lunar && original.dayOfMonth !== undefined) value.dayOfMonth = original.dayOfMonth;
+        if (value.type === 'yearly' && !value.lunar && !value.beforeHoliday) {
             if (original.month !== undefined) value.month = original.month;
             if (original.day !== undefined) value.day = original.day;
-            if (original.beforeHoliday !== undefined) value.beforeHoliday = original.beforeHoliday;
         }
     }
     return value;
@@ -3025,6 +3037,8 @@ function _tplPanelRefreshRepeatText(scheduleSave) {
     const customBox = document.getElementById('tpl-panel-custom-repeat-container');
     const selected = picker ? picker.querySelector('.tpl-repeat-option:checked') : null;
     if (customBox) customBox.classList.toggle('hidden', !selected || selected.value !== 'custom');
+    // 自定义间隔只允许正整数：输入即纠正（负数 / 0 / 小数 / 非数字清空），静默无提示
+    normalizePositiveIntInput(document.getElementById('tpl-panel-custom-repeat-interval'));
     if (scheduleSave !== false) {
         _tplPanelState.draft.task.repeat = _tplPanelRepeatValueFromForm();
     }
@@ -3990,17 +4004,20 @@ if (!window.__tplSubtaskDragBound) {
 // ==================== 详情面板入口状态 ====================
 
 function updateDetailTemplateEntry(task) {
-    const btn = document.getElementById('detail-save-template-btn');
+    const btn = document.getElementById('detail-more-template-item');
     if (!btn) return;
     const readonly = (typeof detailReadOnly !== 'undefined' && detailReadOnly);
     const hidden = !task || task.extSourceId || readonly;
     btn.style.display = hidden ? 'none' : '';
+    if (typeof refreshDetailMoreVisibility === 'function') refreshDetailMoreVisibility();
     if (hidden) return;
     const tpl = task.templateId ? getTaskTemplateById(task.templateId) : null;
     const label = tpl ? '更新模板「' + tpl.name + '」' : '存为模板';
     btn.title = label;
     btn.setAttribute('aria-label', label);
     btn.classList.toggle('is-linked', !!tpl);
+    const labelEl = btn.querySelector('.detail-more-label');
+    if (labelEl) labelEl.textContent = label;
 }
 
 // ==================== 内置预置模板 ====================

@@ -285,7 +285,7 @@ function _observeAttachmentImages(root) {
                 img.style.opacity = '1';
                 const ph = document.createElement('div');
                 ph.className = 'w-full h-full flex items-center justify-center text-theme-muted';
-                ph.innerHTML = '<i class="fas fa-image-slash text-lg"></i>';
+                ph.innerHTML = '<i class="fas fa-image text-lg"></i>';
                 img.parentNode.replaceChild(ph, img);
             };
             img.src = img.dataset.attSrc;

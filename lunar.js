@@ -75,9 +75,10 @@ var LunarCalendar = (function() {
 
     function solarToLunar(year, month, day) {
         if (year < 1900 || year > 2100) return null;
-        var baseDate = new Date(1900, 0, 31);
-        var objDate = new Date(year, month - 1, day);
-        var offset = Math.floor((objDate - baseDate) / 86400000);
+        // 用 UTC 日历日做差：历史时区偏移/夏令时会让本地时间差出现 23/25 小时，floor 后整体差一天
+        var baseDate = Date.UTC(1900, 0, 31);
+        var objDate = Date.UTC(year, month - 1, day);
+        var offset = Math.round((objDate - baseDate) / 86400000);
 
         var i, temp = 0;
         for (i = 1900; i < 2101 && offset > 0; i++) {
@@ -143,6 +144,49 @@ var LunarCalendar = (function() {
         };
     }
 
+    /**
+     * 农历 → 公历（返回本地零点 Date）。
+     * 该农历日期不存在时返回 null：小月没有三十、年份没有对应闰月。
+     */
+    function lunarToSolar(lYear, lMonth, lDay, isLeap) {
+        if (lYear < 1900 || lYear > 2100) return null;
+        if (lMonth < 1 || lMonth > 12) return null;
+        var leap = leapMonth(lYear);
+        if (isLeap && leap !== lMonth) return null;
+        var daysInMonth = isLeap ? leapDays(lYear) : monthDays(lYear, lMonth);
+        if (lDay < 1 || lDay > daysInMonth) return null;
+
+        var offset = 0;
+        for (var y = 1900; y < lYear; y++) {
+            offset += lYearDays(y);
+        }
+        for (var m = 1; m < lMonth; m++) {
+            offset += monthDays(lYear, m);
+            if (leap === m) offset += leapDays(lYear);
+        }
+        if (isLeap) offset += monthDays(lYear, lMonth);
+        offset += lDay - 1;
+        return new Date(1900, 0, 31 + offset);
+    }
+
+    // 农历月序的下一个月（正常月之后紧跟同月号的闰月）
+    function nextLunarMonth(lYear, lMonth, isLeap) {
+        if (!isLeap && leapMonth(lYear) === lMonth) {
+            return { lYear: lYear, lMonth: lMonth, isLeap: true };
+        }
+        if (lMonth >= 12) return { lYear: lYear + 1, lMonth: 1, isLeap: false };
+        return { lYear: lYear, lMonth: lMonth + 1, isLeap: false };
+    }
+
+    // 原始日名/月名：day 为 1 时仍返回「初一」，不受 lDayName 的「初一显示为月名」规则影响
+    function getDayName(lDay) {
+        return dayNames[lDay - 1] || '';
+    }
+
+    function getMonthName(lMonth) {
+        return monthNames[lMonth - 1] || '';
+    }
+
     function getSolarTerms(year) {
         if (_solarTermsCache[year]) return _solarTermsCache[year];
         var terms = {};
@@ -176,6 +220,10 @@ var LunarCalendar = (function() {
 
     return {
         solarToLunar: solarToLunar,
+        lunarToSolar: lunarToSolar,
+        nextLunarMonth: nextLunarMonth,
+        getDayName: getDayName,
+        getMonthName: getMonthName,
         getSolarTerms: getSolarTerms,
         getLunarFestival: getLunarFestival
     };

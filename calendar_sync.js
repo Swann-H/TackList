@@ -326,10 +326,6 @@ function requestCancelCalendarSubEdit(key) {
     renderCalendarSubscriptions();
 }
 
-// 兼容旧调用（无参）：按当前编辑对象推导 key
-function cancelCalendarSubEdit() {
-    requestCancelCalendarSubEdit(calSyncDraft ? 'draft' : (calSyncEditingId || 'draft'));
-}
 
 // 保存编辑（保存按钮 / Enter）
 function saveCalendarSubEdit(id) {
@@ -588,24 +584,6 @@ function toggleCalendarSubscription(id, enabled) {
     if (sub) { sub.enabled = enabled; saveData(); updateCalendarSyncBtnVisibility(); if (typeof renderLists === 'function') renderLists(); }
 }
 
-function updateCalendarSubscriptionField(id, field, value) {
-    const sub = _calSubs().find(s => s.id === id);
-    if (!sub) return;
-    value = (value || '').trim();
-    if (field === 'url') {
-        // webcal:// 自动改写提示（实际改写在后端）
-        sub[field] = value;
-    } else {
-        sub[field] = value;
-    }
-    saveData();
-    if (field === 'color') {
-        renderCalendarSubscriptions(); // 颜色变更需重绘色条
-        if (typeof renderLists === 'function') renderLists(); // 侧边栏圆点同步
-        if (typeof renderView === 'function') renderView();    // 任务视图色条同步
-    }
-    updateCalendarSyncBtnVisibility();
-}
 
 // inline 两次点击清空屏蔽名单
 function clearCalendarSubscriptionBlacklist(id) {

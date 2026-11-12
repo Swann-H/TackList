@@ -25,47 +25,58 @@
             clip-path: polygon(15px 0, 100% 0, 100% calc(100% - 15px), calc(100% - 15px) 100%, 0 100%, 0 15px);
             border-left: 4px solid #fbbf24;
             box-shadow: inset 0 0 20px rgba(251, 191, 36, 0.15), 0 10px 30px rgba(0,0,0,0.5);
+            will-change: transform, opacity;
             animation: ee-dash-in 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards,
-                       ee-breathe 3.5s ease-in-out 0.8s forwards,
                        ee-dash-out 0.7s cubic-bezier(0.55, 0.085, 0.68, 0.53) 5.3s forwards;
         }
 
-        /* 横向扫过的金色金属光泽 */
+        /* 停留时的金色呼吸：独立伪元素只改 opacity（合成层），避免逐帧改 box-shadow 触发重绘 */
+        .ee-toast::before {
+            content: '';
+            position: absolute; inset: 0;
+            box-shadow: inset 0 0 40px rgba(251, 191, 36, 0.4);
+            opacity: 0;
+            pointer-events: none;
+            animation: ee-breathe 3.5s ease-in-out 0.8s forwards;
+        }
+
+        /* 横向扫过的金色金属光泽：只改 transform，避免逐帧改 left 触发布局 */
         .ee-toast::after {
             content: '';
             position: absolute;
-            top: 0; left: -100px;
+            top: 0; left: 0;
             width: 60px; height: 100%;
             background: linear-gradient(90deg, transparent, rgba(251, 191, 36, 0.6), transparent);
-            transform: skewX(-30deg);
+            transform: translateX(-160px) skewX(-30deg);
+            will-change: transform;
             animation: ee-sweep-light 3s ease-in-out 0.5s infinite;
         }
 
-        /* 光速倾斜冲刺入场，带刹车回弹感 */
+        /* 光速倾斜冲刺入场，带刹车回弹感（不逐帧改 filter，避免滤镜重绘） */
         @keyframes ee-dash-in {
-            0% { opacity: 0; transform: translateX(100vw) skewX(-20deg); filter: blur(5px); }
-            60% { opacity: 1; transform: translateX(-15px) skewX(10deg); filter: blur(0); }
+            0% { opacity: 0; transform: translateX(100vw) skewX(-20deg); }
+            60% { opacity: 1; transform: translateX(-15px) skewX(10deg); }
             80% { transform: translateX(10px) skewX(-5deg); }
             100% { transform: translateX(0) skewX(0); }
         }
 
-        /* 停留时的金色呼吸发光 */
+        /* 停留时的金色呼吸发光（只改 opacity） */
         @keyframes ee-breathe {
-            0%, 100% { box-shadow: inset 0 0 20px rgba(251, 191, 36, 0.15), 0 10px 30px rgba(0,0,0,0.5); }
-            50% { box-shadow: inset 0 0 40px rgba(251, 191, 36, 0.4), 0 10px 30px rgba(251, 191, 36, 0.2); }
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
         }
 
-        /* 蓄力后光速倾斜冲刺出场 */
+        /* 蓄力后光速倾斜冲刺出场（不逐帧改 filter） */
         @keyframes ee-dash-out {
             0% { transform: translateX(0) skewX(0); opacity: 1; }
             20% { transform: translateX(20px) skewX(15deg); opacity: 1; }
-            100% { transform: translateX(-100vw) skewX(-30deg); opacity: 0; filter: blur(4px); }
+            100% { transform: translateX(-100vw) skewX(-30deg); opacity: 0; }
         }
 
-        /* 表面扫光效果 */
+        /* 表面扫光效果（transform 版） */
         @keyframes ee-sweep-light {
-            0% { left: -100px; }
-            50%, 100% { left: 150%; }
+            0% { transform: translateX(-160px) skewX(-30deg); }
+            50%, 100% { transform: translateX(520px) skewX(-30deg); }
         }
 
         /* 图标徽章：金色渐变底 + 发光 + 俏皮倾斜 */
@@ -84,8 +95,12 @@
         .ee-ripple-circle { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 50%; border: 3px solid #ff6b6b; box-shadow: 0 0 20px #ff6b6b, inset 0 0 10px #ff6b6b; animation: ee-ripple-anim 1.5s cubic-bezier(0.1, 0.8, 0.3, 1) forwards; opacity: 0; }
         @keyframes ee-ripple-anim { 0% { width: 100%; height: 100%; opacity: 0.8; border-width: 4px; } 100% { width: 220%; height: 220%; opacity: 0; border-width: 0px; } }
 
-        /* 统一的全屏特效画布 */
+        /* 统一的全屏特效画布（供本次保留的全屏类彩蛋使用，坐标基于视口尺寸） */
         #ee-canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9998; }
+
+        /* 锚点局部特效画布：尺寸按特效动态设置，只覆盖操作点邻域，避免整屏逐帧重绘。
+           与全屏画布物理隔离，互不影响坐标与层级；播完即 display:none 停止合成。 */
+        #ee-local-canvas { position: fixed; top: 0; left: 0; display: none; pointer-events: none; z-index: 9998; }
 
         /* 心流极光效果（已废弃，改用Canvas实现） */
         .ee-aurora-glow {
@@ -193,8 +208,9 @@ function ee_pulseRow(taskId, sourceEl) {
 }
 
 // ==================== 性能分级 ====================
-// 0 = 不播 canvas 特效（仅 toast）：系统级「减弱动态效果」
-// 1 = 低配档：核心数 ≤4 或内存 ≤4GB —— 粒子约减半、时长 -30%、禁用 lighter 混合与 shadowBlur
+// 0 = 极简档：系统级「减弱动态效果」—— 局部彩蛋仍播（8 粒礼花 / 1 环水波、无旋转无重力、
+//     0.9s 淡出），保证「不只剩横幅」；全屏类彩蛋仍跳过，尊重系统级减弱动态设置
+// 1 = 低配档：核心数 ≤4 或内存 ≤4GB —— 粒子减半、画布缩小、时长 -30%、关闭柔光
 // 2 = 完整档
 // 注意：smoothAnimations 是「平滑过渡动画」开关（视图过渡/塌陷类 fx），
 // 彩蛋自有 easterEggEnabled 开关，此处不跨界联动，保证默认体验不变
@@ -340,6 +356,133 @@ function ee_animate() {
     ee_animId = requestAnimationFrame(ee_animate);
 }
 
+// ==================== 锚点局部画布引擎（首战告捷 / 清空禅意 专用） ====================
+// 与上面的全屏引擎完全隔离：全屏类彩蛋（落日归山 / 心流极光 / 坐忘无我等）继续用
+// #ee-canvas + ee_particles，本次不改；局部彩蛋改用物理尺寸很小的 #ee-local-canvas，
+// 每帧只 clearRect 小画布，UI 主体与满屏毛玻璃层不再被逐帧带脏。
+//
+// 坐标约定：粒子一律使用「画布局部坐标」，(0,0) 是画布左上角；ee_localStart 把锚点在
+// 画布内的实际位置记为 ee_localOrigin（画布贴边钳制后仍精确对齐勾选框）。
+// 时间约定：update(dt) 接收以 60fps 为 1 的时间步长，掉帧时按 dt 补时，
+// 不会像固定帧步那样把 1.2s 的动画拖成 3s。
+let ee_localCanvas, ee_localCtx, ee_localParticles = [], ee_localAnimId = null;
+let ee_localLastTs = 0, ee_localSlowFrames = 0, ee_localDegradeCount = 0;
+let ee_localOrigin = { x: 0, y: 0 }, ee_localSize = { w: 0, h: 0 };
+
+// 三档配置：任何档位都保留可见粒子 / 涟漪，最低档也绝不退化成「只剩横幅」
+function ee_localTierConfig() {
+    const tier = ee_getFxTier();
+    if (tier === 0) return { tier: 0, confetti: 8, ripples: 1, motes: 2, maxR: 70,
+        cw: 240, ch: 180, zw: 200, zh: 200, confettiMs: 900, zenMs: 900,
+        rotate: false, glow: false, dpr: 1 };
+    if (tier === 1) return { tier: 1, confetti: 16, ripples: 2, motes: 4, maxR: 90,
+        cw: 320, ch: 240, zw: 240, zh: 240, confettiMs: 900, zenMs: 1300,
+        rotate: true, glow: false, dpr: 1 };
+    return { tier: 2, confetti: 32, ripples: 3, motes: 6, maxR: 120,
+        cw: 480, ch: 360, zw: 320, zh: 320, confettiMs: 1200, zenMs: 1800,
+        rotate: true, glow: true, dpr: Math.min(window.devicePixelRatio || 1, 2) };
+}
+
+function ee_localStart(anchor, w, h, dpr) {
+    if (!ee_localCanvas) {
+        ee_localCanvas = document.createElement('canvas');
+        ee_localCanvas.id = 'ee-local-canvas';
+        document.body.appendChild(ee_localCanvas);
+        ee_localCtx = ee_localCanvas.getContext('2d');
+    }
+    // 上一批仍在播放时先停掉循环（队列串行，正常不会走到这里，仅作防御）
+    if (ee_localAnimId !== null) {
+        cancelAnimationFrame(ee_localAnimId);
+        ee_localAnimId = null;
+    }
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const ax = (anchor && typeof anchor.x === 'number') ? anchor.x : vw / 2;
+    const ay = (anchor && typeof anchor.y === 'number') ? anchor.y : vh * 0.35;
+    w = Math.max(80, Math.min(w, vw));
+    h = Math.max(80, Math.min(h, vh));
+    const left = Math.max(0, Math.min(ax - w / 2, vw - w));
+    const top = Math.max(0, Math.min(ay - h / 2, vh - h));
+    ee_localSize = { w: w, h: h };
+    ee_localOrigin = { x: ax - left, y: ay - top };
+    ee_localCanvas.style.cssText = 'position:fixed;left:' + left + 'px;top:' + top + 'px;width:' + w +
+        'px;height:' + h + 'px;pointer-events:none;z-index:9998;';
+    // 上一轮播完会被置为 none，这里显式恢复，不依赖 cssText 的解析
+    ee_localCanvas.style.display = 'block';
+    ee_localCanvas.width = Math.round(w * dpr);
+    ee_localCanvas.height = Math.round(h * dpr);
+    ee_localCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ee_localCtx.clearRect(0, 0, w, h);
+    ee_localParticles.length = 0;
+    ee_localLastTs = 0; ee_localSlowFrames = 0; ee_localDegradeCount = 0;
+}
+
+function ee_localKick() {
+    if (ee_localAnimId === null) {
+        ee_localLastTs = 0;
+        ee_localAnimId = requestAnimationFrame(ee_localAnimate);
+    }
+}
+
+// 运行时掉帧守护：连续 5 帧 >34ms 降级一次，一批最多 2 次，且始终保留可见呈现
+function ee_localDegrade() {
+    if (ee_localDegradeCount >= 2 || ee_localParticles.length === 0) return;
+    ee_localDegradeCount++;
+    const keep = Math.max(4, Math.ceil(ee_localParticles.length / 2));
+    if (ee_localParticles.length > keep) ee_localParticles.length = keep;
+    for (const p of ee_localParticles) {
+        if (typeof p.thinOut === 'function') p.thinOut();
+    }
+}
+
+function ee_localAnimate(ts) {
+    if (ee_localParticles.length === 0) {
+        ee_localCtx.clearRect(0, 0, ee_localSize.w, ee_localSize.h);
+        if (ee_localCanvas) ee_localCanvas.style.display = 'none';
+        ee_localAnimId = null;
+        ee_localLastTs = 0; ee_localSlowFrames = 0; ee_localDegradeCount = 0;
+        return;
+    }
+    let dt = 1;
+    if (ee_localLastTs) {
+        const gap = ts - ee_localLastTs;
+        if (gap > 34) {
+            if (++ee_localSlowFrames >= 5) { ee_localDegrade(); ee_localSlowFrames = 0; }
+        } else {
+            ee_localSlowFrames = 0;
+        }
+        dt = Math.min(3, Math.max(0.2, gap / 16.6667));
+    }
+    ee_localLastTs = ts;
+    const ctx = ee_localCtx;
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, ee_localSize.w, ee_localSize.h);
+    for (let i = ee_localParticles.length - 1; i >= 0; i--) {
+        const p = ee_localParticles[i];
+        p.update(dt);
+        p.draw(ctx);
+        if (p.isDead()) ee_localParticles.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+    ee_localAnimId = requestAnimationFrame(ee_localAnimate);
+}
+
+// 礼花预渲染精灵：7 色 × 8 个旋转帧，生成时做一次变换，播放时只 drawImage
+const ee_confettiSpriteCache = {};
+function ee_confettiSprite(color, frame) {
+    const key = color + ':' + frame;
+    if (ee_confettiSpriteCache[key]) return ee_confettiSpriteCache[key];
+    const size = 32;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const cx = c.getContext('2d');
+    cx.translate(size / 2, size / 2);
+    cx.rotate(frame * Math.PI / 4);
+    cx.fillStyle = color;
+    cx.fillRect(-11, -11, 22, 22);
+    ee_confettiSpriteCache[key] = c;
+    return c;
+}
+
 // 预渲染发光精灵缓存：用离屏 canvas 一次性生成径向渐变，后续用 drawImage 复用
 // 避免 per-particle shadowBlur / createRadialGradient 导致的严重卡顿
 const ee_glowCache = {};
@@ -361,37 +504,48 @@ function ee_glow(color) {
 
 // ==================== 粒子特效类 ====================
 
-// 抛物线礼花粒子 (首战告捷)
-class ConfettiParticle {
-    constructor(isLeft) {
-        this.x = isLeft ? 0 : window.innerWidth;
-        this.y = window.innerHeight * 0.6;
-        this.vx = (Math.random() * 15 + 5) * (isLeft ? 1 : -1);
-        this.vy = -(Math.random() * 15 + 10);
-        this.gravity = 0.6;
-        this.size = Math.random() * 8 + 6;
-        this.color = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#06b6d4'][Math.floor(Math.random() * 7)];
+// 锚点局部礼花粒子（首战告捷）：局部画布坐标 + 预渲染精灵 + deltaTime 驱动
+const EE_CONFETTI_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#06b6d4'];
+class LocalConfettiParticle {
+    constructor(cfg, origin, canvasSize) {
+        this.cfg = cfg;
+        this.x = origin.x;
+        this.y = origin.y;
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        this.vx = dir * (1.2 + Math.random() * 2.8);
+        this.vy = -(2.6 + Math.random() * 3.4);
+        this.gravity = 0.16;
+        this.size = 6 + Math.random() * 6;
+        this.color = EE_CONFETTI_COLORS[Math.floor(Math.random() * EE_CONFETTI_COLORS.length)];
         this.rotation = Math.random() * 360;
-        this.rotationSpeed = (Math.random() - 0.5) * 20;
-        this.life = 100;
+        this.rotationSpeed = cfg.rotate ? (Math.random() - 0.5) * 14 : 0;
+        // 生命期用毫秒 + 随机抖动：掉帧不拖长，且不会整批同帧一起消失
+        this.lifeMs = cfg.confettiMs + (Math.random() - 0.5) * 320;
+        this.fadeMs = 350;
+        this.w = canvasSize.w;
+        this.h = canvasSize.h;
     }
-    update() {
-        this.x += this.vx;
-        this.y += this.vy;
-        this.vy += this.gravity;
-        this.rotation += this.rotationSpeed;
-        this.life--;
+    update(dt) {
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.vy += this.gravity * dt;
+        this.rotation = (this.rotation + this.rotationSpeed * dt) % 360;
+        this.lifeMs -= dt * 16.6667;
     }
     draw(ctx) {
-        ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.rotation * Math.PI / 180);
-        ctx.fillStyle = this.color;
-        ctx.globalAlpha = Math.max(0, this.life / 30);
-        ctx.fillRect(-this.size/2, -this.size/2, this.size, this.size);
-        ctx.restore();
+        const alpha = Math.max(0, Math.min(1, this.lifeMs / this.fadeMs));
+        if (alpha <= 0) return;
+        const frame = this.cfg.rotate
+            ? Math.floor((((this.rotation % 360) + 360) % 360) / 45) % 8
+            : 0;
+        const s = this.size * 1.6;
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(ee_confettiSprite(this.color, frame), this.x - s / 2, this.y - s / 2, s, s);
     }
-    isDead() { return this.life <= 0 || this.y > window.innerHeight; }
+    isDead() {
+        return this.lifeMs <= 0 || this.y > this.h + 24 || this.x < -24 || this.x > this.w + 24;
+    }
+    thinOut() { this.lifeMs = Math.min(this.lifeMs, 420); }
 }
 
 // 飘叶粒子 (专注力爆棚) - 围绕番茄部件盘旋上升的小旋涡（锚点：番茄部件；Canvas路径绘制叶子，避免离线模式emoji渲染为黑色方块）
@@ -553,63 +707,67 @@ class GoldenBullseyeParticle {
 }
 
 // 莲花心境粒子 (清空禅意) - 多重青色柔和涟漪 + Canvas内全局白光呼吸，无DOM依赖（全屏版）
-class ZenRippleParticle {
-    constructor() {
-        this.x = window.innerWidth / 2;
-        this.y = window.innerHeight / 2;
-        this.life = 180; // 3秒
-        this.maxLife = 180;
-        // 生成三个错开的涟漪
-        this.ripples = Array.from({length: 3}, (_, i) => ({
-            r: 0,
-            targetR: Math.max(window.innerWidth, window.innerHeight) * (0.5 + i * 0.2),
-            delay: i * 25 // 延迟触发时间
+// 锚点局部禅意涟漪（清空禅意 B1）：3 环水波 + 局部柔光 + 上浮光点，绝不刷白整屏
+class LocalZenRippleParticle {
+    constructor(cfg, origin) {
+        this.cfg = cfg;
+        this.x = origin.x;
+        this.y = origin.y;
+        this.elapsed = 0;
+        this.duration = cfg.zenMs;
+        this.ripples = Array.from({ length: cfg.ripples }, (_, i) => ({ delay: i * 130, r: 0 }));
+        this.motes = Array.from({ length: cfg.motes }, () => ({
+            dx: (Math.random() - 0.5) * cfg.maxR * 1.5,
+            dy: (Math.random() - 0.5) * cfg.maxR * 1.2,
+            r: 1.5 + Math.random() * 2.5
         }));
     }
-    update() {
-        this.life--;
-        const timeSpent = this.maxLife - this.life;
-        this.ripples.forEach(rip => {
-            if (timeSpent > rip.delay) {
-                rip.r += (rip.targetR - rip.r) * 0.02; // 极其缓慢、平和的扩张
-            }
-        });
-    }
+    update(dt) { this.elapsed += dt * 16.6667; }
     draw(ctx) {
-        const timeSpent = this.maxLife - this.life;
-        ctx.save();
-
-        // 1. 绘制禅意涟漪 (Fake Glow：双层圆环叠加替代 shadowBlur)
-        this.ripples.forEach(rip => {
-            if (timeSpent > rip.delay) {
-                const alpha = Math.max(0, 1 - rip.r / rip.targetR) * 0.5;
-                // 外层光晕：大宽度、低透明度
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, rip.r, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(167, 216, 222, ${alpha * 0.25})`;
-                ctx.lineWidth = 40;
-                ctx.stroke();
-                // 核心环：小宽度、高透明度
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, rip.r, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(224, 247, 250, ${alpha * 0.9})`; // 柔和的青玉色
-                ctx.lineWidth = 6;
-                ctx.stroke();
-            }
-        });
-
-        // 2. 绘制全屏呼吸白光 (直接在 Canvas 层实现，性能更好)
-        // 前1.5秒渐白，后1.5秒渐暗
-        let flashAlpha = 0;
-        if (this.life > 90) flashAlpha = (180 - this.life) / 90 * 0.85;
-        else flashAlpha = this.life / 90 * 0.85;
-
-        ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
-        ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-
-        ctx.restore();
+        const t = Math.min(1, this.elapsed / this.duration);
+        const fade = t < 0.15 ? t / 0.15 : Math.max(0, 1 - (t - 0.15) / 0.85);
+        if (fade <= 0) return;
+        const cfg = this.cfg;
+        // 局部柔光：只在锚点邻域画径向渐变圆（完整档），不再 fillRect 全屏刷白
+        if (cfg.glow) {
+            const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, cfg.maxR * 0.9);
+            grad.addColorStop(0, 'rgba(224, 247, 250, ' + (0.18 * fade) + ')');
+            grad.addColorStop(1, 'rgba(224, 247, 250, 0)');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, cfg.maxR * 0.9, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        // 双层圆环（宽低透 + 细高透）替代 shadowBlur，半径只有 70~120px 量级
+        for (const rip of this.ripples) {
+            const local = (this.elapsed - rip.delay) / (this.duration * 0.65);
+            if (local <= 0) continue;
+            const e = 1 - Math.pow(1 - Math.min(1, local), 3);
+            rip.r = cfg.maxR * e;
+            const a = (1 - e) * fade;
+            if (a <= 0) continue;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, rip.r, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(167, 216, 222, ' + (a * 0.22) + ')';
+            ctx.lineWidth = 12;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, rip.r, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(224, 247, 250, ' + (a * 0.85) + ')';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+        // 上浮光点：任何档位都保留，保证最低档也有可见呈现
+        ctx.fillStyle = 'rgba(167, 216, 222, ' + (0.75 * fade) + ')';
+        const rise = t * 26;
+        for (const m of this.motes) {
+            ctx.beginPath();
+            ctx.arc(this.x + m.dx, this.y + m.dy - rise, m.r, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
-    isDead() { return this.life <= 0; }
+    isDead() { return this.elapsed >= this.duration; }
+    thinOut() { this.duration = Math.max(this.elapsed + 300, this.duration * 0.75); }
 }
 
 // 1. 清算旧账 - 小闪电自锚点上方劈落命中锚点 + 紫/蓝能量碎片炸开 (0 shadowBlur, 纯 Fake Glow)
@@ -1417,13 +1575,26 @@ class StarforgedCrestParticle {
 
 // ==================== 特效触发函数 ====================
 
-function ee_fireConfetti() {
-    ee_initCanvas();
-    for (let i = 0; i < 40; i++) {
-        ee_particles.push(new ConfettiParticle(true));
-        ee_particles.push(new ConfettiParticle(false));
-    }
-    if (!ee_animId) ee_animate();
+// 首战告捷：勾选框邻域局部礼花。触发帧只登记 rAF，避开同帧 saveData/renderView 的
+// DOM 重建峰值；粒子分 3 批投放，画布尺寸与粒子数按性能档位裁剪。
+function ee_fireConfetti(anchor) {
+    const cfg = ee_localTierConfig();
+    const a = anchor || ee_fallbackAnchor();
+    requestAnimationFrame(function () {
+        ee_localStart(a, cfg.cw, cfg.ch, cfg.dpr);
+        const b0 = Math.ceil(cfg.confetti / 3);
+        const b1 = Math.ceil(cfg.confetti / 3);
+        const batches = [b0, b1, cfg.confetti - b0 - b1];
+        const spawn = function (n) {
+            for (let i = 0; i < n; i++) {
+                ee_localParticles.push(new LocalConfettiParticle(cfg, ee_localOrigin, ee_localSize));
+            }
+            ee_localKick();
+        };
+        spawn(batches[0]);
+        if (batches[1] > 0) setTimeout(function () { spawn(batches[1]); }, 33);
+        if (batches[2] > 0) setTimeout(function () { spawn(batches[2]); }, 66);
+    });
 }
 
 function ee_dropLeaves(anchor) {
@@ -1447,10 +1618,15 @@ function ee_fireGoldenBullseye(anchor) {
     if (!ee_animId) ee_animate();
 }
 
-function ee_playZenRipple() {
-    ee_initCanvas();
-    ee_particles.push(new ZenRippleParticle());
-    if (!ee_animId) ee_animate();
+// 清空禅意：B1 锚点涟漪。不再使用全屏画布，也不再 fillRect 全屏刷白。
+function ee_playZenRipple(anchor) {
+    const cfg = ee_localTierConfig();
+    const a = anchor || ee_fallbackAnchor();
+    requestAnimationFrame(function () {
+        ee_localStart(a, cfg.zw, cfg.zh, cfg.dpr);
+        ee_localParticles.push(new LocalZenRippleParticle(cfg, ee_localOrigin));
+        ee_localKick();
+    });
 }
 
 // 心流极光：全屏流动极光波纹
@@ -1560,7 +1736,7 @@ function easterEgg_onTaskComplete(task, sourceEl) {
     // 详情面板勾选→面板完成按钮；子任务全完成→子任务复选框（调用方透传）
     const anchor = ee_resolveTaskAnchor(task ? task.id : null, sourceEl);
 
-    // 1. 首战告捷 (今日第1个) —— 保持全屏礼花（刻意不带锚点）
+    // 1. 首战告捷 (今日第1个) —— 勾选框邻域局部礼花（锚点 + 局部画布）
     eeState.completedTasks++;
     if (eeState.completedTasks === 1 && !eeState.triggered.firstTask) {
         eeState.triggered.firstTask = true;
@@ -1568,8 +1744,9 @@ function easterEgg_onTaskComplete(task, sourceEl) {
             icon: '🎉',
             message: '首战告捷！',
             desc: '今日完成第一个任务',
-            effectFn: ee_fireConfetti
-        });
+            effectFn: ee_fireConfetti,
+            local: true
+        }, anchor);
     }
 
     // 1.5 星铸徽章 (今日完成5个任务及其整数倍) —— 行金色描边脉冲 + 玫瑰线在勾选框绽放
@@ -1609,7 +1786,7 @@ function easterEgg_onTaskComplete(task, sourceEl) {
         }
     }
 
-    // 4. 清空禅意 (清单被清零，全屏涟漪)
+    // 4. 清空禅意 (清单被清零，B1 锚点局部涟漪)
     if (task && task.listId && typeof tasks !== 'undefined' && typeof lists !== 'undefined') {
         const listTasks = tasks.filter(t => t.listId === task.listId);
         const remaining = listTasks.filter(t => !t.completed).length;
@@ -1619,8 +1796,9 @@ function easterEgg_onTaskComplete(task, sourceEl) {
                 icon: '🍵',
                 message: '任务清空，享受禅意与宁静',
                 desc: '清单中所有任务已完成',
-                effectFn: ee_playZenRipple
-            });
+                effectFn: ee_playZenRipple,
+                local: true
+            }, anchor);
         }
     }
 
@@ -1727,12 +1905,10 @@ function easterEgg_onPomodoroStart() {
  * 当主视图（默认首页视图）被打开时调用，也会在直接触发彩蛋时被调用
  */
 let ee_flushing = false; // 是否正在顺序播放彩蛋
-// 特效主时长：锚点动画的最长持续（低配档更短）。特效起播是渲染压力峰值
-// （粒子满额 + 画布初始化），横幅须等特效主体完成后才入场，错开两处峰值。
+// 特效主时长：所有彩蛋统一。特效起播是渲染压力峰值（粒子满额 + 画布初始化），
+// 横幅须等特效主体完成后才入场，错开两处峰值；局部彩蛋也沿用同一节奏。
 const EE_FX_LEAD_MS = 3600;
-// 队列步进：特效先播 EE_FX_LEAD_MS → 横幅弹出（生命周期约 6.5s，入场+停留）→
-// 再等横幅停留主体播完进入下一个。此时横幅仅剩 CSS 退场（transform/opacity），
-// 与下一个特效起播并存压力可忽略。
+// 队列步进：特效先播 EE_FX_LEAD_MS → 横幅弹出 → 再进入下一个。
 const EE_QUEUE_STEP_MS = 7600;
 
 function ee_flushPendingEffects() {
@@ -1751,11 +1927,12 @@ function ee_flushPendingEffects() {
             return;
         }
         const effect = eeState.pendingEffects.shift();
-        // 1. 先播放锚点特效（渲染压力峰值：粒子满额起播）
-        if (effect.effectFn && ee_getFxTier() > 0) {
+        // 1. 先播放特效。局部彩蛋三档都播（最低档也保留粒子 / 水波，不只剩横幅）；
+        //    本次保留的全屏类彩蛋仍遵循系统级「减弱动态效果」不播，行为不变。
+        if (effect.effectFn && (effect.local === true || ee_getFxTier() > 0)) {
             try { effect.effectFn(effect.anchor); } catch (e) { /* 特效失败不影响队列 */ }
         }
-        // 2. 特效主体完成后（粒子已衰减过半）横幅才入场，避免与特效起播同帧竞争渲染
+        // 2. 所有彩蛋统一在特效起播 EE_FX_LEAD_MS 后弹出横幅，错开渲染峰值
         setTimeout(() => ee_showToast(effect.icon, effect.message, effect.desc), EE_FX_LEAD_MS);
         // 3. 等横幅停留主体播完，进入下一个
         setTimeout(playNext, EE_QUEUE_STEP_MS);
@@ -1949,3 +2126,6 @@ function easterEgg_init() {
 // 初始化
 document.addEventListener('DOMContentLoaded', easterEgg_restoreFromHistory);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) ee_checkDate(); });
+// 统一跨天事件：锁屏 / 系统休眠时 visibilitychange 不一定触发，当日彩蛋状态
+// （完成数、专注分钟、已触发标记）必须靠此重置，否则过夜后仍按昨天计数。
+document.addEventListener('tacklist:daychange', ee_checkDate);

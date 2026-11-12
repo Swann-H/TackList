@@ -133,7 +133,6 @@ function formatReminderAbsolute(baseIso, minute) {
     return `${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${hm}`;
 }
 
-let deleteConfirmTaskId = null;
 function confirmDeleteTask(taskId) {
     const taskElements = document.querySelectorAll(`[data-task-id="${taskId}"]`);
     taskElements.forEach(el => {
@@ -159,43 +158,8 @@ function confirmDeleteTask(taskId) {
     });
 }
 
-let listDeleteConfirmListId = null;
-
-function confirmDeleteList(listId) {
-    if (listId === 'default') {
-        showToast('默认清单不能删除', 'warning');
-        return;
-    }
-    
-    if (listDeleteConfirmListId === listId) {
-        tasks = tasks.map(t => {
-            if (t.listId === listId) {
-                t.listId = 'default';
-            }
-            return t;
-        });
-        lists = lists.filter(l => l.id !== listId);
-        if (currentListId === listId) {
-            currentListId = null;
-        }
-        saveData();
-        renderLists();
-        if (typeof renderTags === 'function') renderTags();
-        renderView();
-        showToast('清单已删除', 'success');
-        listDeleteConfirmListId = null;
-        return;
-    }
-    
-    listDeleteConfirmListId = listId;
-
-    setTimeout(() => {
-        listDeleteConfirmListId = null;
-    }, 3000);
-}
 
 let draggedTaskId = null;
-let dragTargetType = null;
 let _lastDragOver = null; // 当前高亮的拖拽落点（仅其显示虚线，移出/换列即清除，避免划过的列残留选定样式）
 
 function handleTaskDragStart(e, taskId) {
@@ -528,60 +492,6 @@ function handleScheduleDrop(event) {
     if (planPanelOpen) renderPlanPanel();
 }
 
-function showRecent7DaysTasks() {
-    const now = new Date();
-    
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const sevenDaysLater = new Date(todayStart);
-    sevenDaysLater.setDate(sevenDaysLater.getDate() + 7);
-    sevenDaysLater.setHours(23, 59, 59, 999);
-    
-    const todayStartTimestamp = todayStart.getTime();
-    const sevenDaysLaterTimestamp = sevenDaysLater.getTime();
-    
-    const recentTasks = tasks.filter(task => {
-        if (!task.startTime) return false;
-        const taskDate = new Date(task.startTime);
-        const taskTimestamp = taskDate.getTime();
-        
-        return taskTimestamp >= todayStartTimestamp && taskTimestamp <= sevenDaysLaterTimestamp;
-    });
-    
-    currentListId = null;
-    currentFilter = 'recent7days';
-    
-    renderLists();
-    renderViewWithTasks(recentTasks);
-}
-function renderViewWithTasks(filteredTasks) {
-    const container = document.getElementById('view-container');
-    
-    switch (currentView) {
-        case 'task':
-            renderTaskListView(container);
-            break;
-        case 'week':
-            renderWeekView(container);
-            break;
-        case 'month':
-            renderMonthView(container);
-            break;
-        case 'quadrant':
-            renderQuadrantView(container);
-            break;
-        case 'schedule':
-        default:
-            renderScheduleView(container);
-            break;
-    }
-}
-
-function clearRecentFilter() {
-    currentFilter = null;
-    currentListId = null;
-    renderLists();
-    renderView();
-}
 
 function openAddTaskModal(presetDate = null) {
     // 如果当前有打开的空任务详情，先删除空任务（判定统一走面板档 isPanelTaskContentless）
@@ -752,6 +662,24 @@ function _adjustCommandPaletteForDetail(open) {
     overlay.style.paddingRight = open ? '400px' : '';
 }
 
+// 退出浮层模式但保留详情面板：仅还原布局样式，不进入 closeTaskDetailPanel 的
+// 保存/关闭动画/移动端返回层链路。用于「搜索打开详情 → 关面板继续编辑」。
+function exitTaskDetailModalKeepOpen() {
+    if (!_taskDetailModalMode) return;
+    const panel = document.getElementById('task-detail-panel');
+    if (panel) {
+        // 原始 className 可能带 hidden（进入浮层模式时面板尚未显示）以及上一次的入场动画类，
+        // 还原时要保证「可见 + 不重播动画」
+        const restored = _taskDetailSavedClassName.split(/\s+/).filter(c =>
+            c && c !== 'hidden' && c !== 'panel-fade-in' && c !== 'panel-fade-out');
+        panel.className = restored.join(' ');
+        panel.style.cssText = _taskDetailSavedStyle;
+    }
+    _taskDetailModalMode = false;
+    // 恢复命令面板位置（overlay 此时还在淡出，复位后不留缩进）
+    _adjustCommandPaletteForDetail(false);
+}
+
 function openTaskDetailModal(taskId) {
     const panel = document.getElementById('task-detail-panel');
     if (!panel) return;
@@ -780,6 +708,8 @@ let _detailPanelHideTimer = null;
 function showDetailPanel(taskId) {
     const panel = document.getElementById('task-detail-panel');
     if (!panel) return;
+    // 换看任务时先收起「…」面板，避免旧任务的条目状态残留
+    if (typeof closeDetailMoreMenu === 'function') closeDetailMoreMenu();
     // 取消尚未完成的关闭动画，避免面板被延迟 hidden
     if (_detailPanelHideTimer) {
         clearTimeout(_detailPanelHideTimer);
@@ -1168,7 +1098,8 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
             if (matchedRadio) {
                 matchedRadio.checked = true;
                 document.getElementById('detail-custom-repeat-container').classList.remove('hidden');
-                document.getElementById('detail-custom-repeat-interval').value = task.repeat.interval || '';
+                const storedInterval = parsePositiveInt(task.repeat.interval);
+                document.getElementById('detail-custom-repeat-interval').value = storedInterval > 0 ? String(storedInterval) : '';
                 document.getElementById('detail-custom-repeat-unit').value = task.repeat.unit || 'days';
             }
         } else if (task.repeat.type === 'daily' && task.repeat.workdayOnly) {
@@ -1180,8 +1111,14 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
         } else if (task.repeat.type === 'weekly') {
             matchedRadio = document.querySelector('.detail-repeat-option[value="weekly"]');
             needExpandGroup = matchedRadio ? matchedRadio.closest('.repeat-group') : null;
+        } else if (task.repeat.type === 'monthly' && task.repeat.lunar) {
+            matchedRadio = document.querySelector('.detail-repeat-option[value="monthlyLunar"]');
+            needExpandGroup = matchedRadio ? matchedRadio.closest('.repeat-group') : null;
         } else if (task.repeat.type === 'monthly') {
             matchedRadio = document.querySelector('.detail-repeat-option[value="monthly"]');
+            needExpandGroup = matchedRadio ? matchedRadio.closest('.repeat-group') : null;
+        } else if (task.repeat.type === 'yearly' && task.repeat.lunar) {
+            matchedRadio = document.querySelector('.detail-repeat-option[value="yearlyLunar"]');
             needExpandGroup = matchedRadio ? matchedRadio.closest('.repeat-group') : null;
         } else if (task.repeat.type === 'yearly' && task.repeat.beforeHoliday) {
             matchedRadio = document.querySelector('.detail-repeat-option[value="yearlyBeforeHoliday"]');
@@ -1263,13 +1200,13 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
         document.getElementById('detail-task-notes').classList.add('hidden');
         descInput.classList.remove('hidden');
         _setSubtasksAreaVisible(true);
-        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
+        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit text-theme-muted"></i>';
         document.getElementById('toggle-mode-btn').title = '文本模式';
     } else {
         document.getElementById('detail-task-notes').classList.remove('hidden');
         descInput.classList.add('hidden');
         _setSubtasksAreaVisible(false);
-        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul"></i>';
+        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul text-theme-muted"></i>';
         document.getElementById('toggle-mode-btn').title = '切换任务模式';
     }
     
@@ -1381,6 +1318,8 @@ function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
     if (typeof refreshDetailNotesEditor === 'function') refreshDetailNotesEditor();
     // FR-09：标题行模板入口需在只读/外部任务判定之后同步显隐与提示
     if (typeof updateDetailTemplateEntry === 'function') updateDetailTemplateEntry(task);
+    // 「…」更多面板：按当前任务/模式/只读状态重算条目
+    if (typeof renderDetailMoreMenu === 'function') renderDetailMoreMenu();
 }
 
 // 应用/取消任务详情面板的只读模式
@@ -1392,8 +1331,6 @@ function applyDetailReadOnly(readOnly) {
     const toggleModeBtn = document.getElementById('toggle-mode-btn');
     const timeMenuBtn = document.querySelector('[onclick*="toggleDetailTimeMenu"]');
     const progressContainer = document.getElementById('progress-container');
-    // FR-09：只读态不提供「存为模板」（模板来自可编辑任务）
-    const saveTplBtn = document.getElementById('detail-save-template-btn');
     // 底部快捷按钮容器（重要/紧急/标签/清单 + 删除/专注/保存）
     const bottomActions = document.querySelector('#task-detail-panel > div:last-child');
 
@@ -1404,7 +1341,6 @@ function applyDetailReadOnly(readOnly) {
         if (completeBtn) completeBtn.style.display = 'none';
         if (toggleModeBtn) toggleModeBtn.style.display = 'none';
         if (timeMenuBtn) timeMenuBtn.style.display = 'none';
-        if (saveTplBtn) saveTplBtn.style.display = 'none';
         if (progressContainer) progressContainer.style.cursor = 'default';
         if (bottomActions) bottomActions.style.display = 'none';
     } else {
@@ -1414,7 +1350,6 @@ function applyDetailReadOnly(readOnly) {
         if (completeBtn) completeBtn.style.display = '';
         if (toggleModeBtn) toggleModeBtn.style.display = '';
         if (timeMenuBtn) timeMenuBtn.style.display = '';
-        if (saveTplBtn) saveTplBtn.style.display = '';
         if (progressContainer) progressContainer.style.cursor = 'pointer';
         if (bottomActions) bottomActions.style.display = '';
     }
@@ -1657,7 +1592,7 @@ function toggleTaskMode(event) {
         _setSubtasksAreaVisible(true);
         autoResizeDetailDescription(document.getElementById('detail-task-description'));
         renderSubtasks();
-        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit"></i>';
+        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-edit text-theme-muted"></i>';
         document.getElementById('toggle-mode-btn').title = '文本模式';
         setTimeout(() => {
             const firstInput = document.querySelector('#subtasks-container textarea[data-subtask-id]');
@@ -1681,7 +1616,7 @@ function toggleTaskMode(event) {
         document.getElementById('detail-task-notes').classList.remove('hidden');
         document.getElementById('detail-task-description').classList.add('hidden');
         _setSubtasksAreaVisible(false);
-        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul"></i>';
+        document.getElementById('toggle-mode-btn').innerHTML = '<i class="fas fa-list-ul text-theme-muted"></i>';
         document.getElementById('toggle-mode-btn').title = '切换任务模式';
     }
     // 立即写入 task.mode，确保面板打开期间的中间保存（saveData）携带正确的 mode，
@@ -1691,7 +1626,117 @@ function toggleTaskMode(event) {
     // 模式切换后详情文本元素变化（notes <-> description+subtasks），重算毛玻璃带纵向范围
     if (typeof refreshDetailNotesEditor === 'function') refreshDetailNotesEditor();
     requestAnimationFrame(updateWriteModeGlassBounds);
+
+    // 子任务模式决定「批量管理子任务」条目是否出现在「…」面板
+    renderDetailMoreMenu();
 }
+
+// ==================== 详情顶栏「…」更多面板 ====================
+// 条目顺序：展开书写 → 存为模板 → 批量管理子任务。
+// 展开逻辑对齐主视图右上角「更多」：桌面悬浮展开、点击固定、移开收合；触屏仅点击展开。
+function _setDetailMoreExpanded(expanded) {
+    const btn = document.getElementById('detail-more-btn');
+    if (btn) btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+}
+
+function _syncDetailMoreAria() {
+    const group = document.getElementById('detail-more-group');
+    _setDetailMoreExpanded(!!group && group.classList.contains('more-open'));
+}
+
+function toggleDetailMoreMenu(event) {
+    if (event) event.stopPropagation();
+    const group = document.getElementById('detail-more-group');
+    if (!group) return;
+    // 每次展开前重算条目显隐（只读 / 任务模式 / 模板绑定状态可能刚变化）
+    renderDetailMoreMenu();
+    if (group.style.display === 'none') return;
+    group.classList.toggle('more-open');
+    _syncDetailMoreAria();
+}
+
+function closeDetailMoreMenu() {
+    const group = document.getElementById('detail-more-group');
+    if (!group) return;
+    group.classList.remove('more-open');
+    _syncDetailMoreAria();
+}
+
+// 按当前任务 / 模式 / 只读 / 宿主环境重算三个条目的显隐与文案
+function renderDetailMoreMenu() {
+    const group = document.getElementById('detail-more-group');
+    if (!group) return;
+    const task = currentDetailTaskId ? tasks.find(function (t) { return t.id === currentDetailTaskId; }) : null;
+    if (!task) {
+        group.style.display = 'none';
+        closeDetailMoreMenu();
+        return;
+    }
+
+    const writeItem = document.getElementById('detail-more-write-item');
+    // 展开书写：书写态本身不再提供；窄屏与番茄右栏不支持书写态（与旧入口可见性口径一致）
+    const writeVisible = !isDetailWriteMode()
+        && !window.matchMedia('(max-width: 768px)').matches
+        && !(typeof isDetailPanelHostedInPomodoro === 'function' && isDetailPanelHostedInPomodoro());
+    if (writeItem) writeItem.style.display = writeVisible ? '' : 'none';
+
+    // 存为模板：显隐与文案（存为模板 / 更新模板「名称」）由模板模块维护
+    if (typeof updateDetailTemplateEntry === 'function') updateDetailTemplateEntry(task);
+
+    const subtaskItem = document.getElementById('detail-more-subtask-item');
+    // 批量管理子任务：仅子任务模式、非只读、非触屏（移动端子任务行删除按钮常显，无需该入口）
+    const subtaskVisible = !detailReadOnly
+        && currentTaskMode === 'subtasks'
+        && !window.matchMedia('(hover: none)').matches;
+    if (subtaskItem) {
+        subtaskItem.style.display = subtaskVisible ? '' : 'none';
+        subtaskItem.classList.toggle('is-on', subtaskManageMode);
+        subtaskItem.title = subtaskManageMode ? '完成管理' : '批量管理子任务';
+        const label = subtaskItem.querySelector('.detail-more-label');
+        if (label) label.textContent = subtaskManageMode ? '完成管理' : '批量管理子任务';
+    }
+
+    refreshDetailMoreVisibility();
+}
+
+// 三个条目全部不可用时隐藏入口本身，避免展开一块空面板
+function refreshDetailMoreVisibility() {
+    const group = document.getElementById('detail-more-group');
+    if (!group) return;
+    const ids = ['detail-more-write-item', 'detail-more-template-item', 'detail-more-subtask-item'];
+    const anyVisible = ids.some(function (id) {
+        const el = document.getElementById(id);
+        return el && el.style.display !== 'none';
+    });
+    group.style.display = anyVisible ? '' : 'none';
+    if (!anyVisible) closeDetailMoreMenu();
+}
+
+(function initDetailMoreMenu() {
+    if (window.__detailMoreMenuBound) return;
+    window.__detailMoreMenuBound = true;
+
+    // 捕获阶段：即使条目点击内部调用了 stopPropagation，也能关闭已展开的面板
+    document.addEventListener('pointerdown', function (e) {
+        const group = document.getElementById('detail-more-group');
+        if (!group || !group.classList.contains('more-open')) return;
+        if (!e.target.closest('#detail-more-group')) closeDetailMoreMenu();
+    }, true);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeDetailMoreMenu();
+    });
+
+    const group = document.getElementById('detail-more-group');
+    if (!group) return;
+    // 桌面端悬浮展开不经过 click，需要单独同步 aria-expanded
+    group.addEventListener('pointerenter', function (e) {
+        if (e.pointerType === 'mouse' && group.style.display !== 'none') _setDetailMoreExpanded(true);
+    });
+    group.addEventListener('pointerleave', function (e) {
+        if (e.pointerType === 'mouse') _syncDetailMoreAria();
+    });
+})();
+
 
 // 新建子任务的统一构造（含时间与提前提醒字段，缺省为无时间、无提前量）
 function createSubtask(text, order) {
@@ -1938,15 +1983,20 @@ document.addEventListener('wheel', () => {
     if (subtaskDragActive) endSubtaskDrag();
 }, { passive: true });
 
-// 已有子任务文本时，隐藏描述框的"任务详情描述"默认提示字样，只保留输入框
+// 子任务模式描述框的空态占位：已有子任务文本时不再显示"任务详情描述"提示字样
+function getDetailDescriptionPlaceholder() {
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    const hasSubtaskText = !!(task && (task.subtasks || []).some(st => st.text && st.text.trim()));
+    return hasSubtaskText ? '' : '任务详情描述';
+}
+
+// 同步描述框占位：Markdown 开启时可见的是行级编辑器（textarea 被隐藏），
+// 需由 markdown.js 同步编辑器的空态占位，否则会残留"任务详情描述"提示
 function updateDetailDescriptionPlaceholder() {
+    const placeholder = getDetailDescriptionPlaceholder();
     const descInput = document.getElementById('detail-task-description');
-    if (!descInput) return;
-    const taskIndex = tasks.findIndex(t => t.id === currentDetailTaskId);
-    if (taskIndex === -1) return;
-    const task = tasks[taskIndex];
-    const hasSubtaskText = (task.subtasks || []).some(st => st.text && st.text.trim());
-    descInput.placeholder = hasSubtaskText ? '' : '任务详情描述';
+    if (descInput) descInput.placeholder = placeholder;
+    if (typeof mdSyncDescriptionPlaceholder === 'function') mdSyncDescriptionPlaceholder(placeholder);
 }
 
 function renderSubtasks() {
@@ -2152,11 +2202,6 @@ function parseSubtaskTimeLabel(iso) {
     return { date: md, clock: hm };
 }
 
-// 兼容用：拼成一行字符串（测试与需要纯文本的场景）
-function formatSubtaskTimeLabel(iso) {
-    const p = parseSubtaskTimeLabel(iso);
-    return p.date ? `${p.date} ${p.clock}` : p.clock;
-}
 
 // 把时间文案填成两行（方案 B 主次）：上行日期/相对标签（小一号、更淡），下行时刻。
 // 「今天」没有日期段 → 只有时刻一行；靠 CSS 的 min-height + flex-end 与其他行底部对齐。
@@ -2454,11 +2499,13 @@ function exitSubtaskManageMode() {
 
 function _applySubtaskManageMode() {
     const container = document.getElementById('subtasks-container');
-    const btn = document.getElementById('subtask-manage-btn');
+    const menuItem = document.getElementById('detail-more-subtask-item');
     if (container) container.classList.toggle('subtask-manage', subtaskManageMode);
-    if (btn) {
-        btn.classList.toggle('on', subtaskManageMode);
-        btn.title = subtaskManageMode ? '完成管理' : '批量管理子任务';
+    if (menuItem) {
+        menuItem.classList.toggle('is-on', subtaskManageMode);
+        menuItem.title = subtaskManageMode ? '完成管理' : '批量管理子任务';
+        const label = menuItem.querySelector('.detail-more-label');
+        if (label) label.textContent = subtaskManageMode ? '完成管理' : '批量管理子任务';
     }
     if (subtaskManageMode) {
         // 进入管理模式时收起已展开的提醒面板：
@@ -2814,12 +2861,10 @@ function toggleSubtaskComplete(subtaskId, completed, taskId, sourceEl) {
         }
 
         saveData();
-        if (playFx) {
-            // 播放过塌陷动画后延迟全量重渲染（与 toggleTaskComplete 口径一致）
-            setTimeout(() => renderView(), 320);
-        } else {
-            renderView();
-        }
+        // 子任务全完成导致父任务自动完成时，与主视图勾选共用增量刷新入口；
+        // 派生下一周期重复任务属结构性变更，仍回退全量渲染。
+        const structuralChange = !!(task.completed && !wasTaskCompleted && task.repeat && task.repeat.type);
+        refreshTaskViewAfterToggle(task.id, structuralChange, playFx);
 
         // 触发彩蛋效果（子任务完成时）：锚点取用户刚勾选的子任务复选框（eeAnchor 快照）
         if (completed && !wasCompleted) {
@@ -3062,18 +3107,8 @@ function toggleTaskDetailComplete() {
     // 与主视图勾选（toggleTaskComplete）口径一致：完成状态变更后刷新侧栏清单计数与标签
     renderLists();
     if (typeof renderTags === 'function') renderTags();
-    if (playFx) {
-        // 播放过塌陷动画后必须延迟全量重渲染：局部更新会把塌陷条目替换回正常高度，导致下方任务瞬间回弹下移
-        setTimeout(() => renderView(), 320);
-        return;
-    }
-    // 日程视图下非结构性变更走局部更新
-    if (structuralChange
-        || currentView !== 'schedule'
-        || typeof refreshScheduleDayCardsForTask !== 'function'
-        || !refreshScheduleDayCardsForTask(currentDetailTaskId)) {
-        renderView();
-    }
+    // 与主视图勾选共用同一个刷新入口：任务视图走增量窗口重绘，其余视图/结构性变更回退全量
+    refreshTaskViewAfterToggle(task.id, structuralChange, playFx);
 }
 
 function setupDateTimeInteractions() {
@@ -3094,8 +3129,8 @@ function setupDateTimeInteractions() {
     // change 时同步刷新「跳过此周期」按钮：清除时间后重新选日期，按钮需立即恢复显示
     // （快速选择面板选值后也会派发 change 事件，两种输入途径均覆盖）
     newDateInput.addEventListener('change', function() {
-        updateDetailTimeBtnText();
-        refreshDetailSkipCycleButton();
+        // 重复选项的「每周五 / 每月6日 / 农历廿一」都依赖任务日期，改日期后同步刷新
+        updateDetailRepeatText();
     });
     newTimeInput.addEventListener('change', function() {
         updateDetailTimeBtnText();
@@ -3562,8 +3597,14 @@ function renderPlanPanel() {
     // 分组/排序完全复用任务视图：同一套 getTaskViewConfig（含 per-list 覆盖）+ buildTaskListGroups，
     // 因此分组依据、排序依据、排序方向、时间窗筛选下按天分组等均与任务视图一致。
     // 仅剔除「已完成」组——计划面板用于把待办拖去排期，已完成任务不参与。
+    // 合入模式（视图配置关闭「已完成任务独立分组」）下普通分组内含已完成任务，此处同样剔除，
+    // 只保留未完成段；组计数本就是未完成数，剔除后仍一致。
     const groups = (typeof buildTaskListGroups === 'function' ? buildTaskListGroups() : [])
-        .filter(g => !g.isCompleted && g.tasks && g.tasks.length > 0);
+        .filter(g => !g.isCompleted && g.tasks && g.tasks.length > 0)
+        .map(g => (g.completedCount > 0)
+            ? Object.assign({}, g, { tasks: g.incompleteTasks || g.tasks.filter(t => !t.completed) })
+            : g)
+        .filter(g => g.tasks.length > 0);
 
     // 计划面板专用排序：把「无日期」组提到最前（其后依次为 已过期 / 今天 / 明天 / …）。
     // 面板的用途是把未排期任务拖去安排时间，无日期任务最需要被优先处理，
@@ -3711,23 +3752,36 @@ function getDetailRepeatValueFromForm() {
     const repeatModeSelected = document.querySelector('input[name="detail-repeat-mode"]:checked');
     const repeatMode = repeatModeSelected ? repeatModeSelected.value : 'startTime';
     if (repeatSelected.value === 'custom') {
-        const interval = parseInt(document.getElementById('detail-custom-repeat-interval').value);
+        const interval = parsePositiveInt(document.getElementById('detail-custom-repeat-interval').value);
         const unit = document.getElementById('detail-custom-repeat-unit').value;
-        if (interval && interval > 0) {
+        if (interval > 0) {
             return { type: 'custom', interval: interval, unit: unit, repeatMode: repeatMode };
         }
         return null;
     }
     const propsAttr = repeatSelected.getAttribute('data-repeat-props');
+    let value;
     if (propsAttr) {
-        try {
-            const props = JSON.parse(propsAttr);
-            return Object.assign({}, props, { repeatMode: repeatMode });
-        } catch (e) {
-            return { type: repeatSelected.value, repeatMode: repeatMode };
+        try { value = Object.assign({}, JSON.parse(propsAttr)); }
+        catch (e) { value = { type: repeatSelected.value }; }
+    } else {
+        value = { type: repeatSelected.value };
+    }
+    value.repeatMode = repeatMode;
+
+    // 打开面板再保存时保留原规则的显式日期（如 NLP 生成的「每周五」「每月6号」），
+    // 否则这些字段会被丢掉，重复日期悄悄退回任务起始日。
+    const task = currentDetailTaskId ? tasks.find(t => t.id === currentDetailTaskId) : null;
+    const original = task && task.repeat;
+    if (original && original.type === value.type && !!original.lunar === !!value.lunar) {
+        if (value.type === 'weekly' && original.dayOfWeek !== undefined) value.dayOfWeek = original.dayOfWeek;
+        if (value.type === 'monthly' && !value.lunar && original.dayOfMonth !== undefined) value.dayOfMonth = original.dayOfMonth;
+        if (value.type === 'yearly' && !value.lunar && !value.beforeHoliday) {
+            if (original.month !== undefined) value.month = original.month;
+            if (original.day !== undefined) value.day = original.day;
         }
     }
-    return { type: repeatSelected.value, repeatMode: repeatMode };
+    return value;
 }
 
 // 写入版兼容入口：其余调用点（toggleTaskMode、跳过周期）直接写 task.repeat 后立即使用
@@ -4042,56 +4096,13 @@ function openTimePicker(inputEl, pickerId, onPicked) {
 }
 
 function openDatePicker(inputEl, pickerId, onPicked) {
-    const picker = document.getElementById(pickerId);
-    if (!picker) return;
+    _openDateQuickPicker(inputEl, pickerId, _buildTaskDateQuickItems,
+        typeof onPicked === 'function' ? onPicked : function () { onDetailAllDayChange(); });
+}
 
-    document.querySelectorAll('.date-picker-dropdown').forEach(p => {
-        if (p.id !== pickerId) p.classList.add('hidden');
-    });
-    // 同时关闭时间选择器
-    document.querySelectorAll('.time-picker-dropdown').forEach(p => {
-        p.classList.add('hidden');
-    });
-
-    if (!picker.classList.contains('hidden')) {
-        picker.classList.add('hidden');
-        return;
-    }
-
-    picker.innerHTML = '';
-    const now = new Date();
-    const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+// 任务日期快捷项：今天 / 明天 / 本周X（工作周期末，非工作日回退下周）/ 下周一 / 下周X / 下月1日 / 下月X日
+function _buildTaskDateQuickItems(addDateOption, now) {
     const currentDay = now.getDay(); // 0=周日, 1=周一, ...
-
-    function formatDate(date) {
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-    }
-
-    function addDateOption(label, date) {
-        const dateStr = formatDate(date);
-        const item = document.createElement('div');
-        item.className = 'px-3 py-1.5 text-sm cursor-pointer text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition flex justify-between items-center';
-        const labelSpan = document.createElement('span');
-        labelSpan.textContent = label;
-        const dateSpan = document.createElement('span');
-        dateSpan.className = 'text-xs opacity-60';
-        dateSpan.textContent = dateStr;
-        item.appendChild(labelSpan);
-        item.appendChild(dateSpan);
-        item.dataset.value = dateStr;
-        item.onclick = (e) => {
-            e.stopPropagation();
-            inputEl.value = dateStr;
-            picker.classList.add('hidden');
-            inputEl.dispatchEvent(new Event('change'));
-            if (typeof onPicked === 'function') onPicked();
-            else onDetailAllDayChange();
-        };
-        picker.appendChild(item);
-    }
 
     // 1. 今天
     addDateOption('今天', now);
@@ -4159,20 +4170,6 @@ function openDatePicker(inputEl, pickerId, onPicked) {
         ? `下月${actualDay}日`
         : `下月${todayDate}日`;
     addDateOption(dayLabel, nextMonthSameDate);
-
-    picker.classList.remove('hidden');
-    picker.classList.add('date-picker-dropdown');
-
-    // 滚动到当前选中的日期
-    requestAnimationFrame(() => {
-        const currentValue = inputEl.value;
-        if (currentValue) {
-            const targetItem = picker.querySelector(`[data-value="${currentValue}"]`);
-            if (targetItem) {
-                targetItem.scrollIntoView({ block: 'center' });
-            }
-        }
-    });
 }
 
 function closeAllTimePickers() {
@@ -4224,12 +4221,12 @@ function renderAdvanceReminderOptions(container, selected, baseIso, onChange, sh
     const sel = normalizeReminderMinutes(selected);
     const presetMinutes = REMINDER_PRESETS.map(p => p.minute);
 
-    // 预设项 + 用户自定义项（不在预设里的已选值），统一按提前量降序
+    // 预设项 + 用户自定义项（不在预设里的已选值），统一按提前量升序（越短越靠前）
     const items = REMINDER_PRESETS.map(p => ({ minute: p.minute, label: p.label }));
     sel.forEach(m => {
         if (!presetMinutes.includes(m)) items.push({ minute: m, label: formatReminderMinute(m) });
     });
-    items.sort((a, b) => b.minute - a.minute);
+    items.sort((a, b) => a.minute - b.minute);
 
     container.innerHTML = '';
     items.forEach(item => {
@@ -4409,12 +4406,88 @@ function addDetailCustomReminder() {
     saveData();
 }
 
+const DETAIL_REPEAT_WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+function _detailRepeatAnchorDate() {
+    const el = document.getElementById('detail-task-date');
+    if (!el || !el.value) return null;
+    const inputDate = new Date(el.value + 'T00:00:00');
+    if (isNaN(inputDate.getTime())) return null;
+
+    // 「顺延」只改显示日期，重复基准仍是顺延前的原始日期；
+    // 只有用户在面板里真正改了日期，才改用新日期作为重复基准。
+    if (currentDetailTaskId) {
+        const task = tasks.find(t => t.id === currentDetailTaskId);
+        if (task && task._originalStartTime && task.startTime) {
+            if (el.value === formatDate(new Date(task.startTime))) {
+                return new Date(task._originalStartTime);
+            }
+        }
+    }
+    return inputDate;
+}
+
+function _detailRepeatStoredRepeat() {
+    if (!currentDetailTaskId) return null;
+    const task = tasks.find(t => t.id === currentDetailTaskId);
+    return task && task.repeat ? task.repeat : null;
+}
+
+// 选项文案跟随任务日期：新历写具体日期，农历写农历月日
+function refreshDetailRepeatOptionLabels() {
+    const date = _detailRepeatAnchorDate();
+    const stored = _detailRepeatStoredRepeat();
+    const setLabel = function (id, text) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+
+    let weekday = null;
+    if (stored && stored.type === 'weekly' && typeof stored.dayOfWeek === 'number') weekday = stored.dayOfWeek;
+    else if (date) weekday = date.getDay();
+    setLabel('detail-repeat-label-weekly', weekday !== null ? '每' + DETAIL_REPEAT_WEEKDAY_NAMES[weekday] : '每周');
+
+    let dayOfMonth = null;
+    if (stored && stored.type === 'monthly' && !stored.lunar && stored.dayOfMonth) dayOfMonth = stored.dayOfMonth;
+    else if (date) dayOfMonth = date.getDate();
+    setLabel('detail-repeat-label-monthly', dayOfMonth ? '每月' + dayOfMonth + '日' : '每月');
+
+    let month = null;
+    let day = null;
+    if (stored && stored.type === 'yearly' && !stored.lunar && !stored.beforeHoliday && stored.month && stored.day) {
+        month = stored.month;
+        day = stored.day;
+    } else if (date) {
+        month = date.getMonth() + 1;
+        day = date.getDate();
+    }
+    setLabel('detail-repeat-label-yearly', month && day ? '每年' + month + '月' + day + '日' : '每年');
+
+    let lunar = null;
+    if (date && typeof LunarCalendar !== 'undefined') {
+        lunar = LunarCalendar.solarToLunar(date.getFullYear(), date.getMonth() + 1, date.getDate());
+    }
+    setLabel('detail-repeat-label-monthly-lunar', lunar ? '每月' + LunarCalendar.getDayName(lunar.lDay) : '每月（农历）');
+    // 起始日落在闰月时按正常月计算，展示也不带「闰」
+    setLabel('detail-repeat-label-yearly-lunar', lunar ? '每年' + LunarCalendar.getMonthName(lunar.lMonth) + LunarCalendar.getDayName(lunar.lDay) : '每年（农历）');
+}
+
+function _detailRepeatOptionLabel(id, fallback) {
+    const el = document.getElementById('detail-repeat-label-' + id);
+    const text = el ? el.textContent.trim() : '';
+    return text || fallback;
+}
+
 function updateDetailRepeatText() {
     const selected = document.querySelector('input[name="detail-repeat"]:checked');
     const repeatText = document.getElementById('detail-repeat-text');
     const customContainer = document.getElementById('detail-custom-repeat-container');
     const modeContainer = document.getElementById('detail-repeat-mode-container');
-    
+
+    refreshDetailRepeatOptionLabels();
+    // 自定义间隔只允许正整数：输入即纠正（负数 / 0 / 小数 / 非数字清空），静默无提示
+    normalizePositiveIntInput(document.getElementById('detail-custom-repeat-interval'));
+
     if (selected) {
         customContainer.classList.add('hidden');
         const val = selected.value;
@@ -4425,29 +4498,33 @@ function updateDetailRepeatText() {
         } else if (val === 'dailyWorkday') {
             repeatText.textContent = '每个工作日';
         } else if (val === 'weekly') {
-            repeatText.textContent = '每周';
+            repeatText.textContent = _detailRepeatOptionLabel('weekly', '每周');
         } else if (val === 'weeklyFirstWorkday') {
             repeatText.textContent = '每周首个工作日';
         } else if (val === 'weeklyLastWorkday') {
             repeatText.textContent = '工作周期最后一个工作日';
         } else if (val === 'monthly') {
-            repeatText.textContent = '每月';
+            repeatText.textContent = _detailRepeatOptionLabel('monthly', '每月');
+        } else if (val === 'monthlyLunar') {
+            repeatText.textContent = _detailRepeatOptionLabel('monthly-lunar', '每月（农历）');
         } else if (val === 'monthlyFirstWorkday') {
             repeatText.textContent = '每月首个工作日';
         } else if (val === 'monthlyLastWorkday') {
             repeatText.textContent = '每月最后一个工作日';
         } else if (val === 'yearly') {
-            repeatText.textContent = '每年';
+            repeatText.textContent = _detailRepeatOptionLabel('yearly', '每年');
+        } else if (val === 'yearlyLunar') {
+            repeatText.textContent = _detailRepeatOptionLabel('yearly-lunar', '每年（农历）');
         } else if (val === 'yearlyBeforeHoliday') {
             repeatText.textContent = '每个节假日前一天';
         } else if (val === 'custom') {
             repeatText.textContent = '自定义';
             customContainer.classList.remove('hidden');
-            const interval = document.getElementById('detail-custom-repeat-interval').value;
+            const interval = parsePositiveInt(document.getElementById('detail-custom-repeat-interval').value);
             const unit = document.getElementById('detail-custom-repeat-unit').value;
-            if (interval) {
+            if (interval > 0) {
                 const unitName = { 'days': '天', 'weeks': '周', 'months': '月', 'years': '年' };
-                repeatText.textContent = `每${interval}${unitName[unit]}`;
+                repeatText.textContent = `每${interval}${unitName[unit] || '天'}`;
             }
         } else {
             repeatText.textContent = '不重复';
@@ -4713,6 +4790,21 @@ function setupDetailPickerCloseHandler() {
             if (listPicker) listPicker.classList.add('hidden');
             if (tagPicker) tagPicker.classList.add('hidden');
         });
+
+        // 面板内 mousedown 兜底收起「设置时间」面板：
+        // 块级 Markdown 编辑器会在 mousedown 阶段把被按下的静态块重建为行内 textarea，
+        // 被按下的节点随即脱离文档，浏览器不再派发 click（已用真实指针事件验证），
+        // 依赖 click 收口的时间面板因此留在展开态；标题是原生 textarea、不重建 DOM，
+        // 所以点标题能收起、点描述编辑框不能收起。
+        // mousedown 阶段的事件路径在派发时已固定，目标节点被移除也照样冒泡到面板，
+        // 且收口判定与 click 路径完全一致，重复触发时函数内部幂等（面板已收起即跳过）。
+        // 只挂在面板上而非 document 上：避免点面板外的任务行时提前 saveDetailTimeConfig→
+        // renderView 重建列表，反把那次点击本身吞掉。
+        detailPanel.addEventListener('mousedown', (e) => {
+            if (typeof handleDetailTimeMenuOutsideClick === 'function') {
+                handleDetailTimeMenuOutsideClick(e);
+            }
+        });
     }
 
     // 子任务提醒面板：单击面板外（含子任务编辑框、其它行、面板空白处）保存并关闭。
@@ -4915,6 +5007,50 @@ function deleteTask(taskId) {
     );
 }
 
+// 农历重复的锚点：取任务起始日（顺延前）对应的农历月日
+function _getTaskRepeatLunarAnchor(task) {
+    if (!task || !task.startTime) return null;
+    const anchor = new Date(task._originalStartTime || task.startTime);
+    if (isNaN(anchor.getTime())) return null;
+    return LunarCalendar.solarToLunar(anchor.getFullYear(), anchor.getMonth() + 1, anchor.getDate());
+}
+
+// 「每月农历X」：从 fromDate 所在农历月的下一个月起找 X 日；
+// 小月没有三十时 lunarToSolar 返回 null，自然跳到下一个有该日的月份。
+function _getNextLunarMonthlyOccurrence(fromDate, task) {
+    const anchor = _getTaskRepeatLunarAnchor(task);
+    if (!anchor) return null;
+    const fromLunar = LunarCalendar.solarToLunar(fromDate.getFullYear(), fromDate.getMonth() + 1, fromDate.getDate());
+    if (!fromLunar) return null;
+
+    // 闰月也算正常月份：nextLunarMonth 会在正常月之后返回同月号的闰月
+    let pos = LunarCalendar.nextLunarMonth(fromLunar.lYear, fromLunar.lMonth, fromLunar.isLeap);
+    for (let i = 0; i < 36; i++) {
+        if (pos.lYear > 2100) return null;
+        const solar = LunarCalendar.lunarToSolar(pos.lYear, pos.lMonth, anchor.lDay, pos.isLeap);
+        if (solar && solar.getTime() > fromDate.getTime()) return solar;
+        pos = LunarCalendar.nextLunarMonth(pos.lYear, pos.lMonth, pos.isLeap);
+    }
+    return null;
+}
+
+// 「每年农历M月D」：只按正常月匹配（起始日落在闰月时取同月号的正常月）；
+// 该年没有这一天（如无三十的腊月）则跳到下一年。
+function _getNextLunarYearlyOccurrence(fromDate, task) {
+    const anchor = _getTaskRepeatLunarAnchor(task);
+    if (!anchor) return null;
+    const fromLunar = LunarCalendar.solarToLunar(fromDate.getFullYear(), fromDate.getMonth() + 1, fromDate.getDate());
+    if (!fromLunar) return null;
+
+    for (let i = 1; i <= 10; i++) {
+        const lYear = fromLunar.lYear + i;
+        if (lYear > 2100) return null;
+        const solar = LunarCalendar.lunarToSolar(lYear, anchor.lMonth, anchor.lDay, false);
+        if (solar && solar.getTime() > fromDate.getTime()) return solar;
+    }
+    return null;
+}
+
 /**
  * 计算某重复任务「下一个周期」的日期时间
  * @param {object} task - 任务对象（需含 repeat 与 startTime）
@@ -4937,9 +5073,11 @@ function getNextRepeatOccurrence(task, opts = {}) {
 
     function computeNextOccurrence(fromDate) {
         let result = null;
-        if (task.repeat.type === 'custom' && task.repeat.interval && task.repeat.unit) {
+        // 防御历史脏数据：间隔非正整数时不推导日期，避免向过去倒推造成异常投影
+        const customInterval = task.repeat.type === 'custom' ? parsePositiveInt(task.repeat.interval) : 0;
+        if (task.repeat.type === 'custom' && customInterval > 0 && task.repeat.unit) {
             result = new Date(fromDate);
-            const interval = task.repeat.interval;
+            const interval = customInterval;
             const unit = task.repeat.unit;
             if (unit === 'days') result.setDate(result.getDate() + interval);
             else if (unit === 'weeks') result.setDate(result.getDate() + interval * 7);
@@ -4969,12 +5107,16 @@ function getNextRepeatOccurrence(task, opts = {}) {
             } else {
                 result.setDate(result.getDate() + 7);
             }
+        } else if (task.repeat.type === 'monthly' && task.repeat.lunar) {
+            result = _getNextLunarMonthlyOccurrence(fromDate, task);
         } else if (task.repeat.type === 'monthly') {
             result = new Date(fromDate);
             result.setMonth(result.getMonth() + 1);
             if (task.repeat.dayOfMonth) {
                 result.setDate(task.repeat.dayOfMonth);
             }
+        } else if (task.repeat.type === 'yearly' && task.repeat.lunar) {
+            result = _getNextLunarYearlyOccurrence(fromDate, task);
         } else if (task.repeat.type === 'yearly') {
             result = new Date(fromDate);
             result.setFullYear(result.getFullYear() + 1);
@@ -5058,6 +5200,8 @@ function createNextRepeatTask(task) {
 
     const newTask = JSON.parse(JSON.stringify(task));
     newTask.id = generateId();
+    // 重复链路标识：用于视图侧把已完成旧实例与当前/后续实例归为同一系列
+    newTask.seriesId = task.seriesId || task.id;
     newTask.completed = false;
     newTask.completedAt = null;
     newTask.createdAt = new Date().toISOString();
@@ -5117,9 +5261,9 @@ function refreshDetailSkipCycleButton() {
     let panelHasRepeat = false;
     if (repeatRadio && repeatRadio.value) {
         if (repeatRadio.value === 'custom') {
-            // 自定义需间隔有效才算已配置重复
-            const interval = parseInt(document.getElementById('detail-custom-repeat-interval').value);
-            panelHasRepeat = !!(interval && interval > 0);
+            // 自定义需间隔有效才算已配置重复（只认正整数）
+            const interval = parsePositiveInt(document.getElementById('detail-custom-repeat-interval').value);
+            panelHasRepeat = interval > 0;
         } else {
             panelHasRepeat = true;
         }
@@ -5457,7 +5601,34 @@ function _playTaskDoneCollapseFx(taskId) {
         wrap.style.marginTop = rv.gap || '0px';
         wrap.style.opacity = '1';
     });
+    // 新揭示的周视图全天任务条同样要判定「标题右侧有没有空位」，否则在紧随其后的
+    // 全量重渲染（320ms 后）之前，它的开始专注按钮出不来。高度 0 不影响横向测量。
+    if (reveals.length > 0 && typeof syncWeekFocusFit === 'function') syncWeekFocusFit();
     return true;
+}
+
+/**
+ * 完成态切换后的统一刷新入口（主视图勾选 / 详情面板完成按钮 / 子任务全完成自动勾选 共用）。
+ * 优先走任务视图的增量窗口重绘，避免全量 renderView 重建整页 DOM；
+ * 结构性变更（重复任务派生等）与其余视图仍按原口径回退全量渲染。
+ * playFx 时延迟到塌陷动画结束后再执行，与原有 320ms 口径一致。
+ */
+function refreshTaskViewAfterToggle(taskId, structuralChange, playFx) {
+    const doRefresh = () => {
+        if (structuralChange) { renderView(); return; }
+        // 任务视图：按最新分组数据局部重算窗口（覆盖跨分组移动、计数、查看更多按钮）
+        if (currentView === 'task' && typeof applyTaskToggleIncremental === 'function'
+            && applyTaskToggleIncremental(taskId)) return;
+        // 日程视图：沿用既有的按日卡片局部刷新
+        if (currentView === 'schedule' && typeof refreshScheduleDayCardsForTask === 'function'
+            && refreshScheduleDayCardsForTask(taskId)) return;
+        // 兜底：任务仍留在原分组且行在 DOM 中时，仅替换单行
+        if (currentView === 'task' && typeof refreshTaskListItemForToggle === 'function'
+            && refreshTaskListItemForToggle(taskId)) return;
+        renderView();
+    };
+    if (playFx) setTimeout(doRefresh, 320);
+    else doRefresh();
 }
 
 function toggleTaskComplete(taskId) {
@@ -5487,33 +5658,9 @@ function toggleTaskComplete(taskId) {
         }
         renderLists();
         if (typeof renderTags === 'function') renderTags();
-        const refresh = () => {
-            // 播放过塌陷动画后必须全量重渲染：局部更新会把塌陷条目替换回正常高度，导致下方任务瞬间回弹下移
-            if (playFx) {
-                renderView();
-                return;
-            }
-            // 日程视图下非结构性变更走局部更新，避免全量重渲染（保持滚动位置、消除跳动）
-            if (structuralChange) {
-                // 结构性变更（如重复任务生成）必然全量重渲染
-                renderView();
-            } else if (currentView === 'schedule'
-                && typeof refreshScheduleDayCardsForTask === 'function'
-                && refreshScheduleDayCardsForTask(taskId)) {
-                // 日程视图局部更新成功
-            } else if (currentView === 'task'
-                && typeof refreshTaskListItemForToggle === 'function'
-                && refreshTaskListItemForToggle(taskId)) {
-                // 任务列表视图局部更新成功
-            } else {
-                renderView();
-            }
-        };
-        if (playFx) {
-            setTimeout(refresh, 320);
-        } else {
-            refresh();
-        }
+        // 塌陷动画结束时才刷新：增量更新会先移除已塌陷的旧行，再按新分组数据重绘窗口，
+        // 既不会把塌陷条目恢复成正常高度，也不需要整页 renderView。
+        refreshTaskViewAfterToggle(taskId, structuralChange, playFx);
     }
 }
 
@@ -6584,6 +6731,8 @@ function _wmMorphBegin(dir, onSettle, onLand) {
 /* ---------- 进入 / 退出 ---------- */
 function enterDetailWriteMode() {
     if (!currentDetailTaskId) return;
+    // 书写态隐藏「…」入口，先收起已展开的面板，避免退出后残留
+    closeDetailMoreMenu();
     // 进入前先把收起态的编辑落盘，避免布局切换期间丢失
     if (typeof saveTaskDetailWithoutClose === 'function') saveTaskDetailWithoutClose();
     // 场景对切：必须先于（或同帧于）detail-write-mode —— 挂晚了主视图已被 display:none 抹掉，
@@ -6632,6 +6781,8 @@ function exitDetailWriteMode() {
         // 摘类与补跑重渲染必须与随后的 settle 同一批同步完成（中间态不会被渲染），
         // 否则会出现一帧「全宽面板 + 收起态内容」的错误布局。
         document.body.classList.remove('detail-write-mode');
+        // 退出书写态后「展开书写」条目恢复可见，重算「…」面板
+        if (typeof renderDetailMoreMenu === 'function') renderDetailMoreMenu();
         _wmRunDeferredRenders();
     });
 }

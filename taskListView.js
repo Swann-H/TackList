@@ -10,6 +10,10 @@ let _lastCollapseListKey = null; // 上次渲染时的清单 key，用于检测�
 let _groupCollapseSaveTimer = null; // 折叠态 localStorage 持久化防抖计时器
 const GROUP_COLLAPSE_KEY = 'tacklist_group_collapsed';
 let taskListCompletedShowAll = false;
+// 「已完成任务独立分组」关闭（separateCompleted=false）时，已完成任务留在各自分组内并置底，
+// 组内已完成段落只显示前 5 条；这里的 Set 记录哪些分组已就地展开（仅会话内，不落盘）。
+// key = 分组 key（today / day_2026-11-01 / prio:both / tag:xxx ...），切换清单·筛选·分组依据时清空。
+let _taskGroupCompletedExpanded = {};
 // 筛选上下文签名：用于检测筛选条件变化，变化时重置分组折叠状态为默认值
 let _lastTaskListFilterSig = null;
 let _scheduleIntersectionObserver = null; // 当前日程视图的 IO，重渲染前 disconnect 防泄漏
@@ -60,10 +64,17 @@ function captureScheduleViewport() {
 }
 // 任务列表视图：filter+分组结果签名缓存，折叠/展开等纯状态变更时复用，避免全量扫描
 let _taskListGroupsCache = null;
-// 虚拟滚动相关状态：分组级懒加载，远端分组由 IntersectionObserver 触发填充
-let _taskListVirtualState = null; // { groups, useShortTime }
-let _taskListVirtualIO = null; // IntersectionObserver 实例
+// 虚拟滚动相关状态：行级窗口化——每个分组只保留视口附近的任务行，其余用等高占位撑住滚动条。
+// 旧实现以「分组」为最小渲染单位（单组可达 5000+ 行），且用空占位容器的位置判定视口，
+// 导致所有分组在首次渲染时一次性填充；现改为按 scrollTop 计算窗口并增量替换。
+let _taskListVirtualState = null; // { groups, useShortTime, container, scrollEl }
+let _taskListVirtualIO = null; // 兼容旧调用点的 IO 引用（新链路不再创建）
 let _taskListVirtualScrollEl = null; // 滚动容器引用
+const TASK_LIST_WINDOW_MIN = 40;       // 每个展开分组的最小渲染行数
+const TASK_LIST_WINDOW_OVERSCAN = 12;  // 视口上下各多渲染的行数（滚动迟滞，减少重建次数）
+const TASK_LIST_ROW_ESTIMATE = 44;     // 初始行高估算（px），首次渲染后按实测自适应
+let _taskListRowEstimate = TASK_LIST_ROW_ESTIMATE;
+let _taskListScrollCleanup = null;     // 滚动/尺寸监听的清理函数
 // 预构建索引：消除 buildTaskListItemHtml 内的 lists.find 线性查找
 // （_tagsByIdMap/_tagsByIdSig 定义在 utils.js，供 renderTagCapsules 使用）
 let _listsByIdMap = null; // Map<listId, list>
@@ -87,6 +98,9 @@ function getTaskViewConfig() {
     if (typeof c.showFocusButton !== 'boolean') c.showFocusButton = settings.showFocusButton !== false;
     if (typeof c.showDetails !== 'boolean') c.showDetails = false;
     if (!c.groupCollapseStrategy) c.groupCollapseStrategy = 'only-completed-collapsed';
+    // 「已完成任务独立分组」：true=已完成独立成组置底（原行为，默认）；false=留在原分组内并置底。
+    // 旧数据无此字段时归一为 true，保证升级后行为不变。
+    if (typeof c.separateCompleted !== 'boolean') c.separateCompleted = true;
     // per-list 回退链：当前清单有覆盖配置时，合并返回（不修改全局配置）
     const listPrefs = _getCurrentListViewPrefs('task');
     if (listPrefs) return Object.assign({}, c, listPrefs);
@@ -163,6 +177,7 @@ function onScheduleConfigChange() {
     if (slEl) target.showLunar = slEl.checked;
     if (sfEl) target.showFocusButton = sfEl.checked;
     if (sdEl) target.showDetails = sdEl.checked;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
     renderView(); // 实时预览；保存延迟到面板关闭
 }
 
@@ -211,6 +226,23 @@ function sortTaskListTasks(arr, cfg) {
 }
 
 const TASKVIEW_TIME_LABEL = { nodate: '无日期', overdue: '已过期', today: '今天', tomorrow: '明天', dayAfterTomorrow: '后天', recent7: '最近7天', later: '更远' };
+// 合入模式（separateCompleted=false）专用排序：
+// 未完成在前，按「排序依据」排；已完成一律置底，且段内固定按完成时间倒序（最近完成的在最上），
+// 与独立「已完成」组口径一致 —— 这样「已完成只显示前 5 条」截出来的就是最近完成的 5 条。
+function sortTaskListTasksWithCompletedBottom(arr, cfg) {
+    const inc = [], comp = [];
+    arr.forEach(t => (t.completed ? comp : inc).push(t));
+    comp.sort((a, b) => new Date(b.completedAt || b.createdAt) - new Date(a.completedAt || a.createdAt));
+    return sortTaskListTasks(inc, cfg).concat(comp);
+}
+// 「无日期」桶在合入模式下的排序：未完成沿用原行为（创建时间倒序），已完成置底按完成时间倒序。
+function sortNoDateTasksWithCompletedBottom(arr) {
+    const inc = [], comp = [];
+    arr.forEach(t => (t.completed ? comp : inc).push(t));
+    inc.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    comp.sort((a, b) => new Date(b.completedAt || b.createdAt) - new Date(a.completedAt || a.createdAt));
+    return inc.concat(comp);
+}
 const TASKVIEW_CREATED_LABEL = { today: '今天创建', past7: '过去7天创建', past30: '过去30天创建', earlier: '更早创建' };
 const TASKVIEW_PRIORITY_DEFS = [
     { level: 'both', name: '重要且紧急' },
@@ -219,7 +251,12 @@ const TASKVIEW_PRIORITY_DEFS = [
     { level: 'none', name: '普通' }
 ];
 
-// 按配置构建任务视图分组（已完成独立成组、置底）。
+// 按配置构建任务视图分组。
+// 完成态归属由 cfg.separateCompleted 决定（视图配置「已完成任务独立分组」）：
+// - true（默认）：已完成独立成组并置底，独立于分组依据（原行为）。
+// - false（合入）：已完成不再抽离，留在其所属分组内并置底；组内已完成段固定按完成时间倒序，
+//   组标题计数只统计未完成（与独立模式的计数口径一致，避免开关切换时数字跳变）。
+// 分组依据：
 // - groupBy='time'：沿用原有状态桶分组（与看板 kanbanDateBucketOf 同判定，忽略完成态），
 //   无日期桶保持按创建时间倒序（原行为），其余桶按配置排序；默认值即与原任务视图完全一致。
 // - groupBy='createdTime'：今天/过去7天/过去30天/更早（创建时间桶）。
@@ -230,8 +267,19 @@ const TASKVIEW_PRIORITY_DEFS = [
 // - groupBy='none'：单一「全部任务」列。
 function _buildTaskListGroupsByConfig(cfg, filteredArg) {
     const filtered = filteredArg || filterTasks(tasks, { includeCompleted: cfg.showCompleted !== false });
-    const completed = filtered.filter(t => t.completed);
-    const incomplete = filtered.filter(t => !t.completed);
+    // sep=true 时 pool 只含未完成任务；sep=false 时 pool 含全部任务（完成态在组内排序时处理）
+    const sep = cfg.separateCompleted !== false;
+    const completed = sep ? filtered.filter(t => t.completed) : [];
+    const incomplete = sep ? filtered.filter(t => !t.completed) : filtered;
+    // 组内排序：独立模式沿用 sortTaskListTasks；合入模式走「未完成在前 + 已完成置底（完成时间倒序）」
+    const orderTasks = (arr) => sep ? sortTaskListTasks(arr, cfg) : sortTaskListTasksWithCompletedBottom(arr, cfg);
+    // 组标题计数：独立模式下 pool 全为未完成，直接取长度；合入模式需排除已完成
+    const countOf = (arr) => {
+        if (sep) return arr.length;
+        let n = 0;
+        for (let i = 0; i < arr.length; i++) if (!arr[i].completed) n++;
+        return n;
+    };
 
     let groups = [];
 
@@ -248,14 +296,14 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
                     const arr = incomplete.filter(t => !t.groupId || !groupById[t.groupId]);
                     groups.push({
                         key: 'cgrp:__ungrouped__', dataGroup: 'cgrp-ungrouped', label: '默认',
-                        tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
+                        tasks: orderTasks(arr), count: countOf(arr), isCompleted: false, overdue: false
                     });
                 } else if (groupById[token]) {
                     const g = groupById[token];
                     const arr = incomplete.filter(t => t.groupId === g.id);
                     groups.push({
                         key: 'cgrp:' + g.id, dataGroup: g.id, label: g.name || '未命名分组',
-                        tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
+                        tasks: orderTasks(arr), count: countOf(arr), isCompleted: false, overdue: false
                     });
                 }
             });
@@ -270,7 +318,7 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
             const arr = buckets[k];
             if (arr.length) groups.push({
                 key: 'cb:' + k, dataGroup: k, label: TASKVIEW_CREATED_LABEL[k],
-                tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
+                tasks: orderTasks(arr), count: countOf(arr), isCompleted: false, overdue: false
             });
         });
     } else if (cfg.groupBy === 'priority') {
@@ -278,7 +326,7 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
             const arr = incomplete.filter(t => priorityLevelOf(t) === p.level);
             if (arr.length) groups.push({
                 key: 'prio:' + p.level, dataGroup: p.level, label: p.name,
-                tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
+                tasks: orderTasks(arr), count: countOf(arr), isCompleted: false, overdue: false
             });
         });
     } else if (cfg.groupBy === 'tag') {
@@ -296,25 +344,41 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
             const arr = byTag[def.id];
             if (arr && arr.length) groups.push({
                 key: 'tag:' + def.id, dataGroup: def.id, label: def.name,
-                tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
+                tasks: orderTasks(arr), count: countOf(arr), isCompleted: false, overdue: false
             });
         });
         if (byTag.__none && byTag.__none.length) groups.push({
             key: 'tag:none', dataGroup: 'none', label: '无标签',
-            tasks: sortTaskListTasks(byTag.__none, cfg), count: byTag.__none.length, isCompleted: false, overdue: false
+            tasks: orderTasks(byTag.__none), count: countOf(byTag.__none), isCompleted: false, overdue: false
         });
     } else if (cfg.groupBy === 'none') {
         if (incomplete.length) groups.push({
             key: 'all', dataGroup: 'all', label: '全部任务',
-            tasks: sortTaskListTasks(incomplete, cfg), count: incomplete.length, isCompleted: false, overdue: false
+            tasks: orderTasks(incomplete), count: countOf(incomplete), isCompleted: false, overdue: false
         });
     } else if (cfg.groupBy === 'list') {
-        // 按所属清单分组：遍历 lists（非归档、非文件夹），收集各清单未完成任务
+        // 按所属清单分组：遍历 lists（非归档、非文件夹），收集各清单任务
         _appendTaskListGroupsByList(groups, incomplete, cfg);
     } else {
         // 默认：时间状态桶分组（与原任务视图一致）
         const buckets = { overdue: [], today: [], tomorrow: [], dayAfterTomorrow: [], recent7: [], later: [], nodate: [] };
-        incomplete.forEach(t => { const g = getTaskListGroup(t); if (buckets[g]) buckets[g].push(t); });
+        // 合入模式下 pool 含已完成任务，必须用忽略完成态的判定（kanbanDateBucketOf）分桶；
+        // getTaskListGroup 会把已完成任务一律判为 'completed'，直接用会让它们掉出所有桶。
+        incomplete.forEach(t => {
+            const g = sep ? getTaskListGroup(t) : kanbanDateBucketOf(t);
+            if (buckets[g]) buckets[g].push(t);
+        });
+        // 重复任务的未来实例：按发生日期直接归入对应日期桶（只读投影，不落库、不计入统计）
+        const _batchOn = (typeof isBatchSelectActive === 'function') && isBatchSelectActive();
+        if (!_batchOn && typeof getRecurringGhostMap === 'function') {
+            const ghostMap = getRecurringGhostMap('task');
+            Object.keys(ghostMap).forEach(dateKey => {
+                ghostMap[dateKey].forEach(ghost => {
+                    const g = kanbanDateBucketOf(ghost);
+                    if (g !== 'nodate' && g !== 'overdue' && buckets[g]) buckets[g].push(ghost);
+                });
+            });
+        }
         const noDateFirst = (cfg.noDateTaskPosition || 'last') === 'first';
         const order = noDateFirst
             ? ['nodate', 'overdue', 'today', 'tomorrow', 'dayAfterTomorrow', 'recent7', 'later']
@@ -322,14 +386,16 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
         order.forEach(k => {
             const arr = buckets[k];
             if (!arr.length) return;
-            // 无日期桶无 startTime，时间排序无意义，沿用原行为（按创建时间倒序）；
+            // 无日期桶无 startTime，时间排序无意义，沿用原行为（按创建时间倒序，合入模式下已完成置底）；
             // 其余桶按配置排序（默认 time/asc 即原行为，按 startTime 升序）。
             const sorted = k === 'nodate'
-                ? arr.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                : sortTaskListTasks(arr, cfg);
+                ? (sep
+                    ? arr.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                    : sortNoDateTasksWithCompletedBottom(arr))
+                : orderTasks(arr);
             groups.push({
                 key: k, dataGroup: k, label: TASKVIEW_TIME_LABEL[k],
-                tasks: sorted, count: arr.length, isCompleted: false, overdue: k === 'overdue'
+                tasks: sorted, count: countOf(arr), isCompleted: false, overdue: k === 'overdue'
             });
         });
     }
@@ -346,21 +412,101 @@ function _buildTaskListGroupsByConfig(cfg, filteredArg) {
         });
     }
 
+    return _finalizeTaskGroups(groups);
+}
+
+// 分组收尾（_buildTaskListGroupsByConfig / 时间窗筛选分支共用）：
+// 预切分「未完成段 / 已完成段」，供渲染层做「已完成只显示前 5 条」的截断与按组展开；
+// 并生成 labelHtml（已自带 labelHtml 的分组，如按天视图，保持调用方给的标题）。
+function _finalizeTaskGroups(groups) {
     groups.forEach(g => {
-        g.labelHtml = `${g.label}<span class="ml-1 text-xs text-theme-muted font-normal">${g.count}</span>`;
+        if (!g.isCompleted) {
+            let compCount = 0;
+            for (let i = 0; i < g.tasks.length; i++) if (g.tasks[i].completed) compCount++;
+            g.completedCount = compCount;
+            if (compCount) {
+                g.incompleteTasks = g.tasks.filter(t => !t.completed);
+                g.completedTasks = g.tasks.filter(t => t.completed);
+            }
+        } else {
+            g.completedCount = g.tasks.length;
+        }
+        if (!g.labelHtml) {
+            g.labelHtml = `${g.label}<span class="ml-1 text-xs text-theme-muted font-normal">${g.count}</span>`;
+        }
     });
     return groups;
 }
 
+// 组内「本次实际渲染」的任务列表：
+// - 独立「已完成」组：沿用全局「查看更多」开关（taskListCompletedShowAll），未展开只显示最近完成的 5 条；
+// - 合入模式的分组：未完成全显示，已完成段默认只显示最近完成的 5 条，按组展开后全显示；
+// - 其他分组：原样返回。
+function _taskGroupVisibleTasks(group) {
+    if (group.isCompleted) {
+        return taskListCompletedShowAll ? group.tasks : group.tasks.slice(0, 5);
+    }
+    if (group.completedCount > 0) {
+        const list = _taskGroupCompletedExpanded[group.key] ? group.completedTasks : group.completedTasks.slice(0, 5);
+        return group.incompleteTasks.concat(list);
+    }
+    return group.tasks;
+}
+
+// 是否需要在分组底部显示「查看更多」（独立已完成组走全局展开，合入分组走按组展开）
+function _taskGroupHasMoreCompleted(group) {
+    if (group.isCompleted) return group.tasks.length > 5 && !taskListCompletedShowAll;
+    return !!group.completedCount && group.completedCount > 5 && !_taskGroupCompletedExpanded[group.key];
+}
+
+// 分组底部展开条：独立已完成组用「查看更多」打开全量页；合入模式按组展开/收起（就地重填，不整页重渲）
+function _renderTaskGroupMoreHtml(group) {
+    if (group.isCompleted) {
+        if (!_taskGroupHasMoreCompleted(group)) return '';
+        return `<div class="py-2 px-3" data-group-more="${group.key}">
+                    <button onclick="event.stopPropagation(); showCompletedTasksPage()" class="text-sm text-accent hover:text-accent-hover transition">查看更多</button>
+                </div>`;
+    }
+    if (!group.completedCount || group.completedCount <= 5) return '';
+    const expanded = !!_taskGroupCompletedExpanded[group.key];
+    return `<div class="py-2 px-3" data-group-more="${group.key}">
+                <button onclick="event.stopPropagation(); toggleTaskGroupCompletedExpand('${group.key}')" class="text-sm text-accent hover:text-accent-hover transition">${expanded ? '收起' : '查看更多'}</button>
+            </div>`;
+}
+
+// 合入模式：展开/收起某组的已完成段落（会话内状态，不落盘）
+// 就地重填该组内容与底部按钮，避免整页重渲导致滚动跳动
+function toggleTaskGroupCompletedExpand(groupKey) {
+    if (!_taskListVirtualState) return;
+    const groups = _taskListVirtualState.groups || [];
+    const group = groups.find(g => g.key === groupKey);
+    if (!group) return;
+    if (_taskGroupCompletedExpanded[groupKey]) delete _taskGroupCompletedExpanded[groupKey];
+    else _taskGroupCompletedExpanded[groupKey] = true;
+
+    const lazyEl = document.querySelector(`.task-list-group-lazy[data-group-key="${groupKey}"]`);
+    if (lazyEl) {
+        lazyEl.dataset.populated = 'false';
+        _populateTaskListGroupContent(lazyEl, groups, _taskListVirtualState.useShortTime);
+    }
+    const contentEl = document.querySelector(`[data-task-group-content="${groupKey}"]`);
+    if (contentEl) contentEl.dataset.taskCount = _taskGroupVisibleTasks(group).length;
+    const moreEl = document.querySelector(`[data-group-more="${groupKey}"]`);
+    if (moreEl) moreEl.outerHTML = _renderTaskGroupMoreHtml(group);
+}
+
 // 按所属清单分组（groupBy='list' 与 groupBy='custom' 的多清单降级共用）：
-// 遍历 lists（非归档、非文件夹），收集各清单未完成任务
+// 遍历 lists（非归档、非文件夹），收集各清单任务（合入模式下含已完成，置底显示）
 function _appendTaskListGroupsByList(groups, incomplete, cfg) {
+    const sep = cfg.separateCompleted !== false;
     (lists || []).forEach(def => {
         if (def.archived || def.isFolder) return;
         const arr = incomplete.filter(t => t.listId === def.id);
         if (arr.length) groups.push({
             key: 'list:' + def.id, dataGroup: def.id, label: def.name,
-            tasks: sortTaskListTasks(arr, cfg), count: arr.length, isCompleted: false, overdue: false
+            tasks: sep ? sortTaskListTasks(arr, cfg) : sortTaskListTasksWithCompletedBottom(arr, cfg),
+            count: sep ? arr.length : arr.filter(t => !t.completed).length,
+            isCompleted: false, overdue: false
         });
     });
 }
@@ -400,15 +546,19 @@ function getTaskListGroup(task) {
     return 'nodate';
 }
 
-// 任务视图列表 & 命令面板 /s 搜索结果 共用的任务时间格式化。
-// - 全天任务：近端（今天/昨天/明天/后天）用相对词并去掉"全天"字样，更远才显示实际日期；
-//   任务视图与搜索用同一函数，故两边一致。
-// - 带时间任务：今天/昨天/明天/后天 用相对词；更远或过期任务，任务视图仅在"最近7天/以后"
-//   分组带日期，而搜索结果（跨任意日期）用 fullDate:true 始终带出日期，避免丢失所属日期。
-//   日期与时间之间统一用空格分隔（不再使用逗号）。
-// opts.fullDate=true 时，非近端带时间任务也强制带日期（供搜索结果使用）。
-// 全天任务标签：近端（今天/昨天/明天/后天）用相对词并去掉"全天"，更远才显示实际日期。
-// 任务视图列表、命令面板搜索、以及"最近7天"筛选视图统一使用本函数，保证显示一致。
+// 任务视图列表、看板、命令面板搜索、计划面板、回收站、重复任务投影共用的任务时间格式化。
+// 统一口径：过期任务不能再只显示「11:23」这样的时间点，必须带出日期归属。
+// - 今天：分组头/卡片头已提供日期上下文，只显示 HH:MM（含 - 结束时刻）；
+// - 昨天/前天/明天/后天：相对词 + 空格 + HH:MM，如「昨天 11:23」「前天 11:23」；
+// - 其余（更早的已过期、已完成旧任务、更远日期）：绝对日期 + 空格 + HH:MM，
+//   如「11月5日 11:23」；日期非今年时由 fmtMD 自动带年份「2025年12月31日 11:23」；
+// - 全天任务交由 getAllDayLabel：同一套相对词规则，远端用 fmtMD（可带年份）；
+// - 按天分组的筛选视图（今天/明天/最近3天/最近7天）走 formatTaskListTimeShort，
+//   卡片头已含日期，仍只显示 HH:MM。
+// opts.withAllDayTag=false 时全天任务省略「(全天)」后缀；
+// 历史参数 opts.fullDate 已移除：所有非今天任务一律带日期，调用方无需再区分场景。
+// 全天任务标签：近端（今天/昨天/前天/明天/后天）用相对词并去掉"全天"，更远才显示实际日期。
+// 任务视图列表、命令面板搜索、看板与详情栏统一使用本函数，保证显示一致。
 function getAllDayLabel(task, withAllDayTag = true) {
     if (!task.startTime) return '';
     // 跨天全天任务：显示范围，不出现 00:00，与任务详情栏一致
@@ -417,14 +567,13 @@ function getAllDayLabel(task, withAllDayTag = true) {
     }
     const b = getDateBounds();
     const taskDate = new Date(task.startTime);
-    const month = taskDate.getMonth() + 1;
-    const day = taskDate.getDate();
     if (taskDate >= b.todayStart && taskDate < b.tomorrowStart) return '今天';
     if (taskDate >= b.yesterdayStart && taskDate < b.todayStart) return '昨天';
+    if (taskDate >= b.dayBeforeYesterdayStart && taskDate < b.yesterdayStart) return '前天';
     if (taskDate >= b.tomorrowStart && taskDate < b.dayAfterTomorrowStart) return '明天';
     if (taskDate >= b.dayAfterTomorrowStart && taskDate < b.threeDaysLaterStart) return '后天';
-    // 远端全天任务：视图可去掉 (全天) 标记，仅详情栏/搜索等保留
-    return `${month}月${day}日` + (withAllDayTag ? ' (全天)' : '');
+    // 远端全天任务：非今年由 fmtMD 带出年份；视图可去掉 (全天) 标记，仅详情栏/搜索等保留
+    return fmtMD(taskDate) + (withAllDayTag ? ' (全天)' : '');
 }
 
 // 带时间任务的"结束部分"串：无结束时间返回空；同日返回 " - HH:MM"；跨天返回
@@ -443,10 +592,9 @@ function formatTaskListTime(task, opts = {}) {
     if (!task.startTime) return '';
     const b = getDateBounds();
     const taskDate = new Date(task.startTime);
-    const dateLabel = fmtMD(taskDate);
     const withAllDayTag = opts.withAllDayTag !== false;
 
-    // 全天任务：近端用相对词并去掉"全天"，更远用实际日期
+    // 全天任务：近端用相对词并去掉"全天"，更远用实际日期（非今年带年份）
     if (task.isAllDay) return getAllDayLabel(task, withAllDayTag);
 
     const hours = taskDate.getHours().toString().padStart(2, '0');
@@ -454,16 +602,16 @@ function formatTaskListTime(task, opts = {}) {
     const timeStr = `${hours}:${mins}`;
     const endPart = buildTimedEndPart(task);
 
+    // 今天的已过时刻仍只显示时刻：分组头/卡片头已提供日期上下文
     if (taskDate >= b.todayStart && taskDate < b.tomorrowStart) return timeStr + endPart;
     if (taskDate >= b.yesterdayStart && taskDate < b.todayStart) return `昨天 ${timeStr}` + endPart;
+    if (taskDate >= b.dayBeforeYesterdayStart && taskDate < b.yesterdayStart) return `前天 ${timeStr}` + endPart;
     if (taskDate >= b.tomorrowStart && taskDate < b.dayAfterTomorrowStart) return `明天 ${timeStr}` + endPart;
     if (taskDate >= b.dayAfterTomorrowStart && taskDate < b.threeDaysLaterStart) return `后天 ${timeStr}` + endPart;
 
-    // 远端/过期任务：搜索结果需带日期；任务视图仅在"最近7天/以后"分组带日期（统一空格分隔）
-    if (opts.fullDate) return `${dateLabel} ${timeStr}` + endPart;
-    const group = getTaskListGroup(task);
-    if (group === 'recent7' || group === 'later') return `${dateLabel} ${timeStr}` + endPart;
-    return timeStr + endPart;
+    // 更早的过期任务、已完成旧任务、远期任务一律带绝对日期（非今年自动带年份），
+    // 不再依赖所属分组或 fullDate 开关，避免「已过期」组里只剩 11:23 丢失日期归属。
+    return `${fmtMD(taskDate)} ${timeStr}` + endPart;
 }
 
 // 构建任务列表分组。返回归一化的分组数组，供 renderTaskListView 统一渲染。
@@ -491,7 +639,11 @@ function buildTaskListGroups() {
         shouldHideExternalTasks() ? '1' : '0',  // 离线「显示外部日历」开关变化须失效重建
         tvc.noDateTaskPosition,
         tvc.showCompleted ? '1' : '0',
+        tvc.separateCompleted !== false ? '1' : '0',
         tvc.groupBy + '|' + tvc.sortBy + '|' + tvc.sortDir + '|' + tvc.groupCollapseStrategy,
+        (typeof isBatchSelectActive === 'function' && isBatchSelectActive() ? '1' : '0'),
+        (typeof isRecurringFutureEnabled === 'function' && isRecurringFutureEnabled('task') ? '1' : '0'),
+        (typeof getRecurringRangeKey === 'function' ? getRecurringRangeKey() : ''),
         customGroupSig
     ].join('|');
     if (_taskListGroupsCache && _taskListGroupsCache.sig === sig) {
@@ -506,21 +658,26 @@ function buildTaskListGroups() {
 // 失效任务列表分组缓存（数据结构性变更时调用）
 function invalidateTaskListGroupsCache() {
     _taskListGroupsCache = null;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
 }
 
 function _buildTaskListGroupsUncached() {
-    const filtered = filterTasks(tasks, { includeCompleted: getTaskViewConfig().showCompleted !== false });
+    const cfg = getTaskViewConfig();
+    const filtered = filterTasks(tasks, { includeCompleted: cfg.showCompleted !== false });
 
     // 时间窗筛选视图（今天/明天/最近3天/最近7天）：按天分组
     if (isSpecialTimeFilter()) {
         const b = getDateBounds();
+        // 合入模式（separateCompleted=false）：已完成按自身日期留在当天分组内并置底；
+        // 无 startTime 的已完成为历史数据，无处归日，仍落到「已完成」兜底组
+        const merged = cfg.separateCompleted === false;
 
         const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
         const dayBuckets = {};
         const completedTasks = [];
 
         filtered.forEach(task => {
-            if (task.completed) { completedTasks.push(task); return; }
+            if (task.completed && (!merged || !task.startTime)) { completedTasks.push(task); return; }
             if (!task.startTime) return;
             const d = new Date(task.startTime);
             const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -528,6 +685,19 @@ function _buildTaskListGroupsUncached() {
             if (!dayBuckets[dateKey]) dayBuckets[dateKey] = { date: dayStart, tasks: [] };
             dayBuckets[dateKey].tasks.push(task);
         });
+
+        // 重复任务的未来实例：投影已按当前筛选语义（含时间窗/自定义过滤器）过滤，
+        // 直接归入对应日期分组；只读投影，不落库、不计入统计
+        const _batchOn = (typeof isBatchSelectActive === 'function') && isBatchSelectActive();
+        if (!_batchOn && typeof getRecurringGhostMap === 'function') {
+            const ghostMap = getRecurringGhostMap('task');
+            Object.keys(ghostMap).forEach(dateKey => {
+                if (!dayBuckets[dateKey]) {
+                    dayBuckets[dateKey] = { date: new Date(dateKey + 'T00:00:00'), tasks: [] };
+                }
+                ghostMap[dateKey].forEach(ghost => dayBuckets[dateKey].tasks.push(ghost));
+            });
+        }
 
         const groups = Object.keys(dayBuckets)
             .sort((a, b) => dayBuckets[a].date - dayBuckets[b].date)
@@ -547,17 +717,21 @@ function _buildTaskListGroupsUncached() {
                 const titleCore = relPrefix
                     ? `${relPrefix}${_daySep}周${dow}${_daySep}${month}月${day}日`
                     : `周${dow}${_daySep}${month}月${day}日`;
-                const sorted = g.tasks.slice().sort((a, b) => {
-                    if (a.completed !== b.completed) return a.completed ? 1 : -1;
-                    return new Date(a.startTime) - new Date(b.startTime);
-                });
+                const sorted = merged
+                    ? sortTaskListTasksWithCompletedBottom(g.tasks, { sortBy: 'time', sortDir: 'asc' })
+                    : g.tasks.slice().sort((a, b) => {
+                        if (a.completed !== b.completed) return a.completed ? 1 : -1;
+                        return new Date(a.startTime) - new Date(b.startTime);
+                    });
+                // 合入模式下组标题只计未完成（与「所有任务」视图口径一致）
+                const dayCount = merged ? sorted.filter(t => !t.completed).length : sorted.length;
                 return {
                     key: `day_${dateKey}`,
                     dataGroup: date.toDateString() === b.todayStart.toDateString() ? 'today' : `day_${dateKey}`,
-                    labelHtml: `${titleCore}<span class="ml-1 text-xs text-theme-muted font-normal">${sorted.length}</span>`,
+                    labelHtml: `${titleCore}<span class="ml-1 text-xs text-theme-muted font-normal">${dayCount}</span>`,
                     tasks: sorted,
                     isCompleted: false,
-                    count: sorted.length,
+                    count: dayCount,
                     overdue: false
                 };
             });
@@ -578,7 +752,7 @@ function _buildTaskListGroupsUncached() {
                 overdue: false
             });
         }
-        return groups;
+        return _finalizeTaskGroups(groups);
     }
 
     // 默认视图：按任务视图配置分组（分组依据/排序依据/排序方式），默认值与原时间桶分组一致
@@ -609,7 +783,10 @@ function _getListsByIdMap() {
 }
 
 // 构建单个任务卡片 HTML（抽出供统一渲染复用）
-function buildTaskListItemHtml(task, useShortTime) {
+function buildTaskListItemHtml(task, useShortTime, opts) {
+    if (task && task._projected && typeof renderRecurringGhostTaskListHtml === 'function') {
+        return renderRecurringGhostTaskListHtml(task, useShortTime);
+    }
     const list = _getListsByIdMap().get(task.listId);
     const listColor = list ? list.color : '#9ca3af';
     const listName = list ? list.name : '';
@@ -624,13 +801,11 @@ function buildTaskListItemHtml(task, useShortTime) {
     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
     const tagCapsules = renderTagCapsules(task, 2, 'right');
     // 显示任务详情（备注/子任务）：由任务视图配置 showDetails 控制
+    // 备注/描述与子任务的行数分配见 renderTaskDetailsBlock（方案 C：描述 4-n 行 + 子任务 n 条）
     const tvcShowDetails = getTaskViewConfig().showDetails;
     let taskDetailsLine = '';
     if (tvcShowDetails) {
-        const subtaskHtml = renderSubtaskListDisplay(task);
-        taskDetailsLine = subtaskHtml
-            ? subtaskHtml
-            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '');
+        taskDetailsLine = renderTaskDetailsBlock(task);
     }
 
     // FR-03 多选态：行点击切换为「选中」语义（V3-5），完成勾选框替换为选择指示器，
@@ -661,6 +836,7 @@ function buildTaskListItemHtml(task, useShortTime) {
                 ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
                 ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                 ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span><span class="hidden sm:inline">${listName}</span></span>` : ''}
+                ${typeof renderRecurringTaskBadge === 'function' ? renderRecurringTaskBadge(task) : ''}
             </div>
             ${timeDisplay ? `<span class="flex-shrink-0 text-xs ${timeTextClass} whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
         </div>
@@ -682,6 +858,7 @@ function openTaskConfig() {
     const sdAsc = document.getElementById('tc-sortdir-asc');
     const sdDesc = document.getElementById('tc-sortdir-desc');
     const sc = document.getElementById('tc-showcompleted');
+    const sep = document.getElementById('tc-separatecompleted');
     const ndp = document.getElementById('tc-nodatepos');
     const sf = document.getElementById('tc-showfocus');
     const sd = document.getElementById('tc-showdetails');
@@ -691,16 +868,27 @@ function openTaskConfig() {
     if (sdAsc) sdAsc.checked = cfg.sortDir !== 'desc';
     if (sdDesc) sdDesc.checked = cfg.sortDir === 'desc';
     if (sc) sc.checked = cfg.showCompleted !== false;
+    if (sep) sep.checked = cfg.separateCompleted !== false;
     if (ndp) ndp.value = cfg.noDateTaskPosition === 'first' ? 'first' : 'last'; // tc-nodatepos 仅 first|last，'none' 等异常值归一为 last
     if (sf) sf.checked = cfg.showFocusButton !== false;
     if (sd) sd.checked = cfg.showDetails === true;
     if (col) col.value = cfg.groupCollapseStrategy || 'only-completed-collapsed';
     updateTaskGroupConfigEntry();
+    updateTaskSeparateCompletedVisibility();
     openViewConfigPanel('task', (forSwitch) => {
         if (typeof _kanbanGroupConfigOpen !== 'undefined' && _kanbanGroupConfigOpen) closeKanbanGroupConfig(); // 子面板打开时先关子面板，避免成孤儿
         saveData(); // 延迟保存：变更实时预览，关闭面板时统一落盘
         if (!forSwitch) renderView(); // 切换视图场景由切换方渲染，跳过冗余渲染
     });
+}
+
+// 「显示已完成任务」关闭时隐藏「已完成任务独立分组」——看不到已完成，摆放规则无从设置
+// （与日程视图「显示无日期任务」→「显示位置」的联动同范式）
+function updateTaskSeparateCompletedVisibility() {
+    const scEl = document.getElementById('tc-showcompleted');
+    const wrap = document.getElementById('tc-separatecompleted-wrap');
+    // 用 style.display 而非 .hidden：该行本身带 flex，避免 hidden 与 flex 的优先顺序冲突
+    if (scEl && wrap) wrap.style.display = scEl.checked ? '' : 'none';
 }
 
 // 「分组配置」入口显隐：仅分组依据=自定义且侧边栏选中单个清单时显示（与看板入口条件一致）
@@ -723,7 +911,7 @@ function resetTaskViewConfig() {
         openTaskConfig();
         showToast('已恢复该清单的任务视图配置（继承全局）', 'success');
     } else {
-        _resetViewConfigToDefault('taskViewConfig', { showCompleted: true, noDateTaskPosition: 'last', showFocusButton: true });
+        _resetViewConfigToDefault('taskViewConfig', { showCompleted: true, separateCompleted: true, noDateTaskPosition: 'last', showFocusButton: true });
         saveData();
         renderView();
         openTaskConfig();
@@ -738,6 +926,7 @@ function onTaskConfigChange() {
     const sb = document.getElementById('tc-sortby');
     const sdDesc = document.getElementById('tc-sortdir-desc');
     const sc = document.getElementById('tc-showcompleted');
+    const sep = document.getElementById('tc-separatecompleted');
     const ndp = document.getElementById('tc-nodatepos');
     const sf = document.getElementById('tc-showfocus');
     const sd = document.getElementById('tc-showdetails');
@@ -746,16 +935,21 @@ function onTaskConfigChange() {
     if (sb) target.sortBy = sb.value;
     if (sdDesc) target.sortDir = sdDesc.checked ? 'desc' : 'asc';
     if (sc) target.showCompleted = sc.checked;
+    if (sep) target.separateCompleted = sep.checked;
     if (ndp) target.noDateTaskPosition = ndp.value;
     if (sf) target.showFocusButton = sf.checked;
     if (sd) target.showDetails = sd.checked;
     if (col) target.groupCollapseStrategy = col.value;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
     updateTaskGroupConfigEntry();
+    updateTaskSeparateCompletedVisibility();
     renderView();
 }
 
 // 初始化分组折叠状态（per-list）：按策略设置默认值并同步到内存缓存
 function _initTaskListGroupCollapse(strat, listKey) {
+    // 折叠策略重算意味着筛选/分组依据/清单都换了，先前按组展开的已完成段落一起作废
+    _taskGroupCompletedExpanded = {};
     if (strat === 'all-expanded') {
         taskListGroupCollapsed = {};
     } else if (strat === 'all-collapsed') {
@@ -858,11 +1052,8 @@ function renderTaskListView(container) {
 
     groups.forEach(group => {
         const isCollapsed = !!taskListGroupCollapsed[group.key];
-        // 已完成分组在未展开"查看更多"时仅显示前5条
-        const visibleTasks = group.isCompleted && !taskListCompletedShowAll
-            ? group.tasks.slice(0, 5)
-            : group.tasks;
-        const hasMore = group.isCompleted && group.tasks.length > 5 && !taskListCompletedShowAll;
+        // 已完成段落截断：独立「已完成」组走全局开关；合入模式的分组按组展开（见 _taskGroupVisibleTasks）
+        const visibleTasks = _taskGroupVisibleTasks(group);
 
         html += `
             <div class="mb-3 last:mb-0" data-task-group="${group.dataGroup}">
@@ -879,23 +1070,16 @@ function renderTaskListView(container) {
         `;
 
         // 折叠分组跳过 HTML 构建（Lazy Rendering）：折叠态不构建任务项 HTML，
-        // 仅保留容器占位；展开时由 _populateTaskListGroupContent 局部注入，避免全量重渲染。
+        // 仅保留容器占位；展开时由 _syncTaskListWindows 局部注入，避免全量重渲染。
         if (!isCollapsed) {
-            // 虚拟滚动：仅立即构建接近视口分组的任务项，其余由 IntersectionObserver 懒加载。
-            // 占位容器高度由 data-task-count 估算，避免懒加载分组高度塌陷导致滚动跳动。
-            html += `<div class="task-list-group-lazy" data-group-key="${group.key}" data-populated="false"></div>`;
+            // 行级窗口化：占位高度按「总行数 × 行高」撑住滚动条与后续分组的几何位置，
+            // 这样未填充分组不会再因空容器（56px）全部落进视口而被一次性填充。
+            const total = visibleTasks.length;
+            html += `<div class="task-list-group-lazy" data-group-key="${group.key}" data-populated="false" data-total="${total}" data-window-start="-1" data-window-end="-1" style="min-height:${Math.round(total * _taskListRowEstimate)}px"></div>`;
         }
 
-        if (hasMore) {
-            html += `
-                <div class="py-2 px-3">
-                    <button onclick="event.stopPropagation(); showCompletedTasksPage()" class="text-sm text-accent hover:text-accent-hover transition">
-                        查看更多
-                    </button>
-                </div>
-            `;
-        }
-
+        // 组底「查看更多/收起」：独立已完成组 → 全量页；合入分组 → 就地按组展开（见 _renderTaskGroupMoreHtml）
+        html += _renderTaskGroupMoreHtml(group);
         html += `
                     </div>
                 </div>
@@ -928,77 +1112,169 @@ function renderTaskListView(container) {
     updateToggleAllGroupsButton(groups);
 }
 
-// 虚拟滚动：填充单个分组的任务项 HTML（懒加载/展开时复用）
-function _populateTaskListGroupContent(lazyEl, groups, useShortTime) {
-    if (!lazyEl || lazyEl.dataset.populated === 'true') return;
-    const groupKey = lazyEl.dataset.groupKey;
-    const group = groups.find(g => g.key === groupKey);
-    if (!group) return;
-    const visibleTasks = group.isCompleted && !taskListCompletedShowAll
-        ? group.tasks.slice(0, 5)
-        : group.tasks;
+// ==================== 行级窗口化渲染 ====================
+// 旧实现按「分组」整体注入 HTML：单个「更远」分组可达 5000+ 行，一次勾选完成触发
+// 全量 renderView 就要重建 5000+ 行 / 9 万 DOM 节点，主线程被占满数秒。
+// 现在每个分组只保留 [start,end) 区间的真实行，前后用等高占位撑住总高度，
+// 滚动时按 scrollTop 重算窗口并增量替换；离屏分组释放行 DOM，仅留占位。
+function _renderTaskListGroupWindow(lazyEl, group, start, end, useShortTime) {
+    const visibleTasks = _taskGroupVisibleTasks(group);
+    const total = visibleTasks.length;
+    start = Math.max(0, Math.min(start, total));
+    end = Math.max(start, Math.min(end, total));
     let inner = '';
-    for (let i = 0; i < visibleTasks.length; i++) {
-        inner += buildTaskListItemHtml(visibleTasks[i], useShortTime);
+    for (let i = start; i < end; i++) {
+        inner += buildTaskListItemHtml(visibleTasks[i], useShortTime, { taskList: true });
     }
-    lazyEl.innerHTML = inner;
+    lazyEl.dataset.total = String(total);
     lazyEl.dataset.populated = 'true';
-    // 多选态：新注入的行是「未选中」骨架，需要按当前选中集补上 .batch-selected（含分组指示器三态）
+    lazyEl.dataset.windowStart = String(start);
+    lazyEl.dataset.windowEnd = String(end);
+    lazyEl.style.minHeight = '0px';
+    lazyEl.innerHTML =
+        `<div class="tl-window-top" style="height:${Math.round(start * _taskListRowEstimate)}px"></div>` +
+        `<div class="tl-window-rows">${inner}</div>` +
+        `<div class="tl-window-bottom" style="height:${Math.round((total - end) * _taskListRowEstimate)}px"></div>`;
+    // 用实测行高校正估算值（showDetails / 子任务预览会让行变高），随后同步修正占位高度
+    if (end > start) {
+        const rowsEl = lazyEl.querySelector('.tl-window-rows');
+        const measured = rowsEl ? rowsEl.getBoundingClientRect().height / (end - start) : 0;
+        if (measured >= 28 && measured <= 160) {
+            _taskListRowEstimate = Math.round((_taskListRowEstimate * 0.7 + measured * 0.3) * 10) / 10;
+            const topEl = lazyEl.querySelector('.tl-window-top');
+            const bottomEl = lazyEl.querySelector('.tl-window-bottom');
+            if (topEl) topEl.style.height = Math.round(start * _taskListRowEstimate) + 'px';
+            if (bottomEl) bottomEl.style.height = Math.round((total - end) * _taskListRowEstimate) + 'px';
+        }
+    }
+    // 多选态：新注入的行是「未选中」骨架，按当前选中集补上 .batch-selected（含分组指示器三态）
     if (typeof isBatchSelectActive === 'function' && isBatchSelectActive()
         && typeof _refreshBatchSelectionDom === 'function') {
         _refreshBatchSelectionDom();
     }
 }
 
-// 设置任务列表虚拟滚动：视口附近分组立即填充，远端分组由 IO 懒加载
-function _setupTaskListVirtualScroll(container, groups, useShortTime) {
-    const scrollEl = container.querySelector('.task-list-view');
-    if (!scrollEl) return;
-    _taskListVirtualScrollEl = scrollEl;
-    _taskListVirtualState = { groups, useShortTime };
+function _releaseTaskListGroupWindow(lazyEl) {
+    const total = Number(lazyEl.dataset.total || 0);
+    lazyEl.dataset.populated = 'false';
+    lazyEl.dataset.windowStart = '-1';
+    lazyEl.dataset.windowEnd = '-1';
+    lazyEl.style.minHeight = Math.round(total * _taskListRowEstimate) + 'px';
+    lazyEl.innerHTML = '';
+}
 
-    // 断开上一次渲染的 IO，避免累积泄漏
-    if (_taskListVirtualIO) {
-        _taskListVirtualIO.disconnect();
-        _taskListVirtualIO = null;
-    }
-
-    const lazyEls = container.querySelectorAll('.task-list-group-lazy');
-    const cRect = scrollEl.getBoundingClientRect();
-    const buffer = scrollEl.clientHeight || 400;
-    // 立即填充视口附近（含已恢复的滚动位置）的分组
-    lazyEls.forEach(el => {
-        if (el.dataset.populated === 'true') return;
-        const r = el.getBoundingClientRect();
-        if (r.bottom > cRect.top - buffer && r.top < cRect.bottom + buffer) {
-            _populateTaskListGroupContent(el, groups, useShortTime);
-        }
-    });
-
-    if ('IntersectionObserver' in window) {
-        const io = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    _populateTaskListGroupContent(entry.target, groups, useShortTime);
-                    io.unobserve(entry.target);
-                }
-            });
-        }, { root: scrollEl, rootMargin: '600px 0px 600px 0px' });
-        _taskListVirtualIO = io;
-        lazyEls.forEach(el => {
-            if (el.dataset.populated !== 'true') io.observe(el);
-        });
-    } else {
-        // 不支持 IO：全部填充（降级保证功能可用）
-        lazyEls.forEach(el => _populateTaskListGroupContent(el, groups, useShortTime));
+// 未填充分组的占位高度必须与「当前行高估算」一致：首帧用 44px 撑开，实测校正到 42px 后
+// 若不回写，5000 行分组会差上万像素，填充瞬间滚动条跳动、深滚动时窗口索引也会偏移。
+function _normalizeTaskListPlaceholders(lazyEls) {
+    for (const el of lazyEls) {
+        if (el.dataset.populated === 'true') continue;
+        const total = Number(el.dataset.total || 0);
+        el.style.minHeight = Math.round(total * _taskListRowEstimate) + 'px';
     }
 }
 
-// 销毁虚拟滚动资源（视图切换/空态时调用）
+// 按当前滚动位置同步所有分组的渲染窗口；force=true 时强制按最新分组数据重绘（局部更新用）
+function _syncTaskListWindows(force) {
+    const st = _taskListVirtualState;
+    if (!st || !st.scrollEl || !st.container || !st.scrollEl.isConnected) return;
+    const scrollEl = st.scrollEl;
+    const sTop = scrollEl.scrollTop;
+    const viewH = scrollEl.clientHeight || 600;
+    const est = _taskListRowEstimate;
+    const viewTop = sTop - TASK_LIST_WINDOW_OVERSCAN * est;
+    const viewBottom = sTop + viewH + TASK_LIST_WINDOW_OVERSCAN * est;
+    const sRect = scrollEl.getBoundingClientRect();
+    const lazyEls = st.container.querySelectorAll('.task-list-group-lazy');
+    _normalizeTaskListPlaceholders(lazyEls);
+    for (const el of lazyEls) {
+        // 折叠分组的容器高度为 0，几何计算会失真；释放行 DOM，展开时由 _populateTaskListGroupContent 重建
+        const contentEl = el.closest('[data-task-group-content]');
+        if (!contentEl || contentEl.classList.contains('hidden')) {
+            if (el.dataset.populated === 'true') _releaseTaskListGroupWindow(el);
+            continue;
+        }
+        const group = st.groups.find(g => g.key === el.dataset.groupKey);
+        if (!group) continue;
+        const total = Number(el.dataset.total || 0);
+        const r = el.getBoundingClientRect();
+        const groupTop = r.top - sRect.top + sTop;
+        const groupBottom = groupTop + Math.max(total * est, r.height);
+        if (total === 0) {
+            if (force && el.dataset.populated === 'true') _renderTaskListGroupWindow(el, group, 0, 0, st.useShortTime);
+            continue;
+        }
+        if (groupBottom < viewTop - est || groupTop > viewBottom + est) {
+            // 完全离屏：释放行 DOM，仅留等高占位，避免 DOM 随滚动无限累积
+            if (el.dataset.populated === 'true') _releaseTaskListGroupWindow(el);
+            continue;
+        }
+        let dStart = Math.max(0, Math.floor((viewTop - groupTop) / est));
+        let dEnd = Math.min(total, Math.ceil((viewBottom - groupTop) / est));
+        let start = Math.max(0, Math.min(dStart - TASK_LIST_WINDOW_OVERSCAN, Math.max(0, total - TASK_LIST_WINDOW_MIN)));
+        let end = Math.min(total, Math.max(dEnd + TASK_LIST_WINDOW_OVERSCAN, start + TASK_LIST_WINDOW_MIN));
+        const curStart = Number(el.dataset.windowStart);
+        const curEnd = Number(el.dataset.windowEnd);
+        // 当前窗口已覆盖目标窗口时跳过重建（迟滞），避免每滚动一像素就重排 DOM
+        if (!force && el.dataset.populated === 'true' && curStart <= start && curEnd >= end) continue;
+        _renderTaskListGroupWindow(el, group, start, end, st.useShortTime);
+    }
+    // 本轮渲染可能校正了行高估算，收尾时把仍未填充分组的占位同步到最新值
+    _normalizeTaskListPlaceholders(lazyEls);
+}
+
+// 兼容入口：展开分组 / 就地展开已完成段等旧调用点仍走这里，统一交给窗口同步
+function _populateTaskListGroupContent(lazyEl, groups, useShortTime) {
+    if (!lazyEl || lazyEl.dataset.populated === 'true') return;
+    const group = (groups || []).find(g => g.key === lazyEl.dataset.groupKey);
+    if (!group) return;
+    const total = _taskGroupVisibleTasks(group).length;
+    lazyEl.dataset.total = String(total);
+    lazyEl.dataset.windowStart = '-1';
+    lazyEl.dataset.windowEnd = '-1';
+    lazyEl.style.minHeight = Math.round(total * _taskListRowEstimate) + 'px';
+    if (_taskListVirtualState && _taskListVirtualState.scrollEl) {
+        _syncTaskListWindows(true);
+    } else {
+        _renderTaskListGroupWindow(lazyEl, group, 0, Math.min(total, TASK_LIST_WINDOW_MIN), useShortTime);
+    }
+}
+
+// 绑定滚动/尺寸监听，首帧同步一次窗口
+function _setupTaskListVirtualScroll(container, groups, useShortTime) {
+    const scrollEl = container.querySelector('.task-list-view');
+    if (!scrollEl) return;
+    _teardownTaskListVirtualScroll();
+    _taskListVirtualScrollEl = scrollEl;
+    _taskListVirtualState = { groups, useShortTime, container, scrollEl };
+    let raf = 0;
+    const onScroll = () => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; _syncTaskListWindows(false); });
+    };
+    const onResize = () => {
+        if (raf) cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => { raf = 0; _syncTaskListWindows(true); });
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
+    _taskListScrollCleanup = () => {
+        scrollEl.removeEventListener('scroll', onScroll);
+        window.removeEventListener('resize', onResize);
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+    };
+    _syncTaskListWindows(true);
+}
+
+// 销毁虚拟滚动资源（视图切换/空态/重渲染前调用）
 function _teardownTaskListVirtualScroll() {
     if (_taskListVirtualIO) {
         _taskListVirtualIO.disconnect();
         _taskListVirtualIO = null;
+    }
+    if (_taskListScrollCleanup) {
+        _taskListScrollCleanup();
+        _taskListScrollCleanup = null;
     }
     _taskListVirtualScrollEl = null;
     _taskListVirtualState = null;
@@ -1027,6 +1303,19 @@ function refreshTaskListItemForToggle(taskId) {
         return false;
     }
 
+    // 合入模式（已完成不独立成组）：勾选完成会让任务在本组内从「未完成段」掉到「已完成段」，
+    // 顺序与「已完成前 5 条」的截断都可能变化，局部替换不安全，走全量渲染
+    if (getTaskViewConfig().separateCompleted === false) {
+        invalidateTaskListGroupsCache();
+        return false;
+    }
+
+    // 重复任务的完成态变化会改变「后续 N 次」投影，局部替换无法同步隐藏的 ghost 区，走全量渲染
+    if (task.repeat && task.repeat.type) {
+        invalidateTaskListGroupsCache();
+        return false;
+    }
+
     const newGroupKey = getTaskListGroup(task);
 
     // 在当前 DOM 中查找该任务项
@@ -1045,7 +1334,7 @@ function refreshTaskListItemForToggle(taskId) {
 
     // 局部重建该任务项 HTML 并替换
     const useShortTime = _taskListVirtualState.useShortTime;
-    const newHtml = buildTaskListItemHtml(task, useShortTime);
+    const newHtml = buildTaskListItemHtml(task, useShortTime, { taskList: true });
     const tmp = document.createElement('div');
     tmp.innerHTML = newHtml;
     const newItem = tmp.firstElementChild;
@@ -1054,6 +1343,67 @@ function refreshTaskListItemForToggle(taskId) {
         return true;
     }
     return false;
+}
+
+/**
+ * 勾选完成 / 取消完成后的「增量刷新」（不整页重建）。
+ * 只在任务视图可用；跨分组移动、已完成段截断、分组计数、查看更多按钮都由分组数据统一重算，
+ * 再强制同步一次窗口（每个分组只重绘数十行）。不满足条件时返回 false，由调用方回退 renderView。
+ * 与 refreshTaskListItemForToggle 的区别：后者只处理「任务仍在原分组且行在 DOM 中」的窄场景，
+ * 本函数覆盖最常见的「完成 → 移入已完成组 / 取消完成 → 回到时间桶」。
+ */
+function applyTaskToggleIncremental(taskId) {
+    if (currentView !== 'task' || currentListId === '__archived__') return false;
+    const st = _taskListVirtualState;
+    if (!st || !st.scrollEl || !st.container || !st.scrollEl.isConnected) return false;
+    const task = tasks.find(t => t.id === taskId);
+    // 投影出来的重复任务实例不在 tasks 中，结构性变更（重复任务派生）也不走增量
+    if (!task || task._projected || (task.repeat && task.repeat.type)) return false;
+    if (typeof isBatchSelectActive === 'function' && isBatchSelectActive()) return false;
+
+    // 1) 失效分组缓存并按最新任务状态重建分组，窗口状态随后指向新数据
+    invalidateTaskListGroupsCache();
+    const groups = buildTaskListGroups();
+    st.groups = groups;
+
+    // 2) 塌陷动画结束后清掉旧行（动画期间它可能已被设为 0 高），避免局部重绘把它恢复成正常高度
+    const oldRow = st.container.querySelector(`.task-list-item[data-task-id="${taskId}"]`);
+    if (oldRow && oldRow.parentNode) oldRow.parentNode.removeChild(oldRow);
+
+    // 3) 同步分组标题计数 / 占位总行数 / 「查看更多」按钮
+    for (const g of groups) {
+        const contentEl = st.container.querySelector(`[data-task-group-content="${g.key}"]`);
+        if (!contentEl) continue;
+        const visible = _taskGroupVisibleTasks(g);
+        contentEl.dataset.taskCount = String(visible.length);
+        const groupEl = contentEl.closest('[data-task-group]');
+        if (groupEl) {
+            const h3 = groupEl.querySelector('.task-list-group-header h3');
+            if (h3) h3.innerHTML = g.labelHtml;
+        }
+        const innerEl = contentEl.querySelector('.fx-collapse-inner');
+        const moreEl = contentEl.querySelector('[data-group-more]');
+        const moreHtml = _renderTaskGroupMoreHtml(g);
+        if (moreHtml) {
+            if (moreEl) moreEl.outerHTML = moreHtml;
+            else if (innerEl) innerEl.insertAdjacentHTML('beforeend', moreHtml);
+        } else if (moreEl) {
+            moreEl.remove();
+        }
+        const lazyEl = contentEl.querySelector('.task-list-group-lazy');
+        if (lazyEl) {
+            lazyEl.dataset.total = String(visible.length);
+            if (lazyEl.dataset.populated !== 'true') {
+                lazyEl.style.minHeight = Math.round(visible.length * _taskListRowEstimate) + 'px';
+            }
+        }
+    }
+
+    // 4) 按新分组数据强制重绘可见窗口（离屏分组顺带释放行 DOM）
+    _syncTaskListWindows(true);
+    if (typeof updatePostponeButton === 'function') updatePostponeButton();
+    if (typeof updateToggleAllGroupsButton === 'function') updateToggleAllGroupsButton(groups);
+    return true;
 }
 
 // 切换任意分组的折叠状态（今天/明天/最近7天/更远/已完成 等通用）
@@ -1163,10 +1513,6 @@ function updateToggleAllGroupsButton(groups) {
     }
 }
 
-// 兼容旧调用入口
-function toggleTaskListCompletedGroup() {
-    toggleTaskListGroup('completed');
-}
 
 function showCompletedTasksPage() {
     taskListCompletedShowAll = true;
@@ -1249,6 +1595,9 @@ function buildScheduleDayCardHtml(date, dayTasks) {
         } else {
             timeDisplay = formatScheduleTimedLabel(task, date);
         }
+        if (task._projected && typeof renderRecurringGhostScheduleHtml === 'function') {
+            return renderRecurringGhostScheduleHtml(task, timeDisplay);
+        }
         const focusMinutes = getTaskFocusMinutes(task.id);
         const isOverdue = isTaskOverdue(task);
         const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-secondary';
@@ -1263,6 +1612,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
                         <span class="${timeTextClass}">${timeDisplay}</span>
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>${list.name}</span>` : ''}
+                        ${typeof renderRecurringTaskBadge === 'function' ? renderRecurringTaskBadge(task) : ''}
                         ${renderTagCapsules(task, 2, 'right')}
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
@@ -1270,7 +1620,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
                     <div class="font-medium ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'}">
                         ${task.title || '新任务'}
                     </div>
-                    ${getScheduleConfig().showDetails !== false ? (renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${task.notes}</div>` : '')) : ''}
+                    ${getScheduleConfig().showDetails !== false ? renderTaskDetailsBlock(task) : ''}
                 </div>
             </div>
         `;
@@ -1367,6 +1717,7 @@ function refreshScheduleDayCardsForTask(taskId) {
 // 结构性变更（增删/改期/服务端刷新）由 invalidateScheduleFilterCache 主动失效。
 function invalidateScheduleFilterCache() {
     _scheduleFilteredCache = null;
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
 }
 
 // 日程视图某日分组排序：先按完成状态（sortTasksByCompletion：未完成在前、已完成在后），
@@ -1396,7 +1747,7 @@ function getScheduleGroupedTasks() {
     const scfg = getScheduleConfig();
     const showNoDate = scfg.showNoDateTasks !== false; // 「显示无日期任务」开关：关时不注入今天分组
     const noDateMode = showNoDate ? (scfg.noDateTaskPosition || 'last') : 'none';
-    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey + '|' + (noDateMode === 'first' ? 'f' : (noDateMode === 'none' ? 'n' : 'l')) + '|' + (scfg.showCompleted ? '1' : '0') + '|' + (shouldHideExternalTasks() ? '1' : '0');
+    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey + '|' + (noDateMode === 'first' ? 'f' : (noDateMode === 'none' ? 'n' : 'l')) + '|' + (scfg.showCompleted ? '1' : '0') + '|' + (shouldHideExternalTasks() ? '1' : '0') + '|' + (typeof isRecurringFutureEnabled === 'function' && isRecurringFutureEnabled('schedule') ? '1' : '0') + '|' + (typeof getRecurringRangeKey === 'function' ? getRecurringRangeKey() : '');
     if (_scheduleFilteredCache && _scheduleFilteredCache.sig === sig) {
         return _scheduleFilteredCache.grouped;
     }
@@ -1449,6 +1800,11 @@ function getScheduleGroupedTasks() {
     if (noDateMode !== 'none' && noDateTasks.length > 0) {
         if (!groupedTasks[todayKey]) groupedTasks[todayKey] = [];
         noDateTasks.forEach(t => groupedTasks[todayKey].push(t));
+    }
+
+    // 只读后续投影：仅参与展示，不进入 _scheduleGroupedTasks 的写操作路径
+    if (typeof mergeRecurringGhostsIntoGrouped === 'function') {
+        mergeRecurringGhostsIntoGrouped(groupedTasks, 'schedule');
     }
 
     Object.keys(groupedTasks).forEach(dateKey => {
@@ -1860,8 +2216,3 @@ function navigateScheduleMonth(direction) {
     renderScheduleView(document.getElementById('view-container'));
 }
 
-function resetScheduleView() {
-    scheduleMonthOffset = 0;
-    _scheduleAutoScroll = true;
-    renderScheduleView(document.getElementById('view-container'));
-}

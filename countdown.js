@@ -42,22 +42,317 @@ function parseYmd(dateStr) {
     return dt;
 }
 
-// 计算距离目标日期的剩余天数（每天 0 点对齐）
-// repeat==='yearly'：取今年/明年最近的该月日；repeat==='once'：固定日期，过期返回负数
-function getCountdownDays(dateStr, repeat) {
-    const dt = parseYmd(dateStr);
-    if (!dt) return null;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (repeat === 'yearly') {
-        const y = today.getFullYear();
-        let target = new Date(y, dt.getMonth(), dt.getDate());
-        if (target < today) {
-            target = new Date(y + 1, dt.getMonth(), dt.getDate());
-        }
-        return Math.round((target - today) / 86400000);
+// ==================== 重复规则（对齐任务详情面板「设置时间 → 重复」） ====================
+// 2026-11-11 约定：不含「每天」分组；每周 / 每月 / 每年三组全做，外加自定义。
+// 锚点口径：目标日期 = 首次发生日。所有规则从锚点起生成发生日序列，
+//   取第一个 >= 今天 的日期作为「下一次发生日」；once 固定返回锚点（过期可为负）。
+// 边界口径：某月/某年不存在该日（每月31日、2月29日）时跳过该期，不溢出到次月。
+// 工作日/农历/节假日一律复用 data.js 与 lunar.js 的底层工具，不复用任务的
+// getNextRepeatOccurrence()（那是「完成后派生下一周期」并带 catch-up 追赶，语义不同）。
+
+const CD_WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
+const CD_UNIT_NAMES = { days: '天', weeks: '周', months: '月', years: '年' };
+
+// 编辑卡 select 的分组；label 为空表示不包 optgroup；未写 text 的项由目标日期推导文案
+const CD_REPEAT_GROUPS = [
+    { label: '', options: [{ value: 'once', text: '仅一次' }] },
+    { label: '每周', options: [
+        { value: 'weekly' },
+        { value: 'weeklyFirstWorkday', text: '每周首个工作日' },
+        { value: 'weeklyLastWorkday', text: '工作周期最后一个工作日' }
+    ] },
+    { label: '每月', options: [
+        { value: 'monthly' },
+        { value: 'monthlyLunar', text: '每月（农历）' },
+        { value: 'monthlyFirstWorkday', text: '每月首个工作日' },
+        { value: 'monthlyLastWorkday', text: '每月最后一个工作日' }
+    ] },
+    { label: '每年', options: [
+        { value: 'yearly', text: '每年' },
+        { value: 'yearlyLunar', text: '每年（农历）' },
+        { value: 'yearlyBeforeHoliday', text: '每个节假日前一天' }
+    ] },
+    { label: '自定义', options: [{ value: 'custom', text: '自定义' }] }
+];
+
+// 今天 0 点：走 getTodayKey，与 dayRollover.js 的日期真源保持一致
+function cdTodayStart() {
+    if (typeof getTodayKey === 'function') {
+        const p = getTodayKey().split('-');
+        return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10));
     }
-    return Math.round((dt - today) / 86400000);
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+}
+
+// select 选项文案（weekly / monthly 随目标日期变化）；卡片规则标签与它同源
+function cdRepeatOptionText(value, dateStr) {
+    if (value === 'weekly' || value === 'monthly' || value === 'yearly') {
+        const dt = parseYmd(dateStr);
+        if (!dt) return value === 'weekly' ? '每周' : (value === 'monthly' ? '每月' : '每年');
+        if (value === 'weekly') return '每周' + CD_WEEKDAY_NAMES[dt.getDay()];
+        if (value === 'monthly') return '每月' + dt.getDate() + '日';
+        // 每年：与 tasks.js:4464 同口径，标出实际月日（2026-11-18 →「每年11月18日」）
+        return '每年' + (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+    }
+    // 农历选项标出实际农历日期，口径与 tasks.js:refreshDetailRepeatOptionLabels 一致：
+    // 每月农历 →「每月初十」；每年农历 →「每年十月初十」（起始日落在闰月也不带「闰」）。
+    // 未选目标日期或农历数据不可用时，退回 CD_REPEAT_GROUPS 里的「每月（农历）」。
+    if (value === 'monthlyLunar' || value === 'yearlyLunar') {
+        const dt = parseYmd(dateStr);
+        if (dt && typeof LunarCalendar !== 'undefined') {
+            const lunar = LunarCalendar.solarToLunar(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+            if (lunar) {
+                return value === 'monthlyLunar'
+                    ? '每月' + LunarCalendar.getDayName(lunar.lDay)
+                    : '每年' + LunarCalendar.getMonthName(lunar.lMonth) + LunarCalendar.getDayName(lunar.lDay);
+            }
+        }
+    }
+    for (let i = 0; i < CD_REPEAT_GROUPS.length; i++) {
+        const opts = CD_REPEAT_GROUPS[i].options;
+        for (let j = 0; j < opts.length; j++) {
+            if (opts[j].value === value && opts[j].text) return opts[j].text;
+        }
+    }
+    return '仅一次';
+}
+
+// 卡片展示态的短标签：仅用于「工作周期最后一个工作日」等长规则，
+// 避免 195px 宽的卡片里「标签 · 日期」折行。选项面板与触发按钮仍用完整文案。
+const CD_CARD_SHORT_LABELS = {
+    weeklyFirstWorkday: '每周首工作日',
+    weeklyLastWorkday: '周期末工作日',
+    monthlyFirstWorkday: '每月首工作日',
+    monthlyLastWorkday: '每月末工作日',
+    yearlyBeforeHoliday: '节假日前一天'
+};
+
+// 卡片上的规则标签：once 与系统默认项不显示；自定义显示「每2周」
+function cdRuleLabel(cd) {
+    if (!cd || !cd.repeat || cd.repeat === 'once') return '';
+    if (cd.repeat === 'custom') {
+        const n = parseInt(cd.interval, 10);
+        if (!n || n < 1) return '自定义';
+        return '每' + n + (CD_UNIT_NAMES[cd.unit] || '天');
+    }
+    return cdRepeatOptionText(cd.repeat, cd.date);
+}
+
+/**
+ * 卡片池专用标签（配置态与展示态分工）：
+ *  - yearly / monthly 的完整标签已包含月日，与 dateLabel 的下次发生日重复
+ *    （如「每年12月12日 · 12月12日」）→ 卡片简化为「每年」「每月」；
+ *  - 长规则用 CD_CARD_SHORT_LABELS 短标签，防止信息行折行；
+ *  - 其余规则（周几、农历日、间隔、仅一次）与公历日期互补，保持完整。
+ */
+function cdCardRuleLabel(cd) {
+    if (!cd || !cd.repeat || cd.repeat === 'once') return '';
+    if (CD_CARD_SHORT_LABELS[cd.repeat]) return CD_CARD_SHORT_LABELS[cd.repeat];
+    if (cd.repeat === 'yearly') return '每年';
+    if (cd.repeat === 'monthly') return '每月';
+    return cdRuleLabel(cd);
+}
+
+/**
+ * 按重复规则求「下一次发生日」。
+ * @param {string} dateStr - 目标日期（锚点，YYYY-MM-DD）
+ * @param {string} repeat - CD_REPEAT_GROUPS 中的 value
+ * @param {object} [extra] - 倒计时对象本身；custom 时读 interval / unit
+ * @returns {Date|null} 下一次发生日 00:00；日期非法返回 null
+ */
+function getNextCountdownDate(dateStr, repeat, extra) {
+    const anchor = parseYmd(dateStr);
+    if (!anchor) return null;
+    const rule = repeat || 'once';
+    if (rule === 'once') return anchor;
+
+    const today = cdTodayStart();
+    // 「目标日期即首次发生日」：既不能早于目标日期，也不能早于今天
+    const base = anchor > today ? anchor : today;
+    const cfg = extra || {};
+    const unit = cfg.unit || 'days';
+    const interval = (typeof parsePositiveInt === 'function')
+        ? (parsePositiveInt(cfg.interval) || 1)
+        : (parseInt(cfg.interval, 10) || 1);
+    const dayOfMonth = anchor.getDate();
+    const month = anchor.getMonth();
+    let cand = new Date(anchor);
+    let guard = 0;
+
+    // 该月/年确实存在这一天时才返回，否则 null（2/30、平年 2/29 等）
+    function validYmd(y, m, d) {
+        const t = new Date(y, m, d);
+        return (t.getFullYear() === y && t.getMonth() === m && t.getDate() === d) ? t : null;
+    }
+    function stalled(before) { return cand.getTime() === before; }
+
+    switch (rule) {
+        case 'weekly':
+            while (cand < base && guard++ < 3000) cand.setDate(cand.getDate() + 7);
+            return cand;
+
+        case 'monthly': {
+            while (cand < base && guard++ < 600) {
+                const before = cand.getTime();
+                let y = cand.getFullYear(), m = cand.getMonth() + 1;
+                if (m > 11) { m = 0; y += 1; }
+                for (let i = 0; i < 24; i++) {
+                    const t = validYmd(y, m, dayOfMonth);
+                    if (t) { cand = t; break; }
+                    m += 1; if (m > 11) { m = 0; y += 1; }
+                }
+                if (stalled(before)) break;
+            }
+            return cand;
+        }
+
+        case 'yearly': {
+            while (cand < base && guard++ < 200) {
+                const before = cand.getTime();
+                let y = cand.getFullYear();
+                for (let i = 0; i < 8; i++) {
+                    y += 1;
+                    const t = validYmd(y, month, dayOfMonth);
+                    if (t) { cand = t; break; }
+                }
+                if (stalled(before)) break;
+            }
+            return cand;
+        }
+
+        case 'custom': {
+            if (unit === 'days' || unit === 'weeks') {
+                const step = interval * (unit === 'weeks' ? 7 : 1);
+                while (cand < base && guard++ < 20000) cand.setDate(cand.getDate() + step);
+                return cand;
+            }
+            // 月/年：以锚点的绝对月序号推进，某月无该日则跳过该期
+            const stepMonths = interval * (unit === 'years' ? 12 : 1);
+            const anchorIdx = anchor.getFullYear() * 12 + anchor.getMonth();
+            let idx = 0;
+            while (cand < base && guard++ < 1200) {
+                idx += 1;
+                const mi = anchorIdx + idx * stepMonths;
+                const t = validYmd(Math.floor(mi / 12), mi % 12, dayOfMonth);
+                if (t) cand = t;
+            }
+            return cand;
+        }
+
+        case 'weeklyFirstWorkday': {
+            const monday = (typeof settings !== 'undefined' && settings.weekStart === 'monday');
+            let ws = getWeekStartDate(base, monday);
+            for (let i = 0; i < 60; i++) {
+                const fw = findFirstWorkdayOfWeek(ws);
+                if (fw && fw >= base) return fw;
+                ws = new Date(ws);
+                ws.setDate(ws.getDate() + 7);
+            }
+            return anchor;
+        }
+
+        case 'weeklyLastWorkday': {
+            const c = new Date(base);
+            for (let i = 0; i < 40; i++) {
+                if (isLastWorkdayOfCycle(c)) return c;
+                c.setDate(c.getDate() + 1);
+            }
+            return anchor;
+        }
+
+        case 'monthlyFirstWorkday': {
+            let y = base.getFullYear(), m = base.getMonth();
+            for (let i = 0; i < 24; i++) {
+                const fw = findFirstWorkdayOfMonth(y, m);
+                if (fw && fw >= base) return fw;
+                m += 1; if (m > 11) { m = 0; y += 1; }
+            }
+            return anchor;
+        }
+
+        case 'monthlyLastWorkday': {
+            let y = base.getFullYear(), m = base.getMonth();
+            for (let i = 0; i < 24; i++) {
+                const lw = findLastWorkdayOfMonth(y, m);
+                if (lw && lw >= base) return lw;
+                m += 1; if (m > 11) { m = 0; y += 1; }
+            }
+            return anchor;
+        }
+
+        case 'monthlyLunar': {
+            if (typeof LunarCalendar === 'undefined') return anchor;
+            const la = LunarCalendar.solarToLunar(anchor.getFullYear(), anchor.getMonth() + 1, anchor.getDate());
+            if (!la) return anchor;
+            while (cand < base && guard++ < 60) {
+                const before = cand.getTime();
+                const cur = LunarCalendar.solarToLunar(cand.getFullYear(), cand.getMonth() + 1, cand.getDate());
+                if (!cur) break;
+                let pos = LunarCalendar.nextLunarMonth(cur.lYear, cur.lMonth, cur.isLeap);
+                for (let i = 0; i < 36; i++) {
+                    const s = LunarCalendar.lunarToSolar(pos.lYear, pos.lMonth, la.lDay, pos.isLeap);
+                    if (s && s > cand) { cand = s; break; }
+                    pos = LunarCalendar.nextLunarMonth(pos.lYear, pos.lMonth, pos.isLeap);
+                }
+                if (stalled(before)) break;
+            }
+            return cand;
+        }
+
+        case 'yearlyLunar': {
+            if (typeof LunarCalendar === 'undefined') return anchor;
+            const la = LunarCalendar.solarToLunar(anchor.getFullYear(), anchor.getMonth() + 1, anchor.getDate());
+            if (!la) return anchor;
+            while (cand < base && guard++ < 20) {
+                const before = cand.getTime();
+                const cur = LunarCalendar.solarToLunar(cand.getFullYear(), cand.getMonth() + 1, cand.getDate());
+                if (!cur) break;
+                for (let i = 1; i <= 10; i++) {
+                    const s = LunarCalendar.lunarToSolar(cur.lYear + i, la.lMonth, la.lDay, false);
+                    if (s && s > cand) { cand = s; break; }
+                }
+                if (stalled(before)) break;
+            }
+            return cand;
+        }
+
+        case 'yearlyBeforeHoliday': {
+            // 下一个节假日首日的前一天；数据覆盖不到的年份退回锚点
+            let cursor = new Date(base);
+            cursor.setDate(cursor.getDate() - 1);
+            for (let i = 0; i < 12; i++) {
+                const h = findNextHolidayStart(cursor, 400);
+                if (!h) break;
+                const d = new Date(h);
+                d.setDate(d.getDate() - 1);
+                if (d >= base) return d;
+                cursor = d;
+            }
+            return anchor;
+        }
+
+        default:
+            return anchor;  // 未知规则（旧数据 / 导入）按仅一次兜底
+    }
+}
+
+// 计算距离「下一次发生日」的剩余天数（每天 0 点对齐）；once 过期返回负数
+function getCountdownDays(dateStr, repeat, extra) {
+    const target = getNextCountdownDate(dateStr, repeat, extra);
+    if (!target) return null;
+    return Math.round((target - cdTodayStart()) / 86400000);
+}
+
+// 展示用：下一次发生日与「X月X日」文案（once 即原目标日期）
+function cdNextDate(cd) {
+    return getNextCountdownDate(cd.date, cd.repeat, cd) || parseYmd(cd.date);
+}
+
+function cdDateLabel(cd) {
+    const d = cdNextDate(cd);
+    return d ? (d.getMonth() + 1) + '月' + d.getDate() + '日' : (cd.date || '');
 }
 
 // 获取「进行中 / 下一个」法定节假日（复刻原 updateHolidayCountdown 的聚合逻辑）
@@ -174,10 +469,12 @@ function resolveCountdownItem(key) {
     }
     const cd = (settings.countdowns || []).find(c => c.id === key);
     if (!cd) return null;
-    const days = getCountdownDays(cd.date, cd.repeat);
-    const dt = parseYmd(cd.date);
-    const dateLabel = dt ? (dt.getMonth() + 1) + '月' + dt.getDate() + '日' : '';
-    return { key: key, isHoliday: false, name: cd.name, days: days, dateLabel: dateLabel };
+    const days = getCountdownDays(cd.date, cd.repeat, cd);
+    // 侧边栏 / 固定槽只展示「下一次发生日」，规则标签由卡片池单独开启（见 cdItemInner）
+    return {
+        key: key, isHoliday: false, name: cd.name, days: days,
+        dateLabel: cdDateLabel(cd), ruleLabel: cdCardRuleLabel(cd)
+    };
 }
 
 // ---------------------------------------------------------------- 侧边栏展示
@@ -219,7 +516,14 @@ function cdNameHtml(item, baseCls, nameOverride) {
 // todayNameMax：仅对「当天」放大名称生效的字数上限。
 //   侧边栏与固定槽传 COUNTDOWN_TODAY_NAME_MAX（固定槽即侧边栏预览，须一致）；
 //   卡片池不传（卡片可用宽 195.2px，够放下完整名称，截断只会丢信息）。
-function cdItemInner(item, todayNameMax) {
+// showRule：仅卡片池传 true —— 日期行前面并排显示「规则标签 · 下次日期」。
+//   侧边栏与固定槽不加标签（双栏单列仅 98px，加标签会折行），只显示下次日期。
+function cdItemInner(item, todayNameMax, showRule) {
+    const dateText = item.dateLabel || '';
+    const dateHtml = (showRule && item.ruleLabel)
+        ? '<span style="opacity:.68;font-size:.9em">' + escapeHtml(item.ruleLabel) + '</span> · ' + escapeHtml(dateText)
+        : escapeHtml(dateText);
+    const dateRow = '<div class="holiday-countdown-date">' + dateHtml + '</div>';
     if (item.days === 0) {
         // 今天 / 假期进行中：放大名称（与数字相同的衬线字体）占据原名称+数字两行，
         // 第二行显示日期行——节日当天「X月X日起」，假期进行中为持续区间「X月X日 - X月X日」
@@ -227,12 +531,10 @@ function cdItemInner(item, todayNameMax) {
         if (!item.isHoliday && todayNameMax && nm && nm.length > todayNameMax) {
             nm = nm.slice(0, todayNameMax);
         }
-        return cdNameHtml(item, 'holiday-countdown-name-today', nm) +
-            '<div class="holiday-countdown-date">' + escapeHtml(item.dateLabel) + '</div>';
+        return cdNameHtml(item, 'holiday-countdown-name-today', nm) + dateRow;
     }
     return cdNameHtml(item, 'holiday-countdown-label') +
-        '<div>' + cdDaysHtml(item.days) + '</div>' +
-        '<div class="holiday-countdown-date">' + escapeHtml(item.dateLabel) + '</div>';
+        '<div>' + cdDaysHtml(item.days) + '</div>' + dateRow;
 }
 
 function cdCycleNames(host) {
@@ -392,6 +694,7 @@ function switchToCountdownPage() {
 
 // 返回上一个页面
 function closeCountdownView() {
+    cdCleanupRepeatPicker();   // 离开倒计时视图时收掉 body 浮层
     if (typeof switchView === 'function') switchView(countdownPrevView || 'task');
 }
 
@@ -399,6 +702,7 @@ function closeCountdownView() {
 
 function renderCountdownView(container) {
     if (!container) return;
+    cdCleanupRepeatPicker();   // 重渲染前清掉挂到 body 的旧浮层，避免双 id / 残留
 
     // 右上角返回按钮（样式与「设置节假日与调休」右上角返回一致）
     const backBtn = '<button onclick="closeCountdownView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回"><i class="fas fa-arrow-left"></i></button>';
@@ -432,7 +736,7 @@ function renderCountdownView(container) {
                     const future = [];
                     const past = [];
                     allItems.forEach(it => {
-                        // 系统默认 / 每年重复 → 未来；仅一次且日期过去 → 过去
+                        // 系统默认 / 所有重复规则 → 未来；仅一次且日期过去 → 过去
                         const isPast = !it.isHoliday && it.repeat === 'once' && it.days < 0;
                         (isPast ? past : future).push(it);
                     });
@@ -512,11 +816,10 @@ function buildPoolItems() {
         });
     }
     (settings.countdowns || []).forEach(c => {
-        const days = getCountdownDays(c.date, c.repeat);
-        const dt = parseYmd(c.date);
+        const days = getCountdownDays(c.date, c.repeat, c);
         items.push({
             key: c.id, isHoliday: false, name: c.name, days: days, repeat: c.repeat,
-            dateLabel: dt ? (dt.getMonth() + 1) + '月' + dt.getDate() + '日' : c.date,
+            dateLabel: cdDateLabel(c), ruleLabel: cdCardRuleLabel(c),
             editable: true, deletable: true
         });
     });
@@ -563,7 +866,7 @@ function cdCardHtml(it) {
             '<button type="button" onclick="toggleCountdownPin(\'' + it.key + '\')" ' +
                 'class="cd-icon-btn cd-pin-btn' + pinActive + '" title="' + (pinned ? '已在侧边栏显示，点击取消' : '固定到侧边栏') + '">' +
                 '<i class="fas fa-thumbtack"></i></button>' +
-            '<div class="cd-side-body">' + cdItemInner(it) + '</div>' +
+            '<div class="cd-side-body">' + cdItemInner(it, undefined, true) + '</div>' +
             rightHtml +
         '</div>';
 }
@@ -680,24 +983,108 @@ function reorderWithinPool(fromKey, toKey) {
     renderCountdownView(document.getElementById('view-container'));
 }
 
+// ---------------------------------------------------------------- 重复规则选择面板
+// 结构与样式对齐任务详情面板 #detail-repeat-picker（index.html:5631-5727 / tasks.js:4184-4204）：
+//   触发按钮（fa-redo + 当前规则 + chevron）→ 弹出面板 →
+//   radio 选项 / .repeat-group 折叠子菜单 / .repeat-submenu-arrow / .border-t 分隔线。
+// 为适配窄编辑卡做的必要调整：
+//   1) radio name 用 cd-repeat，避免与任务面板的 detail-repeat 串台；
+//   2) 选中即收起面板，否则浮层会盖住编辑卡的保存按钮；
+//   3) 自定义输入行放在面板外，并用 visibility 切换以固定占位高度；
+//   4) 不做「重复方式」（倒计时无完成态）；
+//   5) 面板打开时移到 body 下并用 fixed + 视口坐标定位。留在 .cd-grid 卡片内的
+//      absolute 面板会把展开高度计入 .countdown-container 的滚动区域，引发滚动条
+//      出现/行高变化 → 卡片位置跳动。移出卡片流后展开任意多分组都不影响布局。
+
+// 单个 radio 选项（文案统一由 cdRepeatOptionText 生成，含农历动态文案）
+function cdRepeatRadioHtml(value, dateVal, repeatVal) {
+    return '<label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1">' +
+        '<input type="radio" name="cd-repeat" value="' + value + '" class="cd-repeat-option" ' +
+            (repeatVal === value ? 'checked' : '') + ' onchange="cdSelectRepeat(this.value)"> ' +
+        '<span data-cd-repeat-text="' + value + '">' + escapeHtml(cdRepeatOptionText(value, dateVal)) + '</span>' +
+    '</label>';
+}
+
+// 分组（与任务面板同构：箭头行 + 折叠子菜单；splitAfter 后插分隔线）
+function cdRepeatGroupHtml(label, values, splitAfter, dateVal, repeatVal) {
+    let html = '<div class="repeat-group">' +
+        '<div class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" onclick="cdToggleRepeatSubmenu(this)">' +
+            '<i class="fas fa-chevron-right text-[10px] transition-transform duration-200 repeat-submenu-arrow"></i>' +
+            '<span>' + escapeHtml(label) + '</span>' +
+        '</div>' +
+        '<div class="hidden pl-5 repeat-submenu space-y-0">';
+    values.forEach(function (v) {
+        html += cdRepeatRadioHtml(v, dateVal, repeatVal);
+        if (v === splitAfter) html += '<div class="border-t border-theme my-1"></div>';
+    });
+    return html + '</div></div>';
+}
+
+// 自定义间隔行（面板外；样式沿用任务面板 #detail-custom-repeat-container 的控件类名）
+// ⚠️ 用 visibility 而非 display:none 切换：始终占位，编辑卡高度恒定，
+//    否则选中/取消「自定义」会改变卡片高度，带动整个 cd-grid 重新排布。
+function cdCustomRowHtml(c, repeatVal) {
+    const intervalVal = (c && c.interval) ? c.interval : '';
+    const unitVal = (c && c.unit) || 'weeks';
+    const units = [['days', '天'], ['weeks', '周'], ['months', '月'], ['years', '年']];
+    let opts = '';
+    units.forEach(function (u) {
+        opts += '<option value="' + u[0] + '"' + (unitVal === u[0] ? ' selected' : '') + '>' + u[1] + '</option>';
+    });
+    return '<div id="cd-edit-custom-row" class="flex items-center gap-2 pl-5" ' +
+        'style="visibility:' + (repeatVal === 'custom' ? 'visible' : 'hidden') + '">' +
+        '<input type="number" id="cd-edit-custom-interval" min="1" step="1" inputmode="numeric" value="' + intervalVal + '" placeholder="间隔" oninput="cdUpdateRepeatTrigger()" ' +
+            'class="flex-1 min-w-0 px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary">' +
+        '<select id="cd-edit-custom-unit" onchange="cdUpdateRepeatTrigger()" ' +
+            'class="flex-1 min-w-0 px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary">' + opts + '</select>' +
+    '</div>';
+}
+
+// 初始触发按钮文案（无 DOM 时按已存数据推导，自定义显示「每2周」）
+function cdInitialRepeatLabel(c, repeatVal, dateVal) {
+    if (repeatVal === 'custom') {
+        const n = (c && c.interval) ? parseInt(c.interval, 10) : 0;
+        return n > 0 ? '每' + n + (CD_UNIT_NAMES[(c && c.unit) || 'days'] || '天') : '自定义';
+    }
+    return cdRepeatOptionText(repeatVal, dateVal);
+}
+
+function cdRepeatPickerHtml(c, repeatVal, dateVal) {
+    let panel = cdRepeatRadioHtml('once', dateVal, repeatVal);
+    panel += cdRepeatGroupHtml('每周', ['weekly', 'weeklyFirstWorkday', 'weeklyLastWorkday'], 'weekly', dateVal, repeatVal);
+    panel += cdRepeatGroupHtml('每月', ['monthly', 'monthlyLunar', 'monthlyFirstWorkday', 'monthlyLastWorkday'], 'monthlyLunar', dateVal, repeatVal);
+    panel += cdRepeatGroupHtml('每年', ['yearly', 'yearlyLunar', 'yearlyBeforeHoliday'], 'yearlyLunar', dateVal, repeatVal);
+    panel += cdRepeatRadioHtml('custom', dateVal, repeatVal);
+
+    return '<div class="relative">' +
+        '<button type="button" id="cd-repeat-trigger" onclick="cdToggleRepeatPicker()" title="重复规则" ' +
+            'class="w-full px-3 py-1.5 text-sm text-theme-secondary border border-theme rounded-lg hover:bg-theme-tertiary flex items-center justify-between gap-1">' +
+            '<span class="flex items-center min-w-0"><i class="fas fa-redo mr-2 flex-shrink-0"></i>' +
+                '<span id="cd-repeat-trigger-text" class="truncate">' + escapeHtml(cdInitialRepeatLabel(c, repeatVal, dateVal)) + '</span></span>' +
+            '<i class="fas fa-chevron-down text-xs flex-shrink-0"></i>' +
+        '</button>' +
+        // 视觉类与任务面板一致；定位改由 JS 以 fixed + 视口坐标设置（打开时移到 body）
+        '<div id="cd-repeat-picker" class="hidden p-2 bg-theme-tertiary rounded-lg border border-theme shadow-lg" ' +
+            'style="position:fixed;z-index:60;max-height:320px;overflow-y:auto;min-width:240px;box-sizing:border-box;">' + panel + '</div>' +
+        '<input type="hidden" id="cd-edit-repeat" value="' + repeatVal + '">' +
+    '</div>' + cdCustomRowHtml(c, repeatVal);
+}
+
 function cdEditFormHtml(c) {
     const isAdd = !c;
     const nameVal = c ? escapeHtml(c.name) : '';
     const dateVal = c ? c.date : '';
-    const repeatVal = c ? c.repeat : 'once';
+    const repeatVal = (c && c.repeat) || 'once';
     const showDelete = !!c;
     return '' +
-        '<div class="cd-edit-card p-3 bg-theme-tertiary rounded-lg border border-theme border-l-4 border-l-accent">' +
+        '<div class="cd-edit-card p-3 bg-theme-tertiary rounded-lg border border-theme border-l-4 border-l-accent" style="position:relative;z-index:40">' +
             '<div class="space-y-2">' +
                 '<input type="text" id="cd-edit-name" maxlength="20" value="' + nameVal + '" placeholder="名称（最多 20 字）" ' +
                     'class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-primary text-theme-primary">' +
-                '<input type="date" id="cd-edit-date" value="' + dateVal + '" ' +
+                '<input type="date" id="cd-edit-date" value="' + dateVal + '" onchange="refreshCdRepeatOptions()" ' +
                     'class="w-full px-2 py-1.5 text-sm border border-theme rounded-lg bg-theme-tertiary text-theme-primary cursor-pointer">' +
-                '<div class="flex items-center gap-2">' +
-                    '<button type="button" onclick="setCdEditRepeat(\'once\')" data-repeat="once" class="cd-repeat-btn detail-tag-pill ' + (repeatVal === 'once' ? 'detail-tag-pill-selected' : '') + '" style="--tag-color:#3b82f6">仅一次</button>' +
-                    '<button type="button" onclick="setCdEditRepeat(\'yearly\')" data-repeat="yearly" class="cd-repeat-btn detail-tag-pill ' + (repeatVal === 'yearly' ? 'detail-tag-pill-selected' : '') + '" style="--tag-color:#22c55e">每年重复</button>' +
-                    '<input type="hidden" id="cd-edit-repeat" value="' + repeatVal + '">' +
-                    '<div class="flex-1"></div>' +
+                cdRepeatPickerHtml(c, repeatVal, dateVal) +
+                '<div class="flex items-center gap-2 justify-end">' +
                     (showDelete ? (function() {
                         const confirming = countdownDeleteConfirming === c.id;
                         const cls = confirming
@@ -714,18 +1101,161 @@ function cdEditFormHtml(c) {
         '</div>';
 }
 
+// 清理挂到 body 上的旧浮层（重渲染 / 离开视图时），避免 id 重复与残留
+function cdCleanupRepeatPicker() {
+    if (typeof document === 'undefined' || !document.body) return;
+    Array.prototype.forEach.call(document.body.children, function (el) {
+        if (el.id === 'cd-repeat-picker') el.remove();
+    });
+}
+
+// 点击面板/触发按钮之外收起；容器滚动 / 窗口尺寸变化时也收起（fixed 浮层不跟随布局）
+let cdRepeatOutsideBound = false;
+function cdEnsureRepeatOutsideClick() {
+    if (cdRepeatOutsideBound) return;
+    cdRepeatOutsideBound = true;
+    document.addEventListener('click', function (e) {
+        const picker = document.getElementById('cd-repeat-picker');
+        if (!picker || picker.classList.contains('hidden')) return;
+        if (e.target.closest('#cd-repeat-picker') || e.target.closest('#cd-repeat-trigger')) return;
+        picker.classList.add('hidden');
+    });
+    document.addEventListener('scroll', function (e) {
+        const picker = document.getElementById('cd-repeat-picker');
+        if (!picker || picker.classList.contains('hidden')) return;
+        if (e.target === picker || picker.contains(e.target)) return; // 面板内部滚动不关
+        picker.classList.add('hidden');
+    }, true);
+    if (typeof window !== 'undefined' && window.addEventListener) {
+        window.addEventListener('resize', function () {
+            const picker = document.getElementById('cd-repeat-picker');
+            if (picker) picker.classList.add('hidden');
+        });
+    }
+}
+
+function cdToggleRepeatPicker() {
+    const picker = document.getElementById('cd-repeat-picker');
+    if (!picker) return;
+    cdEnsureRepeatOutsideClick();
+    const willOpen = picker.classList.contains('hidden');
+    if (willOpen && typeof document !== 'undefined' && document.body && picker.parentNode !== document.body) {
+        // 移出 .cd-grid / .countdown-container：面板高度不再进入卡片布局与滚动区域
+        document.body.appendChild(picker);
+    }
+    picker.classList.toggle('hidden');
+    if (willOpen) {
+        cdPositionRepeatPicker(picker);
+        cdExpandCurrentRepeatGroup();
+    }
+}
+
+// fixed 浮层定位：以触发按钮的视口坐标为准，自动避开视口右 / 下边界
+function cdPositionRepeatPicker(picker) {
+    const trigger = document.getElementById('cd-repeat-trigger');
+    if (!trigger || typeof trigger.getBoundingClientRect !== 'function') return;
+    const r = trigger.getBoundingClientRect();
+    const viewportW = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 10000;
+    const viewportH = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 10000;
+    const width = Math.max(r.width, 240);
+    let left = r.left;
+    if (left + width > viewportW - 8) left = Math.max(8, viewportW - width - 8);
+    picker.style.left = left + 'px';
+    picker.style.width = width + 'px';
+    picker.style.maxHeight = Math.min(320, Math.max(160, viewportH - 24)) + 'px';
+
+    const need = Math.min(picker.scrollHeight || 320, 320);
+    const below = viewportH - r.bottom;
+    if (below < need && r.top > below) {
+        picker.style.top = 'auto';
+        picker.style.bottom = Math.max(8, viewportH - r.top + 6) + 'px';
+    } else {
+        picker.style.top = (r.bottom + 4) + 'px';
+        picker.style.bottom = 'auto';
+    }
+}
+
+// 打开时自动展开「当前已选规则」所在分组，便于在窄卡片里看到选中态
+function cdExpandCurrentRepeatGroup() {
+    const picker = document.getElementById('cd-repeat-picker');
+    if (!picker) return;
+    const checked = picker.querySelector('input[name="cd-repeat"]:checked');
+    if (!checked) return;
+    const group = checked.closest('.repeat-group');
+    if (!group) return;
+    const sub = group.querySelector('.repeat-submenu');
+    const arrow = group.querySelector('.repeat-submenu-arrow');
+    if (sub) sub.classList.remove('hidden');
+    if (arrow) arrow.style.transform = 'rotate(90deg)';
+}
+
+// 与 tasks.js:toggleRepeatSubmenu 同构，但只作用于倒计时面板
+function cdToggleRepeatSubmenu(el) {
+    const group = el.closest('.repeat-group');
+    if (!group) return;
+    const sub = group.querySelector('.repeat-submenu');
+    const arrow = group.querySelector('.repeat-submenu-arrow');
+    if (!sub) return;
+    sub.classList.toggle('hidden');
+    if (arrow) arrow.style.transform = sub.classList.contains('hidden') ? '' : 'rotate(90deg)';
+}
+
+// 触发按钮文案：与卡片规则标签同源（自定义读实时输入的间隔）
+function cdCurrentRepeatLabel() {
+    const hidden = document.getElementById('cd-edit-repeat');
+    const dateInput = document.getElementById('cd-edit-date');
+    if (!hidden) return '仅一次';
+    const value = hidden.value;
+    if (value === 'custom') {
+        const iv = document.getElementById('cd-edit-custom-interval');
+        const un = document.getElementById('cd-edit-custom-unit');
+        const n = typeof parsePositiveInt === 'function' ? parsePositiveInt(iv ? iv.value : '') : 0;
+        return n ? '每' + n + (CD_UNIT_NAMES[un ? un.value : 'days'] || '天') : '自定义';
+    }
+    return cdRepeatOptionText(value, dateInput ? dateInput.value : '');
+}
+
+function cdUpdateRepeatTrigger() {
+    const t = document.getElementById('cd-repeat-trigger-text');
+    if (t) t.textContent = cdCurrentRepeatLabel();
+}
+
+function cdSelectRepeat(value) {
+    const hidden = document.getElementById('cd-edit-repeat');
+    if (hidden) hidden.value = value;
+    const row = document.getElementById('cd-edit-custom-row');
+    if (row) row.style.visibility = (value === 'custom') ? 'visible' : 'hidden';
+    cdUpdateRepeatTrigger();
+    const picker = document.getElementById('cd-repeat-picker');
+    if (picker) picker.classList.add('hidden');
+}
+
+// 改目标日期后刷新动态选项文案（每周X / 每月X日 / 农历月日）与触发按钮
+function refreshCdRepeatOptions() {
+    const dateInput = document.getElementById('cd-edit-date');
+    if (!dateInput) return;
+    const picker = document.getElementById('cd-repeat-picker');
+    if (picker) {
+        picker.querySelectorAll('[data-cd-repeat-text]').forEach(function (span) {
+            span.textContent = cdRepeatOptionText(span.getAttribute('data-cd-repeat-text'), dateInput.value);
+        });
+    }
+    cdUpdateRepeatTrigger();
+}
+
+// 兼容入口：旧调用点改设置 radio / hidden / 触发按钮
 function setCdEditRepeat(repeat) {
     const hidden = document.getElementById('cd-edit-repeat');
-    if (hidden) hidden.value = repeat;
-    document.querySelectorAll('.cd-repeat-btn').forEach(btn => {
-        if (btn.dataset.repeat === repeat) {
-            btn.classList.remove('detail-tag-pill');
-            btn.classList.add('detail-tag-pill-selected');
-        } else {
-            btn.classList.remove('detail-tag-pill-selected');
-            btn.classList.add('detail-tag-pill');
-        }
-    });
+    if (!hidden) return;
+    hidden.value = repeat;
+    const picker = document.getElementById('cd-repeat-picker');
+    if (picker) {
+        const radio = picker.querySelector('input[name="cd-repeat"][value="' + repeat + '"]');
+        if (radio) radio.checked = true;
+    }
+    const row = document.getElementById('cd-edit-custom-row');
+    if (row) row.style.visibility = (repeat === 'custom') ? 'visible' : 'hidden';
+    cdUpdateRepeatTrigger();
 }
 
 // ---------------------------------------------------------------- 编辑/新增/删除
@@ -767,12 +1297,29 @@ function saveCountdown(isAdd, id) {
     const dt = parseYmd(date);
     if (!dt) { showToast('该日期不存在，请重新选择', 'warning'); return; }
 
+    // 自定义间隔必须为正整数；非自定义时清掉旧的 interval / unit，避免残留脏字段
+    let interval = null, unit = null;
+    if (repeat === 'custom') {
+        const intervalInput = document.getElementById('cd-edit-custom-interval');
+        const unitInput = document.getElementById('cd-edit-custom-unit');
+        interval = parsePositiveInt(intervalInput ? intervalInput.value : '');
+        unit = unitInput ? unitInput.value : 'days';
+        if (!interval) { showToast('请输入有效的重复间隔', 'warning'); return; }
+        if (!Object.prototype.hasOwnProperty.call(CD_UNIT_NAMES, unit)) unit = 'days';
+    }
+
     if (!settings.countdowns) settings.countdowns = [];
     if (!isAdd) {
         const c = settings.countdowns.find(x => x.id === id);
-        if (c) { c.name = name; c.date = date; c.repeat = repeat; }
+        if (c) {
+            c.name = name; c.date = date; c.repeat = repeat;
+            if (repeat === 'custom') { c.interval = interval; c.unit = unit; }
+            else { delete c.interval; delete c.unit; }
+        }
     } else {
-        settings.countdowns.push({ id: generateId(), name: name, date: date, repeat: repeat });
+        const item = { id: generateId(), name: name, date: date, repeat: repeat };
+        if (repeat === 'custom') { item.interval = interval; item.unit = unit; }
+        settings.countdowns.push(item);
     }
 
     countdownEditing = null;

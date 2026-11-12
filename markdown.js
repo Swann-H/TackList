@@ -279,11 +279,14 @@ function mdRenderBlock(block, source, opts) {
                     + '<span class="md-task-text">' + mdInline(block.content || '') + '</span>'
                     + '</div>';
             }
+            // 圆点按层级换形状（实心圆 / 空心圆 / 小方块），由 CSS 绘制：
+            // 中文字体里 • ◦ ▪ 都是全角字形，直接画字符时墨迹会贴到正文，
+            // 详见 index.html 中 .md-li-bullet 的注释。标记文本仍原样保留（透明）用于占位。
             const depth = mdListDepth(block.indent);
-            const bullet = ['•', '◦', '▪'][depth % 3];
+            const bulletKind = ['dot', 'ring', 'square'][depth % 3];
             const markerHtml = block.ordered
                 ? '<span class="md-li-marker">' + mdEscapeHtml(block.marker) + ' </span>'
-                : '<span class="md-li-marker md-li-bullet" data-md-bullet="' + mdEscapeHtml(bullet) + '">' + mdEscapeHtml(block.marker) + ' </span>';
+                : '<span class="md-li-marker md-li-bullet md-li-bullet-' + bulletKind + '">' + mdEscapeHtml(block.marker) + ' </span>';
             return '<div class="md-li-row">'
                 + indentHtml
                 + markerHtml
@@ -299,13 +302,6 @@ function mdRenderBlock(block, source, opts) {
     }
 }
 
-// 整篇渲染（只读展示 / 测试用；编辑器按行渲染以支持局部编辑）
-function renderMarkdown(src, opts) {
-    const source = mdNormalizeSource(src);
-    return mdParseBlocks(source).map(function (b) {
-        return mdRenderBlock(b, source, opts || {});
-    }).join('');
-}
 
 /* ==================== 纯文本投影（提醒 Toast / 系统通知预览） ==================== */
 // 提醒 Toast 是窄卡片（普通正文默认 2 行，含列表最多 6 行），不承载富文本；
@@ -598,6 +594,20 @@ function _mdRerenderGlass() {
     }
 }
 
+// 解析空态占位文案。描述区（子任务模式）按当前子任务内容动态计算，
+// 保证主视图 / 番茄专注页等任何重渲染路径都不会残留旧的「任务详情描述」提示。
+function _mdResolvePlaceholder() {
+    if (_mdEditor.target && _mdEditor.target.kind === 'description'
+        && typeof getDetailDescriptionPlaceholder === 'function') {
+        return getDetailDescriptionPlaceholder();
+    }
+    const target = _mdEditor.target;
+    // 空串表示「刻意不显示占位」，不能用 || 回退成默认文案
+    return (target && typeof target.placeholder === 'string')
+        ? target.placeholder
+        : '任务详情描述';
+}
+
 function _mdRenderAll(blocksOverride) {
     const el = _mdEditorEl();
     if (!el) return;
@@ -610,7 +620,7 @@ function _mdRenderAll(blocksOverride) {
         ph.className = 'md-empty-placeholder';
         ph.textContent = _mdEditor.readOnly
             ? '暂无详情'
-            : ((_mdEditor.target && _mdEditor.target.placeholder) || '任务详情描述');
+            : _mdResolvePlaceholder();
         ph.dataset.mdEmpty = '1';
         el.appendChild(ph);
     } else {
@@ -626,6 +636,18 @@ function _mdRenderAll(blocksOverride) {
     }
     el.scrollTop = scrollTop;
     _mdRerenderGlass();
+}
+
+// 同步子任务模式描述编辑器的空态占位文案。
+// 行级编辑器激活后 textarea 被隐藏，其 placeholder 不再可见，
+// 占位文案由编辑器内的 .md-empty-placeholder 渲染，需在此跟随子任务文本变化更新。
+function mdSyncDescriptionPlaceholder(placeholder) {
+    const target = _mdEditor.target;
+    if (!target || target.kind !== 'description') return;
+    target.placeholder = placeholder;
+    const el = _mdEditorEl();
+    const empty = el ? el.querySelector('.md-empty-placeholder') : null;
+    if (empty) empty.textContent = placeholder;
 }
 
 // 供 tasks.js 在打开面板 / 模式切换 / 设置变更时调用：
@@ -678,7 +700,9 @@ function refreshDetailNotesEditor() {
         textareaId: 'detail-task-description',
         editorId: 'detail-task-description-md-editor',
         editorClass: 'md-editor-desc',
-        placeholder: '任务详情描述',
+        placeholder: (typeof getDetailDescriptionPlaceholder === 'function')
+            ? getDetailDescriptionPlaceholder()
+            : '任务详情描述',
         readOnly: readOnly,
         allowAttachmentPaste: false,
         afterSync: function (source) {
@@ -1343,10 +1367,6 @@ function mdReplaceInNotes(search, replacement) {
     return true;
 }
 
-// 测试/排障辅助：当前编辑器源码（与隐藏 textarea 同步）
-function mdEditorGetSource() {
-    return _mdEditor.source;
-}
 
 /* ==================== 支持语法帮助弹窗 ==================== */
 

@@ -118,12 +118,6 @@ function dismissQuadrantBanner(id, level) {
 // 非 reduced-motion + 非移动端 + 浏览器支持 view-transition-name 时启用，否则直接 mutateFn() 瞬切
 // （单一降级路径，零维护成本）。快速连点：在途过渡先 skipTransition 再起新过渡，避免布局来回抖动。
 
-// 场景过渡动效档位（独立于「界面交互动效」）：开关开启且系统未请求减少动态
-function _qSceneFxOn() {
-    return typeof settings !== 'undefined' && settings.featureAnimations === true
-        && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
-}
-
 // 浏览器是否支持 View Transitions
 function _qVtSupported() {
     return typeof document !== 'undefined' && typeof document.startViewTransition === 'function'
@@ -132,7 +126,7 @@ function _qVtSupported() {
 
 // 统一门控：场景过渡动效 + 非 reduced-motion + 非移动端 + 浏览器支持
 function _qVtOn() {
-    return _qSceneFxOn() && !_isQuadrantMobile() && _qVtSupported();
+    return _fxFeatureOn() && !_isQuadrantMobile() && _qVtSupported();
 }
 
 // 模块级持有当前在途过渡，便于快速连点时 skip 后重起
@@ -419,12 +413,10 @@ function quadrantCompactTaskHtml(task, key, cfg) {
         ? `<span class="flex items-center gap-1 ${QUADRANT_STAGNATION_COLORS[stagLevel]}"><i class="fas fa-hourglass-half"></i>逾期${stagnationDays}天</span>`
         : '';
     // 详情行：沿用四象限自身的「显示任务详情」开关
+    // 描述/备注与子任务的行数分配见 renderTaskDetailsBlock（方案 C：描述 4-n 行 + 子任务 n 条）
     let detailsLine = '';
     if (cfg.showDetails !== false) {
-        const subtaskHtml = renderSubtaskListDisplay(task);
-        detailsLine = subtaskHtml
-            ? subtaskHtml
-            : (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${escapeHtml(task.notes)}</div>` : '');
+        detailsLine = renderTaskDetailsBlock(task);
     }
     return `
         <div class="task-list-item task-row relative flex items-center gap-3 py-2 px-3 rounded-r-lg bg-theme-tertiary hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''}"
@@ -444,6 +436,7 @@ function quadrantCompactTaskHtml(task, key, cfg) {
                 ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent-light"></i>${progress}%</span>` : ''}
                 ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-400"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                 ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span>${listName}</span>` : ''}
+                ${typeof renderRecurringTaskBadge === 'function' ? renderRecurringTaskBadge(task) : ''}
                 ${stagBadge}
             </div>
             ${timeDisplay ? `<span class="flex-shrink-0 text-xs ${timeTextClass} whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
@@ -625,7 +618,7 @@ function renderQuadrantView(container) {
                                     <div class="font-medium ${task.completed ? 'text-theme-muted' : 'text-theme-primary'} flex items-center">
                                         ${_extIcon}${task.title || '新任务'}
                                     </div>
-                                    ${(quadrantCfg.showDetails !== false) ? (renderSubtaskListDisplay(task) || (task.notes ? `<div class="text-xs ${task.completed ? 'text-theme-secondary' : 'text-theme-muted'} mt-1">${task.notes}</div>` : '')) : ''}
+                                    ${(quadrantCfg.showDetails !== false) ? renderTaskDetailsBlock(task) : ''}
                                 </div>
                             </div>
                         `;
@@ -849,3 +842,13 @@ function resetQuadrantViewConfig() {
         showToast('已恢复四象限视图默认配置', 'success');
     }
 }
+
+// 统一跨天事件：「逾期 N 天」按 getQuadrantStagnationDays() 实时算，重绘后自然更新；
+// 但提醒弹窗有会话级 _stagnationNotified 守卫，跨天后需放行一次，否则新达标任务不再提醒。
+document.addEventListener('tacklist:daychange', function () {
+    _stagnationNotified = false;
+    if (typeof currentView !== 'undefined' && currentView === 'quadrant'
+        && typeof checkQuadrantStagnation === 'function') {
+        checkQuadrantStagnation();
+    }
+});

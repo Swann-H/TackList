@@ -81,7 +81,7 @@ function openCommandPalette() {
                 </span></span>
                 <span id="cmd-hint-search" class="hidden"><span class="flex flex-col items-end gap-1">
                     <span>搜索筛选：~清单 · #标签 · is:已完成/未完成/今天/逾期/无日期/有附件</span>
-                    <span>${_cmdHintChip('select', '/select 批量管理')}</span>
+                    <span>${_cmdHintChip('select', '/select 批量管理')} · Ctrl/⌘+点击结果 = 关面板并进入编辑</span>
                 </span></span>
             </div>
         </div>
@@ -150,6 +150,29 @@ function closeCommandPalette(keepDraft) {
     }
 }
 
+// 关闭命令面板但保留任务详情：仅用于「搜索打开详情」的浮层模式。
+// 与 closeCommandPalette 的区别是**不走 closeTaskDetailPanel** —— 只把详情从 fixed 浮层
+// 还原成常规右栏（不触发保存/关闭动画/移动端返回层），用户可继续在普通界面编辑。
+function closeCommandPaletteKeepDetail() {
+    _commandPaletteOpen = false;
+    _cpDraft = null; // 主动关闭，不保留草稿
+    _cpCandidates = null;
+    _cpDelToken = null;
+    if (_commandPaletteDebounceTimer) {
+        clearTimeout(_commandPaletteDebounceTimer);
+        _commandPaletteDebounceTimer = null;
+    }
+    if (typeof exitTaskDetailModalKeepOpen === 'function') exitTaskDetailModalKeepOpen();
+    const overlay = document.getElementById('command-palette-overlay');
+    if (overlay) {
+        overlay.style.animation = 'fadeOut 0.1s ease-in';
+        setTimeout(() => {
+            overlay.remove();
+            if (typeof _setupTaskTemplateDetailFit === 'function') _setupTaskTemplateDetailFit();
+        }, 100);
+    }
+}
+
 function handleCommandPaletteKeydown(e) {
     // IME 组字中的按键不进入面板逻辑（Enter=上屏候选、Esc=取消组字），
     // 避免拼音选字时把半截拼音直接建成任务
@@ -159,6 +182,12 @@ function handleCommandPaletteKeydown(e) {
 
     if (e.key === 'Escape') {
         e.preventDefault();
+        // 搜索结果已在右侧浮层模式打开详情：一次 Esc 关闭命令面板并保留详情，
+        // 直接落回普通编辑界面（不再走「先清空查询词」那一段）
+        if (typeof _taskDetailModalMode !== 'undefined' && _taskDetailModalMode) {
+            closeCommandPaletteKeepDetail();
+            return;
+        }
         // FR-08-3：/s 搜索模式已有查询词时，第一次 Esc 仅清空查询词回到 /s 提示态
         // （注意必须匹配 '/s ' 前缀而非 startsWith('/s')，否则 /settings 之类输入会被误判）
         const v = input.value;
@@ -1248,7 +1277,8 @@ function _renderSearchRow(task, idx, keywords) {
     const listColor = list ? list.color : '#9ca3af';
     const listName = list ? list.name : '';
     const focusMinutes = getTaskFocusMinutes(task.id);
-    const timeDisplay = formatTaskListTime(task, { fullDate: true });
+    // 与任务视图共用统一口径：近端相对词、更早日期带绝对日期（非今年带年份）
+    const timeDisplay = formatTaskListTime(task);
     const progress = task.progress || 0;
     const quadColors = getQuadrantColorClass(task);
     const isOverdue = isTaskOverdue(task);
@@ -1259,7 +1289,7 @@ function _renderSearchRow(task, idx, keywords) {
     return `<div class="px-3 py-1" data-search-index="${idx}">
             <div class="task-list-item cmd-search-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''} ${idx === _searchActiveIndex ? 'bg-theme-tertiary' : ''}"
                  data-list-id="${task.listId || 'default'}"
-                 onclick="event.stopPropagation(); openTaskDetailModal('${task.id}')">
+                 onclick="event.stopPropagation(); openSearchResultDetail(event, '${task.id}')">
                 <div class="task-list-color-bar" style="background-color: ${_extTaskBarColor(task, getTaskBarColor(task, listColor))};"></div>
                 ${_extTaskIconHtml(task)}<div class="flex-1 min-w-0"><span class="flex items-center block text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${_highlightText(task.title || '新任务', keywords)}</span>${snippet ? `<span class="block text-xs text-theme-muted truncate mt-0.5">${snippet}</span>` : ''}</div>
                 <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
@@ -1271,6 +1301,21 @@ function _renderSearchRow(task, idx, keywords) {
                 ${timeDisplay ? `<span class="flex-shrink-0 text-xs ${timeTextClass} whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
             </div>
         </div>`;
+}
+
+// 搜索结果行点击：
+//  • 普通点击 → 浮层模式的详情面板（命令面板保持打开，便于连续切换查看多个任务）
+//  • Ctrl/⌘ + 点击 → 常规右栏详情 + 关闭命令面板，直接落回普通编辑界面
+function openSearchResultDetail(e, taskId) {
+    if (e && (e.ctrlKey || e.metaKey)) {
+        // 已处于浮层模式（先普通点击打开过一个任务）时先落回常规右栏，
+        // 否则 closeCommandPalette 会把浮层模式的详情一并关掉
+        if (typeof exitTaskDetailModalKeepOpen === 'function') exitTaskDetailModalKeepOpen();
+        openTaskDetailPanel(taskId);
+        closeCommandPalette();
+        return;
+    }
+    openTaskDetailModal(taskId);
 }
 
 // 结果区底部「+N 更多」：点击按 SEARCH_PAGE_SIZE 追加下一批（懒加载，参考任务视图的分批渲染思路，
@@ -2708,6 +2753,30 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+// Esc 兜底：单击搜索结果后焦点会离开命令面板输入框（落到 body），
+// 输入框上的 handleCommandPaletteKeydown 收不到按键 —— 这里补一条 document 级监听，
+// 让「浮层模式详情 + 命令面板打开」组合下按 Esc 仍然能关面板并保留详情。
+// 书写态退出（tasks.js）与子任务管理模式的 Esc 优先级更高，故先让位。
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    // 输入法组字中的 Esc 属于「取消候选」，不能拿去关面板
+    if (e.isComposing) return;
+    if (!_commandPaletteOpen) return;
+    if (typeof _taskDetailModalMode === 'undefined' || !_taskDetailModalMode) return;
+    if (typeof _recordingShortcut !== 'undefined' && _recordingShortcut) return;
+    if (typeof isDetailWriteMode === 'function' && isDetailWriteMode()) return;
+    // 子任务管理模式 / 子任务提醒面板的 Esc 先收口各自状态，再轮到面板
+    if (typeof subtaskManageMode !== 'undefined' && subtaskManageMode) return;
+    if (typeof openSubtaskReminderPanelId !== 'undefined' && openSubtaskReminderPanelId
+        && typeof closeSubtaskReminderPanel === 'function') {
+        e.preventDefault();
+        closeSubtaskReminderPanel();
+        return;
+    }
+    e.preventDefault();
+    closeCommandPaletteKeepDetail();
+});
+
 // 3 栏网格：功能补全后共 14 项，一栏会拖得过长；每格「标签一行 + 键位一行」，
 // 竖排比左右分栏更抗压（栏宽约 190px，键位按钮也不至于挤成省略号）。
 function renderShortcutsSettings() {
@@ -2904,12 +2973,4 @@ function togglePomodoroPage() {
     } else {
         closePomodoroPage();
     }
-}
-
-// ==================== 辅助函数 ====================
-
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML.replace(/"/g, '&quot;');
 }

@@ -230,12 +230,12 @@ function _renderTrashList() {
         const tagCapsules = (typeof renderTagCapsules === 'function') ? renderTagCapsules(task, 2, 'right') : '';
         const timeDisplay = (typeof formatTaskListTime === 'function') ? formatTaskListTime(task, { withAllDayTag: false }) : '';
         const timeTextClass = ((typeof isTaskOverdue === 'function') && isTaskOverdue(task)) ? 'text-red-500' : 'text-theme-primary';
-        // 详情行（备注/子任务列表）与任务视图一致
-        let taskDetailsLine = '';
-        const subtaskHtml = (typeof renderSubtaskListDisplay === 'function') ? renderSubtaskListDisplay(task) : '';
-        taskDetailsLine = subtaskHtml
-            ? subtaskHtml
-            : (task.notes ? '<div class="text-xs ' + (task.completed ? 'text-theme-secondary' : 'text-theme-muted') + ' mt-1">' + escapeHtml(task.notes) + '</div>' : '');
+        // 详情行：与任务视图完全同源（utils.js renderTaskDetailsBlock，方案 C）
+        // 文本模式取 notes、子任务模式取「description + 子任务列表」，行数分档与其它视图一致（4 行）。
+        // ⚠️ 不要再回落 task.notes：子任务模式下它是模式转换残留，与子任务文本重复（详见 utils.js 注释）。
+        const taskDetailsLine = (typeof renderTaskDetailsBlock === 'function')
+            ? renderTaskDetailsBlock(task, { maxLines: 4 })
+            : '';
 
         return '<div class="task-list-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ' + quadColors.bg + ' hover:opacity-85 transition group ' + (task.completed ? 'opacity-55' : '') + '"' +
             ' data-list-id="' + (task.listId || 'default') + '">' +

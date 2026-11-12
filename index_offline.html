@@ -856,6 +856,21 @@
             color: var(--tag-solid-ink-dark, var(--text-primary));
         }
 
+        /* ===== 过滤器编辑面板的清单 / 标签候选 =====
+           复用任务详情栏 detail-tag-pill / detail-tag-pill-selected 胶囊，
+           并套用同一套标签墨色规则（浅色/深色主题分别取 --tag-solid-* 变量），保证两处观感一致。 */
+        .filter-pill-group .detail-tag-pill { color: var(--text-primary); }
+        .filter-pill-group .detail-tag-pill:hover,
+        .filter-pill-group .detail-tag-pill-selected {
+            background-color: var(--tag-solid-fill-light, var(--tag-color));
+            color: var(--tag-solid-ink-light, var(--text-primary));
+        }
+        [data-theme="dark"] .filter-pill-group .detail-tag-pill:hover,
+        [data-theme="dark"] .filter-pill-group .detail-tag-pill-selected {
+            background-color: var(--tag-solid-fill-dark, var(--tag-color));
+            color: var(--tag-solid-ink-dark, var(--text-primary));
+        }
+
         .holiday-countdown-box {
             border: 1.5px dashed var(--border-color);
             border-radius: 0.75rem;
@@ -1860,6 +1875,12 @@
         /* ==================== Header 响应式：Tab 不换行，动作按钮按可用宽度提前收纳 ==================== */
         #header-left { flex: 0 0 auto; max-width: 100%; min-width: 0; }
         #header-actions { flex-shrink: 0; }
+        /* 右上按钮组与任务行色块右缘对齐：主区 p-6(24px) + 列表卡片 p-4(16px) = 40px，
+           按钮组再内缩 16px 后右缘落到任务行右缘（1600px 视口实测 x=1560）。
+           仅桌面端生效：移动端主区 padding 改为 12px 且按钮大多隐藏，保持原位。 */
+        @media (min-width: 769px) {
+            #header-actions { margin-right: 16px; }
+        }
         #view-tabs {
             flex: 0 0 auto;
             max-width: 100%;
@@ -2235,15 +2256,15 @@
             view-transition-name: none !important;
             backdrop-filter: none !important;
         }
-        /* 右栏无三栏可挤压：隐藏「展开书写」入口与书写态专属的宽度档按钮；
-           底部「开始专注 / 删除任务」一行在专注页内无意义，一并隐藏（保留上方 4 个属性按钮）。
-           顶栏「关闭」按钮（番茄语境下曾被改写成「返回专注概况」）也一并隐藏：
+        /* 右栏无三栏可挤压：番茄右栏不提供「…」更多入口（含存为模板），仅保留「切换任务模式」；
+           书写态专属的宽度档按钮同样隐藏；底部「开始专注 / 删除任务」一行在专注页内无意义，一并隐藏
+           （保留上方 4 个属性按钮）。顶栏「关闭」按钮（番茄语境下曾被改写成「返回专注概况」）也一并隐藏：
            右栏内回到概况改由「单击顶部标题」完成（与左栏「切换圆钮」等价），
            避免它与紧邻的「切换任务模式」并排成两个冗余入口。
            ⚠️ 必须写两条 id（而非 body.detail-write-mode #detail-dismiss-btn 那种一条 id + 一条类）：
            书写态那条 `display:flex!important` 与它同为 !important，靠特指度决胜，
            两条 id 才能压过它（虽然托管期间进入不了书写态，仍留作兜底）。 */
-        #pomodoro-detail-slot #detail-expand-btn,
+        #pomodoro-detail-slot #detail-more-group,
         #pomodoro-detail-slot #detail-width-btn,
         #pomodoro-detail-slot #detail-dismiss-btn,
         #pomodoro-detail-slot #detail-action-row-main { display: none !important; }
@@ -2313,6 +2334,32 @@
         #pomodoro-detail-slot #task-detail-panel ::placeholder { color: rgba(255, 255, 255, 0.45) !important; }
         #pomodoro-detail-slot #task-detail-panel input[type="date"],
         #pomodoro-detail-slot #task-detail-panel input[type="time"] { color-scheme: dark; }
+
+        /* ============ 任务详情描述区文字恒为浅色 ============
+           备注 / 描述文本框与其 Markdown 行级编辑器（#detail-notes-md-editor、
+           .md-editor）默认跟随主题变量：浅色主题下 var(--text-primary) 为深色，
+           落在右栏深蓝渐变底上几乎不可读。这里统一按「深色背景」口径固定为浅色，
+           深浅主题一致，不随主题切换。
+           ⚠️ 仅限番茄右栏槽位：主视图详情栏保持原有主题跟随。 */
+        #pomodoro-detail-slot #task-detail-panel #detail-task-notes,
+        #pomodoro-detail-slot #task-detail-panel #detail-task-description,
+        #pomodoro-detail-slot #task-detail-panel .md-editor,
+        #pomodoro-detail-slot #task-detail-panel .md-block-input { color: #ffffff !important; }
+        #pomodoro-detail-slot #task-detail-panel .md-h1,
+        #pomodoro-detail-slot #task-detail-panel .md-h2,
+        #pomodoro-detail-slot #task-detail-panel .md-h3 { color: #ffffff !important; }
+        #pomodoro-detail-slot #task-detail-panel .md-quote-row,
+        #pomodoro-detail-slot #task-detail-panel .md-li-marker { color: rgba(255, 255, 255, 0.72) !important; }
+        #pomodoro-detail-slot #task-detail-panel .md-li-bullet::before { background: rgba(255, 255, 255, 0.72) !important; }
+        #pomodoro-detail-slot #task-detail-panel .md-li-bullet-ring::before { border-color: rgba(255, 255, 255, 0.72) !important; }
+        #pomodoro-detail-slot #task-detail-panel .md-task-done .md-task-text { color: rgba(255, 255, 255, 0.5) !important; }
+        #pomodoro-detail-slot #task-detail-panel .md-empty-placeholder { color: rgba(255, 255, 255, 0.45) !important; }
+        /* 代码块 / 行内代码：底色也是浅色主题变量，需一并改为半透明白，否则白字压浅底 */
+        #pomodoro-detail-slot #task-detail-panel .md-code,
+        #pomodoro-detail-slot #task-detail-panel .md-inline-code {
+            color: #ffffff !important;
+            background: rgba(255, 255, 255, 0.1) !important;
+        }
 
         /* 切换圆钮（特性二）：与同级裸图标按钮（统计/设置/收起/全屏）完全同体系
            —— 无圆框 / 无描边 / 无底色 / 图标恒为白色，hover 变 #d1d5db。
@@ -2679,15 +2726,33 @@
             margin-bottom: 2px;
             transition: background-color 0.15s ease;
         }
-        /* 大数据量下跳过屏幕外分组的渲染工作（2000+ 任务时的渲染开销优化）。
-           注意：不能设在 .task-list-item 行级——content-visibility 会隐式应用 paint containment，
-           把行变成绘制裁剪盒，裁剪掉色条 top:-1px/bottom:-1px 的溢出部分，
-           导致相邻行色条无法跨过 2px margin 连成一条线。上移到分组容器级后，
-           行间色条溢出不受裁剪，组内连线恢复；组末行溢出组容器的 1px 被裁无妨（组间本无需连）。
-           contain-intrinsic-size 用 auto 关键字：渲染后记住实际高度，屏幕外时按记忆高度占位，滚动条稳定。 */
+        /* 视图任务卡「任务详情」预览块（任务 / 日程 / 月视图单天浮层 / 四象限 / 看板 / 回收站 / 归档清单页共用）。
+           内容由 utils.js renderTaskDetailsBlock / renderTaskNotesPreview 产出（Markdown 纯文本投影），
+           这里负责行数裁剪：默认 4 行；组合块里描述行 1-3 行、看板 2 行，
+           由 renderTaskNotesPreview 用内联 -webkit-line-clamp 覆盖，故不必为每个行数档建类。
+           溢出提示只靠 -webkit-line-clamp 自带的省略号，不叠加渐隐/遮罩。
+           ⚠️ 用纯 CSS 而不是 Tailwind 的 line-clamp-4：离线版走本地 JIT，关键布局约束
+              不应依赖工具类是否被收录（同 .reminder-toast-body 的理由）。
+           ⚠️ .task-note-preview-md 的 pre-wrap 承担投影文本的换行与列表缩进，不能省；
+              与 -webkit-box 并存有效（与 .reminder-toast-body 同一组合，已线上验证）。 */
+        .task-note-preview {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 4;
+            overflow: hidden;
+            overflow-wrap: break-word;
+        }
+        .task-note-preview-md {
+            white-space: pre-wrap;
+            tab-size: 4;
+        }
+        /* 行级窗口化渲染：分组容器只承载约 40~60 行真实任务 + 前后等高占位，
+           离屏分组的行 DOM 由 taskListView.js 释放，无需再用 content-visibility 跳过整组渲染。
+           注意：这里不能加 content-visibility: auto——它会启用尺寸包含，把占位高度压成 56px，
+           导致后续分组的几何位置错乱、窗口计算失真。
+           overflow-anchor: none 让窗口替换时的滚动位置完全由等高占位维持，不被浏览器锚定二次修正。 */
         .task-list-group-lazy {
-            content-visibility: auto;
-            contain-intrinsic-size: auto 56px;
+            overflow-anchor: none;
         }
         /* 日程视图：开启浏览器原生滚动锚定，由浏览器自动补偿懒加载填充月份后引起的滚动条跳动，
            可替代部分 JS 的 scrollTop 修正逻辑，减少强制同步布局。 */
@@ -2793,31 +2858,15 @@
         #subtasks-container.subtask-manage .subtask-slot { display: none !important; }
         #subtasks-container.subtask-manage .subtask-delete-btn { display: block !important; }
 
-        /* —— 「编辑/管理」入口：详情说明行右侧，hover 说明行或子任务区才淡入 ——
-           用 opacity 占位（不是 display）：始终占据宽度，避免悬浮时描述框变宽/变窄导致文本重排 */
-        .subtask-manage-btn {
-            flex-shrink: 0;
-            width: 1.5rem; height: 1.5rem; padding: 0;
-            line-height: 1.5rem; text-align: center; border-radius: 0.5rem;
-            color: var(--text-muted, #9ca3af);
-            opacity: 0; pointer-events: none;
-            transition: opacity .15s, color .15s;
-        }
-        /* 入口在说明行里，但要「悬浮说明行或子任务区」都能唤出，
-           故用公共包装层 #subtask-content（二者是兄弟，无法用后代选择器互相命中） */
-        #subtask-content:hover .subtask-manage-btn { opacity: 1; pointer-events: auto; }
-        .subtask-manage-btn:hover { color: var(--text-primary); }
-        .subtask-manage-btn.on { opacity: 1; pointer-events: auto; color: var(--accent-color, #3b82f6); }
-
         /* —— 触摸设备没有 hover ——
-           时间与铃铛都显示（否则二者必有其一不可达），删除按钮常显（维持原状），
-           管理入口不出现（移动端本来就一直看得到删除按钮，该入口无意义） */
+           时间与铃铛都显示（否则二者必有其一不可达），删除按钮常显（维持原状） */
         @media (hover: none) {
             .subtask-slot .subtask-time-label:not(.hidden),
             .subtask-slot .subtask-bell-btn,
             .subtask-delete-btn { display: block !important; }
-            .subtask-manage-btn { display: none !important; }
         }
+
+        /* —— 子任务「编辑/管理」入口已迁入详情顶栏「更多」面板 —— */
 
         /* ===== FR-09 任务模板入口：+ 悬浮组 ===== */
         .add-task-group {
@@ -3058,36 +3107,88 @@
         #calendar-sync-btn.sync-state-red:hover:not(:disabled) { background-color: #ef4444; color: #fff; }
         #calendar-sync-btn:disabled { cursor: default; }
 
-        /* ===== FR-09 任务模板入口：详情标题行 ===== */
-        .detail-title-template-btn {
-            flex-shrink: 0;
-            width: 2rem;
-            height: 2rem;
-            padding: 0;
-            margin-top: .125rem;
+        /* ===== 详情顶栏「更多」入口与面板 =====
+           展开逻辑与主视图右上角「更多」一致：桌面悬浮展开、点击/移开收合，
+           触摸设备仅点击展开。面板锚定在按钮右侧（向右对齐，避免超出 384px 面板）。 */
+        .detail-more-group {
+            position: relative;
             display: flex;
             align-items: center;
-            justify-content: center;
-            border-radius: .5rem;
-            color: var(--text-muted, #9ca3af);
+        }
+        .detail-more-pop {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            padding-top: 8px;
+            z-index: 60;
             opacity: 0;
             visibility: hidden;
+            transform: translateY(-4px);
             pointer-events: none;
-            transition: opacity .15s, color .15s, background-color .15s, visibility 0s linear .2s;
+            transition: opacity .14s ease, transform .14s ease, visibility 0s linear .24s;
         }
-        #detail-title-row:hover .detail-title-template-btn,
-        #detail-title-row:focus-within .detail-title-template-btn {
+        .detail-more-group:hover .detail-more-pop,
+        .detail-more-group.more-open .detail-more-pop {
             opacity: 1;
             visibility: visible;
+            transform: translateY(0);
             pointer-events: auto;
-            transition-delay: 0s;
+            transition-delay: .15s, .15s, 0s;
         }
-        .detail-title-template-btn:hover { color: var(--accent-color, #3b82f6); background: var(--bg-tertiary, #f3f4f6); }
-        .detail-title-template-btn.is-linked { color: var(--accent-color, #3b82f6); }
+        .detail-more-group.more-open .detail-more-pop { transition-delay: 0s, 0s, 0s; }
+        #detail-more-menu {
+            min-width: 178px;
+            max-width: 240px;
+            padding: 6px;
+            border-radius: 12px;
+            background: rgba(var(--bg-secondary-rgb, 255, 255, 255), 0.92);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        html[data-blur="off"] #detail-more-menu {
+            background: rgba(var(--bg-secondary-rgb, 255, 255, 255), 0.97);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        .detail-more-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            flex-shrink: 0;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: transparent;
+            font-size: 13px;
+            color: var(--text-primary);
+            text-align: left;
+            transition: background-color .12s, color .12s;
+        }
+        .detail-more-item i { flex: 0 0 1rem; width: 1rem; text-align: center; font-size: 14px; color: var(--text-muted); transition: color .12s; }
+        .detail-more-item:hover { background: rgba(var(--bg-tertiary-rgb, 243, 244, 246), 0.5); }
+        .detail-more-item:hover i { color: var(--accent-color, #3b82f6); }
+        .detail-more-item:focus-visible { outline: 2px solid var(--accent-color, #3b82f6); outline-offset: 1px; }
+        .detail-more-item.is-on { color: var(--accent-color, #3b82f6); }
+        .detail-more-item.is-on i { color: var(--accent-color, #3b82f6); }
+        .detail-more-item.is-linked { color: var(--accent-color, #3b82f6); }
+        .detail-more-item.is-linked i { color: var(--accent-color, #3b82f6); }
+        .detail-more-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         @media (hover: none) {
-            .detail-title-template-btn {
+            .detail-more-group:hover .detail-more-pop {
+                opacity: 0;
+                visibility: hidden;
+                transform: translateY(-4px);
+                pointer-events: none;
+            }
+            .detail-more-group.more-open .detail-more-pop {
                 opacity: 1;
                 visibility: visible;
+                transform: translateY(0);
                 pointer-events: auto;
             }
         }
@@ -3345,6 +3446,14 @@
             backdrop-filter: none;
             -webkit-backdrop-filter: none;
         }
+        /* 快速选择下拉的层叠兜底：背景图模式下本卡片自身带 backdrop-filter（会创建层叠上下文），
+           而下方的标题 / 正文里的 .md-block 是 position:relative，按 DOM 顺序后绘制，
+           会把下拉的下半截“隐形”盖住 —— 视觉上还在，点击却落进正文编辑区。
+           把菜单本身提为定位元素并抬高层级，整个菜单（含下拉）就稳定浮在标题 / 正文之上。 */
+        #detail-time-menu:not(.hidden) {
+            position: relative;
+            z-index: 30;
+        }
         /* 番茄右栏（恒为深色渐变玻璃底）：换半透明白，与右栏其它玻璃卡片同观感。
            3 个 id 的特指度高于上面两条，稳定胜出。 */
         #pomodoro-detail-slot #task-detail-panel #detail-time-menu:not(.hidden) {
@@ -3462,9 +3571,10 @@
             body.detail-write-mode #detail-time-menu { order: 3; }
 
             /* 顶栏 chrome 化：去掉分割线，退为纯导航层。
-               内边距按「主视图 #header-actions 圆形按钮的位置」对齐 —— 实测主视图按钮
-               顶边 y=28、右边缘距视口右 24px，这里用 padding 28px 24px 把书写态的按钮
-               推到同一个坐标（此前是 10px / 贴死视口右缘）。 */
+               内边距沿用主区 p-6 的 24px 右缘（顶边 y=28），让书写态按钮与常规视图内容区
+               右缘一致。主视图 #header-actions 为与任务行对齐在桌面端额外内缩 16px，
+               但书写态下 #main-content 已隐藏，两套按钮不会同屏出现，故此处保持 24px。
+               （此前是 10px / 贴死视口右缘）。 */
             body.detail-write-mode #detail-topbar {
                 border-bottom: none !important;
                 background: transparent;
@@ -4162,6 +4272,22 @@
         body.fx-feature #settings-modal.fx-card-out > div { animation: fxSettingsOut 0.38s cubic-bezier(0.4, 0, 1, 1) both; }
         @keyframes fxSettingsIn { from { opacity: 0; transform: translateY(20px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes fxSettingsOut { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(14px) scale(0.97); } }
+        /* 月视图「当天」浮层：容器淡入 + 卡片自下轻浮（时间尺度对齐视图切换的 0.22s 级）
+           注意：卡片本身靠 translate(-50%,-50%) 居中，而动画的 transform 会整体覆盖该属性，
+           故关键帧内必须写全居中位移，否则播放期间卡片会跳到左上角。
+           退场期间 pointer-events:none，避免淡出中仍能点到任务行。 */
+        body.fx-feature #month-day-popover-wrapper.fx-day-in { animation: fxOverlayIn 0.16s ease both; }
+        body.fx-feature #month-day-popover-wrapper.fx-day-in > #month-day-popover { animation: fxDayPopIn 0.24s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        body.fx-feature #month-day-popover-wrapper.fx-day-out { animation: fxOverlayOut 0.2s ease both; pointer-events: none; }
+        body.fx-feature #month-day-popover-wrapper.fx-day-out > #month-day-popover { animation: fxDayPopOut 0.2s cubic-bezier(0.4, 0, 1, 1) both; }
+        @keyframes fxDayPopIn {
+            from { opacity: 0; transform: translate(-50%, -50%) translateY(10px) scale(0.98); }
+            to { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
+        }
+        @keyframes fxDayPopOut {
+            from { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
+            to { opacity: 0; transform: translate(-50%, -50%) translateY(8px) scale(0.985); }
+        }
         /* 答案之书：开书 3D 翻入 */
         body.fx-feature #answer-book-modal { perspective: 1200px; }
         body.fx-feature #answer-book-modal.fx-card-anim > div { animation: fxBookIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; transform-origin: left center; }
@@ -4186,6 +4312,10 @@
             body.fx-feature #settings-modal.fx-overlay-out,
             body.fx-feature #settings-modal.fx-card-anim > div,
             body.fx-feature #settings-modal.fx-card-out > div,
+            body.fx-feature #month-day-popover-wrapper.fx-day-in,
+            body.fx-feature #month-day-popover-wrapper.fx-day-in > #month-day-popover,
+            body.fx-feature #month-day-popover-wrapper.fx-day-out,
+            body.fx-feature #month-day-popover-wrapper.fx-day-out > #month-day-popover,
             body.fx-feature #answer-book-modal:not(.hidden)::before,
             body.fx-feature #boring-modal:not(.hidden)::before { animation: none !important; }
         }
@@ -4252,6 +4382,46 @@
         .pomodoro-focus-btn .pf-icon-solid { display: none; }
         .pomodoro-focus-btn:hover .pf-icon-outline { display: none; }
         .pomodoro-focus-btn:hover .pf-icon-solid { display: inline-block; }
+
+        /* ---- 周 / 月视图任务条上的「开始专注」按钮 ----
+           共同点：与所在任务条的完成勾选框同尺寸（16×16 外框 / 10px 图标，见 renderCalendarFocusButton），
+           默认不可见且不接收点击（否则透明按钮会截住任务条的点击区），悬浮任务条时才淡入。
+           不同点（各自视图的规则）：
+           · 周视图 —— 只在该任务条「标题未被截断、右侧仍空得下按钮」时出现，
+             由 syncWeekFocusFit() 实测后打的 .pf-fits 类决定（纯 CSS 判不出截断）；
+             按钮绝对定位在任务块右上角，与勾选框同一行，不参与布局，标题可用宽度不受影响。
+           · 月视图 —— 悬浮时用按钮替换右侧的时间信息：按钮与时间共用一个固定宽度的
+             .month-task-slot（时间淡出、按钮淡入，两者位置重叠），故行宽恒定、标题不会抖动。
+             未渲染按钮时（视图设置关掉该开关）时间保持原样，靠 :has() 只对「确实有按钮」的行生效。 */
+        .week-task-item .pomodoro-focus-btn,
+        .week-allday-task .pomodoro-focus-btn,
+        .month-task-item .pomodoro-focus-btn {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .week-task-item.pf-fits:hover .week-focus-btn,
+        .week-allday-task.pf-fits:hover .week-focus-btn,
+        .month-task-item:hover .month-focus-btn {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .week-task-item .week-focus-btn,
+        .week-allday-task .week-focus-btn {
+            position: absolute;
+            top: 2px;
+            right: 3px;
+            z-index: 2;
+        }
+        .month-task-slot { position: relative; }
+        .month-task-item:has(.month-focus-btn) .month-task-time { transition: opacity .15s; }
+        .month-task-item:has(.month-focus-btn):hover .month-task-time { opacity: 0; }
+        .month-task-item .month-focus-btn {
+            position: absolute;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 1;
+        }
 
         /* 节假日管理视图（真正的视图方案：透明/毛玻璃，与倒计时界面一致） */
         .holiday-view-container {
@@ -4567,6 +4737,14 @@ overflow: hidden;
 /* 命令面板搜索结果行（.cmd-search-item）不带完成勾选框、不带专注按钮（行内已无任何 button）：
    撤销上面为复选框预留的标题左内边距，让标题顶到左边 */
 .task-list-item.cmd-search-item > div.flex-1 { padding-left: 0; }
+/* 重复任务只读投影行没有勾选框：把重复图标钉到勾选框位置，
+   标题保持与普通任务行相同的起始线，避免图标独占一行 */
+.task-list-item.recurring-ghost-row > span:first-of-type {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    z-index: 2;
+}
 /* 任务项侧滑：背景操作层（右滑完成 / 左滑删除，§5.3） */
 .task-list-item { position: relative; z-index: 1; }
 .task-swipe-reveal {
@@ -4588,6 +4766,11 @@ overflow: hidden;
 .pomodoro-focus-btn { opacity: 1 !important; width: 32px !important; height: 32px !important; }
 .pomodoro-focus-btn .pf-icon-outline { display: none !important; }
 .pomodoro-focus-btn .pf-icon-solid { display: inline-block !important; font-size: 15px; }
+/* 触摸 / 窄屏没有 hover：周、月视图任务条上的开始专注按钮唤不出来，直接不渲染，
+   避免上面这条 width/opacity 的 !important 把它变成常驻的 32px 按钮（月视图该处本就渲染成小圆点） */
+.week-task-item .pomodoro-focus-btn,
+.week-allday-task .pomodoro-focus-btn,
+.month-task-item .pomodoro-focus-btn { display: none !important; }
 /* 分组标题吸顶 */
 [data-task-group] > div:first-child {
 position: sticky;
@@ -4607,8 +4790,7 @@ padding: 0;
 background: transparent;
 }
 
-/* 移动端不支持书写态：隐藏详情面板右上角「展开书写」按钮（该模式下无法继续展开） */
-#detail-expand-btn { display: none !important; }
+/* 移动端不支持书写态：「…」面板里的「展开书写」条目由 JS 按窄屏隐藏 */
 
 /* ---- 5.9/5.10 任务详情 & 计划面板：全屏页 ---- */
 #task-detail-panel, #plan-panel {
@@ -4895,8 +5077,40 @@ cursor: text;
         .md-li-row { display: flex; align-items: flex-start; min-height: 1.7em; margin: 0.08em 0; }
         .md-li-indent { flex: 0 0 auto; white-space: pre; }
         .md-li-marker { flex: 0 0 auto; color: var(--text-secondary); white-space: pre; }
-        .md-li-bullet { position: relative; color: transparent; }
-        .md-li-bullet::before { content: attr(data-md-bullet); position: absolute; left: 0; top: 0; color: var(--text-secondary); }
+        /* 无序列表的圆点用 CSS 形状绘制，不用字符 • ◦ ▪：
+           中文字体里这三个符号都是全角字形（advance = 1em、墨迹居中在字宽中部），
+           而标记栏宽度 = 源码 "- " 的宽度（16px 字号下约 9.1px），
+           直接画字符会让墨迹右缘越过正文起点（实测 −0.9px），看起来圆点贴着字。
+           ::before 用 inline-block + 负右边距把占位净宽抵消为 0：
+           标记栏宽度仍是 "- " 的宽度，渲染态与编辑态（textarea 源码）正文 x 坐标保持一致；
+           垂直方向用 vertical-align 锚在基线上，因此书写态（line-height 1.8）也不会跑位。 */
+        .md-li-bullet { color: transparent; }
+        .md-li-bullet::before {
+            content: '';
+            display: inline-block;
+            box-sizing: border-box;
+            width: 0.25em;
+            height: 0.25em;
+            margin: 0 calc(-0.25em - 1px) 0 1px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+            vertical-align: 0.25em;
+        }
+        .md-li-bullet-ring::before {
+            width: 0.31em;
+            height: 0.31em;
+            margin: 0 calc(-0.31em - 1px) 0 1px;
+            border: 0.09em solid var(--text-secondary);
+            background: transparent;
+            vertical-align: 0.22em;
+        }
+        .md-li-bullet-square::before {
+            width: 0.2em;
+            height: 0.2em;
+            margin: 0 calc(-0.2em - 1px) 0 1px;
+            border-radius: 0.02em;
+            vertical-align: 0.275em;
+        }
         .md-li-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; overflow-wrap: break-word; }
         .md-task-item { display: flex; align-items: flex-start; min-height: 1.7em; margin: 0.08em 0; list-style: none; }
         .md-task-checkbox { flex-shrink: 0; width: 14px; height: 14px; margin-top: 0.35em; accent-color: var(--accent-color); cursor: pointer; }
@@ -4951,48 +5165,48 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
             <div id="sidebar-scroll" class="flex-1 overflow-y-auto p-4" data-page-node-id="iZv5sALxEcPIbQ5Pn3qjgw">
                 <div class="space-y-2" data-page-node-id="v21azrmGYe5EvGAFd3PQx2">
                     <button onclick="filterAllTasks()" id="sidebar-all-tasks-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="VmZZbv7wgFZegeI5qGqS4r">
-                        <i class="fas fa-tasks w-5" data-page-node-id="bff0qQvuuAz07gOsq4mn3f"></i>
+                        <i class="fas fa-tasks w-5 text-center" data-page-node-id="bff0qQvuuAz07gOsq4mn3f"></i>
                         <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="lr2HfBpVQqy4sxJORmU3io">所有任务</span>
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-all-tasks-count" data-page-node-id="tS5rt9BaF7wszumXWz4Bte"></span>
                     </button>
 
                     <!-- 今天 -->
                     <button onclick="filterToday()" id="sidebar-today-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="Mkv97wTIztvZdN5mQf4eim">
-                        <i class="fas fa-sun w-5" data-page-node-id="z1XbFMpvOApkDjQ4kHa7O8"></i>
+                        <i class="fas fa-sun w-5 text-center" data-page-node-id="z1XbFMpvOApkDjQ4kHa7O8"></i>
                         <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="i84vWMTZYNLw1D0luoRtyW">今天</span>
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-today-count" data-page-node-id="rAowJ5wpVeipPLj4073tbw"></span>
                     </button>
 
                     <!-- 明天 -->
                     <button onclick="filterTomorrow()" id="sidebar-tomorrow-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="KKFwfV7xQrOxqiBnvJH8uG">
-                        <i class="fas fa-calendar-day w-5" data-page-node-id="tsJTAkhLjgY8mAo1HH4x26"></i>
+                        <i class="fas fa-calendar-day w-5 text-center" data-page-node-id="tsJTAkhLjgY8mAo1HH4x26"></i>
                         <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="dZas8aBBAA39t1jmrAmwdk">明天</span>
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-tomorrow-count" data-page-node-id="eKR6wriiRZRe5Ohp7Pn02N"></span>
                     </button>
 
                     <!-- 最近3天 -->
                     <button onclick="filterRecent3Days()" id="sidebar-recent3days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="NlTtMRVtoto6ReRNwURyoY">
-                        <i class="fas fa-calendar-days w-5" data-page-node-id="8eGtUqU9LTURt4as1vsaqY"></i>
+                        <i class="fas fa-calendar-days w-5 text-center" data-page-node-id="8eGtUqU9LTURt4as1vsaqY"></i>
                         <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="xlkVZ8CBI3Cr8abFrIWKew">最近3天</span>
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-recent3days-count" data-page-node-id="9bjrm7PFR9Mzo7MBkme92u"></span>
                     </button>
 
                     <!-- 最近7天 -->
                     <button onclick="filterNext7Days()" id="sidebar-next7days-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="xNVGHzUQ2WDJWtJ7koFUxE">
-                        <i class="fas fa-calendar-week w-5" data-page-node-id="3tcFzjLYPa7axMY0yqxbr1"></i>
+                        <i class="fas fa-calendar-week w-5 text-center" data-page-node-id="3tcFzjLYPa7axMY0yqxbr1"></i>
                         <span class="sidebar-text flex-1 min-w-0 truncate" data-page-node-id="nmpqWa7neT5u342qNwN9G2">最近7天</span>
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-next7days-count" data-page-node-id="B3X8A4bUccrsjUb7o7nHRT"></span>
                     </button>
 
                     <!-- 摘要 -->
                     <button onclick="currentListId=null;currentFilter=null;currentTagIds=[];currentFilterId=null;switchView('summary')" id="sidebar-summary-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2" data-page-node-id="5HHh8RDvLRpQNJw6Wo6wjR">
-                        <i class="fas fa-file-text w-5" data-page-node-id="JsNGbvMTOv1g1HsfAgDOfh"></i>
+                        <i class="fas fa-file-text w-5 text-center" data-page-node-id="JsNGbvMTOv1g1HsfAgDOfh"></i>
                         <span class="sidebar-text flex-1" data-page-node-id="XLNwPKBJLJSVpV728sYLG0">摘要</span>
                     </button>
 
                     <!-- 回收站（FR-02）：新增节点刻意不带 data-page-node-id，避免打乱镜像脚本的 node id 顺序映射 -->
                     <button onclick="openTrashView()" id="sidebar-trash-btn" class="w-full text-left px-3 py-2 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2">
-                        <i class="fas fa-trash w-5"></i>
+                        <i class="fas fa-trash w-5 text-center"></i>
                         <span class="sidebar-text flex-1">回收站</span>
                         <span class="sidebar-count text-xs text-theme-muted" id="sidebar-trash-count"></span>
                     </button>
@@ -5236,15 +5450,34 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                     <button type="button" id="detail-width-btn" onclick="cycleWriteModeWidth()" class="wm-only p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" title="正文宽度">
                         <i class="fas fa-text-width"></i>
                     </button>
+                    <!-- 「…」更多：收纳「展开书写 / 存为模板 / 批量管理子任务」。
+                         展开逻辑与主视图右上角「更多」一致（悬浮展开、点击固定、移开收合）。
+                         书写态隐藏本入口（wm-hide）。 -->
+                    <div class="relative detail-more-group wm-hide" id="detail-more-group">
+                        <button type="button" onclick="toggleDetailMoreMenu(event)" id="detail-more-btn"
+                                class="p-2 hover:bg-theme-tertiary rounded-lg transition" title="更多"
+                                aria-haspopup="menu" aria-expanded="false" aria-label="更多">
+                            <i class="fas fa-ellipsis-h text-theme-muted"></i>
+                        </button>
+                        <div class="detail-more-pop">
+                            <div id="detail-more-menu" role="menu" aria-label="更多任务操作">
+                                <button type="button" id="detail-more-write-item" class="detail-more-item" role="menuitem" onclick="closeDetailMoreMenu(); toggleDetailWriteMode();">
+                                    <i class="fas fa-expand-alt"></i><span class="detail-more-label">展开书写</span>
+                                </button>
+                                <button type="button" id="detail-more-template-item" class="detail-more-item" role="menuitem" onclick="closeDetailMoreMenu(); saveTaskAsTemplate();">
+                                    <i class="fas fa-layer-group"></i><span class="detail-more-label">存为模板</span>
+                                </button>
+                                <button type="button" id="detail-more-subtask-item" class="detail-more-item" role="menuitem" onclick="closeDetailMoreMenu(); toggleSubtaskManageMode();">
+                                    <i class="fas fa-pen-to-square"></i><span class="detail-more-label">批量管理子任务</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                     <!-- 任务模式切换（文本 ⇄ 子任务）：收起态与书写态都要有，位置固定在
                          正文宽度按钮与「退出/返回」按钮之间 —— DOM 顺序即视觉顺序，
                          书写态下正好落在返回按钮左侧。 -->
-                    <button onclick="toggleTaskMode(event)" class="p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" id="toggle-mode-btn" title="切换任务模式" data-page-node-id="jYpDGPYO2Asah7qZx686pN">
-                        <i class="fas fa-list-ul" data-page-node-id="vkHcttI1E3lIuYvNXnUPiW"></i>
-                    </button>
-                    <!-- 进入书写态的入口（仅收起态）。展开态由同位置的返回按钮退出，两者不并存 -->
-                    <button type="button" onclick="toggleDetailWriteMode()" class="wm-hide p-2 text-theme-secondary hover:bg-theme-tertiary rounded-lg transition" id="detail-expand-btn" title="展开书写">
-                        <i class="fas fa-expand-alt"></i>
+                    <button onclick="toggleTaskMode(event)" class="p-2 hover:bg-theme-tertiary rounded-lg transition" id="toggle-mode-btn" title="切换任务模式" data-page-node-id="jYpDGPYO2Asah7qZx686pN">
+                        <i class="fas fa-list-ul text-theme-muted" data-page-node-id="vkHcttI1E3lIuYvNXnUPiW"></i>
                     </button>
                     <!-- 统一的退出按钮：收起态 = 关闭面板，书写态 = 返回三栏布局（图标随态切换，位置与风格不变） -->
                     <button type="button" id="detail-dismiss-btn" onclick="onDetailDismiss()" class="p-2 hover:bg-theme-tertiary rounded-lg transition" title="关闭">
@@ -5363,7 +5596,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                 </div>
                                 <div class="hidden pl-5 repeat-submenu space-y-0" data-page-node-id="tGS505k5VlmWlmhLvrtFXD">
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="Lu4nLBpDcMpFHCIhLzIhwY">
-                                        <input type="radio" name="detail-repeat" value="weekly" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="mFQR6l0jNhhv7kQYVAjYyJ"> 每周
+                                        <input type="radio" name="detail-repeat" value="weekly" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="mFQR6l0jNhhv7kQYVAjYyJ"> <span id="detail-repeat-label-weekly" data-page-node-id="rptLblWeeklyG7h8I9j0K1l2">每周</span>
                                     </label>
                                     <div class="border-t border-theme my-1" data-page-node-id="FAdq3ibKhEDXOK28Rli53n"></div>
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="IfAbjlUy6LMxfjU5G9PRpX">
@@ -5381,7 +5614,10 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                 </div>
                                 <div class="hidden pl-5 repeat-submenu space-y-0" data-page-node-id="7QYj0FVsUTGglwWfjekOjd">
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="gGImUFJSj13ZnNYC2wIwHO">
-                                        <input type="radio" name="detail-repeat" value="monthly" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="B908q8ZbbD3Mo1lA6Ek0UX"> 每月
+                                        <input type="radio" name="detail-repeat" value="monthly" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="B908q8ZbbD3Mo1lA6Ek0UX"> <span id="detail-repeat-label-monthly" data-page-node-id="rptLblMonthlyG7h8I9j0K1l2">每月</span>
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="rptMonthlyLunarRowG7h8I9j0">
+                                        <input type="radio" name="detail-repeat" value="monthlyLunar" class="detail-repeat-option" data-repeat-props='{"type":"monthly","lunar":true}' onchange="updateDetailRepeatText()" data-page-node-id="rptMonthlyLunarInputG7h8I9j"> <span id="detail-repeat-label-monthly-lunar" data-page-node-id="rptLblMonthlyLunarG7h8I9j0">每月（农历）</span>
                                     </label>
                                     <div class="border-t border-theme my-1" data-page-node-id="UlXB7cEkGB7EYlBjAPRbEK"></div>
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="HmRrPFs2Yc5dimkEJd0bQG">
@@ -5399,7 +5635,10 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                 </div>
                                 <div class="hidden pl-5 repeat-submenu space-y-0" data-page-node-id="wNHUTUdqMclq1DRrWkVZJM">
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="XVerZd21amn26ELVTXa9NR">
-                                        <input type="radio" name="detail-repeat" value="yearly" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="aVR3HeG5iFRQGFuSDq3Yhg"> 每年
+                                        <input type="radio" name="detail-repeat" value="yearly" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="aVR3HeG5iFRQGFuSDq3Yhg"> <span id="detail-repeat-label-yearly" data-page-node-id="rptLblYearlyG7h8I9j0K1l2">每年</span>
+                                    </label>
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="rptYearlyLunarRowG7h8I9j0">
+                                        <input type="radio" name="detail-repeat" value="yearlyLunar" class="detail-repeat-option" data-repeat-props='{"type":"yearly","lunar":true}' onchange="updateDetailRepeatText()" data-page-node-id="rptYearlyLunarInputG7h8I9j"> <span id="detail-repeat-label-yearly-lunar" data-page-node-id="rptLblYearlyLunarG7h8I9j0">每年（农历）</span>
                                     </label>
                                     <div class="border-t border-theme my-1" data-page-node-id="UJstFEToQrGyjCb5RzjTs2"></div>
                                     <label class="flex items-center gap-2 cursor-pointer text-sm text-theme-secondary hover:text-theme-primary py-1" data-page-node-id="J6i7Nhjsp9L1EfnO1dHxup">
@@ -5411,7 +5650,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                 <input type="radio" name="detail-repeat" value="custom" class="detail-repeat-option" onchange="updateDetailRepeatText()" data-page-node-id="QsYNmrg6kZAl8ZkFD9Kp4n"> 自定义
                             </label>
                             <div id="detail-custom-repeat-container" class="hidden space-y-2 pl-5" data-page-node-id="vkxREpbQomAqNrFecXJOrl">
-                                <input type="number" id="detail-custom-repeat-interval" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="间隔" onchange="updateDetailRepeatText()" data-page-node-id="8FI0Sr9Ova19AYTLDXvxXK">
+                                <input type="number" id="detail-custom-repeat-interval" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" placeholder="间隔" min="1" step="1" inputmode="numeric" onchange="updateDetailRepeatText()" data-page-node-id="8FI0Sr9Ova19AYTLDXvxXK">
                                 <select id="detail-custom-repeat-unit" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" onchange="updateDetailRepeatText()" data-page-node-id="YWZr6AOFc97sCtIqzzm6yd">
                                     <option value="days" data-page-node-id="1opbx3qSUUSQVFhEmlFkDN">天</option>
                                     <option value="weeks" data-page-node-id="UQQF6aRJTpKltYsOdYwn09">周</option>
@@ -5439,26 +5678,16 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                     <i class="fas fa-check text-xs hidden" data-page-node-id="E2ZQHow1wNNOrvvnC9adds"></i>
                 </button>
                 <textarea id="detail-task-title" placeholder="任务标题" rows="1" class="flex-1 text-xl font-medium bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" style="min-height: 32px; max-height: 120px;"></textarea>
-                <button type="button" onclick="saveTaskAsTemplate()" id="detail-save-template-btn"
-                        class="detail-title-template-btn wm-hide" title="存为模板" aria-label="存为模板"
-                        data-page-node-id="detailSaveTemplateBtn">
-                    <i class="fas fa-layer-group text-sm"></i>
-                </button>
             </div>
 
             <!-- 任务详情编辑 -->
             <div id="detail-body" class="flex-1 p-4 overflow-y-auto min-h-0 flex flex-col" data-page-node-id="DwupiE79aKOZtzPsykHWJV">
                 <textarea id="detail-task-notes" placeholder="任务详情描述" class="w-full flex-1 bg-transparent border-none outline-none resize-none text-theme-primary min-h-[120px]"></textarea>
                 <!-- 子任务模式下的任务详情描述（置于子任务列表上方） -->
-                <!-- 子任务内容块：说明行 + 列表。hover 整块任一处都显示「编辑」入口 -->
+                <!-- 子任务内容块：说明行 + 列表 -->
                 <div id="subtask-content" class="flex-shrink-0">
                 <div id="subtask-desc-row" class="hidden flex items-start gap-2">
                     <textarea id="detail-task-description" placeholder="任务详情描述" rows="1" class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-theme-primary overflow-hidden" style="min-height: 36px;"></textarea>
-                    <!-- 「编辑/管理」入口：居右、hover 说明行或子任务区才淡入。
-                         用 opacity 占位而非 display —— 避免悬浮时描述框宽度变化导致文本重排 -->
-                    <button type="button" id="subtask-manage-btn" class="subtask-manage-btn" onclick="toggleSubtaskManageMode()" title="批量管理子任务" aria-label="批量管理子任务">
-                        <i class="fas fa-pen-to-square text-xs"></i>
-                    </button>
                 </div>
                 <!-- 子任务列表（与上面的说明行同步显隐） -->
                 <div id="subtasks-area" class="hidden" data-page-node-id="t9YICD7kz2UgWlsEODri2a">
@@ -6318,6 +6547,27 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                     <div class="ui-switch"></div>
                                 </label>
                             </div>
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="text-sm font-medium text-theme-primary">显示未来重复任务</label>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                                    <input type="checkbox" id="settings-show-recurring-future" class="sr-only peer" onchange="updateRecurringFutureRangeVisibility()">
+                                    <div class="ui-switch"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between hidden" id="settings-recurring-future-range-wrap">
+                                <div class="min-w-0 pr-3">
+                                    <label class="text-sm font-medium text-theme-primary">预览范围</label>
+                                    <p class="text-xs text-theme-muted">显示未来多久之内的重复任务预览</p>
+                                </div>
+                                <input type="hidden" id="settings-recurring-future-range" value="1m">
+                                <div class="seg flex-shrink-0" data-seg-for="settings-recurring-future-range">
+                                    <button type="button" data-value="2w">2 周</button>
+                                    <button type="button" data-value="1m">1 个月</button>
+                                    <button type="button" data-value="3m">3 个月</button>
+                                </div>
+                            </div>
                             <div class="flex items-center justify-between" data-page-node-id="SmdbUtszLMaEVzWyNjq8pH">
                                 <div data-page-node-id="rA2oEmmir1dxgAETj2iwnv">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="OmBJdcFtkPPIFNiKWvUPsC">侧边栏节假日倒计时</label>
@@ -6849,7 +7099,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.2</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.3</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>
@@ -7002,6 +7252,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
     <script src="mindful.js"></script>
     <script src="lunar.js"></script>
     <script src="utils.js"></script>
+    <script src="dayRollover.js"></script>
     <script src="data.js"></script>
     <script src="sidebarViews.js"></script>
     <script src="calendarViews.js"></script>
@@ -7014,6 +7265,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
     <script src="views.js"></script>
     <script src="headerActions.js"></script>
     <script src="tasks.js"></script>
+    <script src="recurrenceView.js"></script>
     <script src="taskTemplates.js"></script>
     <script src="attachments.js"></script>
     <script src="markdown.js"></script>
@@ -7096,7 +7348,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="n5ZZCQHy5FkNTQEKrSEdjH">
-                <span id="kc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="Oij3CrLoFqIMn3QoHXIx95">显示"开始专注"按钮</span>
+                <span id="kc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="Oij3CrLoFqIMn3QoHXIx95">显示「开始专注」按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="1PRcMKogZn1eq6yymVABND">
                     <input type="checkbox" id="kc-showfocus" aria-labelledby="kc-showfocus-label" onchange="onKanbanConfigChange()" class="sr-only peer" data-page-node-id="FJtM1yA26i8qIPl90ogNxn">
                     <div class="ui-switch" data-page-node-id="v6AnqVDbZEbRSMQnLXQkE2"></div>
@@ -7167,6 +7419,13 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                         <div class="ui-switch" data-page-node-id="oO0Iaua1NcULuHCodpRdVi"></div>
                     </label>
                 </div>
+                <div id="tc-separatecompleted-wrap" class="flex items-center justify-between" data-page-node-id="Sc7pKn2QwE9rTy4Za1VbLm">
+                    <span id="tc-separatecompleted-label" class="text-sm text-theme-primary" data-page-node-id="Jx3fRt8WqP5mNy7Kd2HvBe">已完成任务独立分组</span>
+                    <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="Uc6nBq1LsD4tXg9Yw8MjRa">
+                        <input type="checkbox" id="tc-separatecompleted" aria-labelledby="tc-separatecompleted-label" onchange="onTaskConfigChange()" class="sr-only peer" data-page-node-id="Eo5vSz2FhN6pQr3Tk1WyJd">
+                        <div class="ui-switch" data-page-node-id="Bn4yGt7MvK2wLc8Xs5RqPf"></div>
+                    </label>
+                </div>
                 <div data-page-node-id="fMCH3CbGiQKX6aAX99MSDe">
                     <label for="tc-nodatepos" class="block text-sm text-theme-secondary mb-1" data-page-node-id="fY6id1kGxf4Ub7Saki83Fb">无日期任务显示位置</label>
                     <select id="tc-nodatepos" onchange="onTaskConfigChange()" class="w-full px-3 py-2 rounded-lg bg-theme-tertiary text-theme-primary border border-theme" data-page-node-id="bAZHPOC4Ybk6B6XQnsGyFC">
@@ -7175,7 +7434,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                     </select>
                 </div>
                 <div class="flex items-center justify-between" data-page-node-id="OlHYJ6rpwu6HTLNRDFsC1k">
-                    <span id="tc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="Bwjv9IAqicGBeEUMAipVZa">显示"开始专注"按钮</span>
+                    <span id="tc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="Bwjv9IAqicGBeEUMAipVZa">显示「开始专注」按钮</span>
                     <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="qSMKvX00jOVCLH8Yb7Endu">
                         <input type="checkbox" id="tc-showfocus" aria-labelledby="tc-showfocus-label" onchange="onTaskConfigChange()" class="sr-only peer" data-page-node-id="u8O9cT75SxYt4YIK7vONye">
                         <div class="ui-switch" data-page-node-id="lGa1XUUoPHyoTHZBlbRjo1"></div>
@@ -7218,7 +7477,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="XQEjQGGpsntPJBngPdPlbo">
-                <span id="qc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="AXf5JcyBNVAsq5G4FdtFa3">显示"开始专注"按钮</span>
+                <span id="qc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="AXf5JcyBNVAsq5G4FdtFa3">显示「开始专注」按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="jT80TpKUGZf9FOLYjAEorB">
                     <input type="checkbox" id="qc-showfocus" aria-labelledby="qc-showfocus-label" onchange="onQuadrantConfigChange()" class="sr-only peer" data-page-node-id="POX12ZPvhGjZuJKANAGpQj">
                     <div class="ui-switch" data-page-node-id="ci7s3oHGlg6up0PmBCm5bw"></div>
@@ -7281,7 +7540,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                 </label>
             </div>
             <div class="flex items-center justify-between pt-1" data-page-node-id="oTHBAUcSUx2lB0YpWacJio">
-                <span id="sc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="g8tRO8hP1lX8JST7JXCFFZ">显示"开始专注"按钮</span>
+                <span id="sc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="g8tRO8hP1lX8JST7JXCFFZ">显示「开始专注」按钮</span>
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="myv4kLcw9KxmuiKmfJu0D1">
                     <input type="checkbox" id="sc-showfocus" aria-labelledby="sc-showfocus-label" onchange="onScheduleConfigChange()" class="sr-only peer" data-page-node-id="jiCqzxArptkDvT7wDAMYCA">
                     <div class="ui-switch" data-page-node-id="xIYyIzWzxRiTXDpE1l6sX6"></div>
@@ -7341,6 +7600,13 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                     <div class="ui-switch" data-page-node-id="BxLa5JsJUE9hNDyTAqObc4"></div>
                 </label>
             </div>
+            <div class="flex items-center justify-between pt-1" data-page-node-id="wcShowFocusRow">
+                <span id="wc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="wcShowFocusLabel">显示「开始专注」按钮</span>
+                <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="wcShowFocusSwitch">
+                    <input type="checkbox" id="wc-showfocus" aria-labelledby="wc-showfocus-label" onchange="onWeekConfigChange()" class="sr-only peer" data-page-node-id="wcShowFocusInput">
+                    <div class="ui-switch" data-page-node-id="wcShowFocusTrack"></div>
+                </label>
+            </div>
             <div class="pt-4 border-t border-theme" data-page-node-id="BeKgWl3Y3tW51dL6jjufPO">
                 <button onclick="resetViewConfigWithConfirm(this, resetWeekViewConfig)" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary hover:text-theme-primary transition text-sm" data-page-node-id="Nf0gjG4t2sJWbZCP92bHjo"><i class="fas fa-rotate-left mr-1" data-page-node-id="PzcpoZLEglQZVpfqrTbCYI"></i>恢复默认配置</button>
             </div>
@@ -7373,6 +7639,13 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                 <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="wZdEYY9E7MrTdql6DBTJJq">
                     <input type="checkbox" id="mc-showswapinfo" aria-labelledby="mc-showswapinfo-label" onchange="onMonthConfigChange()" class="sr-only peer" data-page-node-id="cKBUrUMKiHgElhDxjZq1Ql">
                     <div class="ui-switch" data-page-node-id="ihUnk9oIQM8BEXZreaccNh"></div>
+                </label>
+            </div>
+            <div class="flex items-center justify-between pt-1" data-page-node-id="mcShowFocusRow">
+                <span id="mc-showfocus-label" class="text-sm text-theme-primary" data-page-node-id="mcShowFocusLabel">显示「开始专注」按钮</span>
+                <label class="relative inline-flex items-center cursor-pointer" data-page-node-id="mcShowFocusSwitch">
+                    <input type="checkbox" id="mc-showfocus" aria-labelledby="mc-showfocus-label" onchange="onMonthConfigChange()" class="sr-only peer" data-page-node-id="mcShowFocusInput">
+                    <div class="ui-switch" data-page-node-id="mcShowFocusTrack"></div>
                 </label>
             </div>
             <div class="pt-4 border-t border-theme" data-page-node-id="c1gMLZ9508itQHJtMnN6Bc">

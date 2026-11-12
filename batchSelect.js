@@ -252,13 +252,14 @@ function getBatchCurrentTaskId() {
 }
 
 // 当前渲染源中的可见任务 id 序列（与 renderTaskListView 的 visibleTasks 口径一致：
-// 已完成分组未展开"查看更多"时仅前 5 条；Shift 区间以此为连续序）
+// 截断规则统一由 taskListView.js 的 _taskGroupVisibleTasks 决定 —— 独立「已完成」组未展开时
+// 仅前 5 条；合入模式下每组的已完成段未展开时同样仅前 5 条。Shift 区间以此为连续序）
 function _getVisibleTaskIds() {
     if (typeof buildTaskListGroups !== 'function') return [];
     const groups = buildTaskListGroups();
     const ids = [];
     groups.forEach(function (g) {
-        const visible = (g.isCompleted && !taskListCompletedShowAll) ? g.tasks.slice(0, 5) : g.tasks;
+        const visible = (typeof _taskGroupVisibleTasks === 'function') ? _taskGroupVisibleTasks(g) : g.tasks;
         visible.forEach(function (t) { ids.push(t.id); });
     });
     return ids;
@@ -544,12 +545,12 @@ function _batchJsQuote(s) {
     return String(s === null || s === undefined ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// 各分组「可见任务 id」映射（与 _getVisibleTaskIds 同口径：已完成分组未展开时仅前 5 条）
+// 各分组「可见任务 id」映射（与 _getVisibleTaskIds 同口径，截断规则见 _taskGroupVisibleTasks）
 function _getGroupVisibleIdsMap() {
     const map = {};
     if (typeof buildTaskListGroups !== 'function') return map;
     buildTaskListGroups().forEach(function (g) {
-        const visible = (g.isCompleted && !taskListCompletedShowAll) ? g.tasks.slice(0, 5) : g.tasks;
+        const visible = (typeof _taskGroupVisibleTasks === 'function') ? _taskGroupVisibleTasks(g) : g.tasks;
         map[g.key] = visible.map(function (t) { return t.id; });
     });
     return map;
@@ -605,16 +606,6 @@ function toggleSelectAllBatchTasks() {
     _renderBatchActionBar();
 }
 
-// 兼容旧入口（命令面板 Ctrl+A 等）：统一走 toggle 语义
-function selectAllBatchTasks() { toggleSelectAllBatchTasks(); }
-
-function clearBatchSelection() {
-    if (!_batchSelectActive) return;
-    _batchSelectedIds.clear();
-    _batchLastClickedId = null;
-    _refreshBatchSelectionDom();
-    _renderBatchActionBar();
-}
 
 // ==================== 退出管理：二次确认（三态按钮） ====================
 // 第一次点击进入「确认中」（实心红，同详情栏「紧急」激活态），再点一次才真正退出；
@@ -1169,8 +1160,8 @@ function batchUpdateReminderText() {
 const BATCH_REPEAT_LABELS = {
     daily: '每天', dailyWorkday: '每个工作日',
     weekly: '每周', weeklyFirstWorkday: '每周首个工作日', weeklyLastWorkday: '工作周期最后一个工作日',
-    monthly: '每月', monthlyFirstWorkday: '每月首个工作日', monthlyLastWorkday: '每月最后一个工作日',
-    yearly: '每年', yearlyBeforeHoliday: '每个节假日前一天',
+    monthly: '每月', monthlyLunar: '每月（农历）', monthlyFirstWorkday: '每月首个工作日', monthlyLastWorkday: '每月最后一个工作日',
+    yearly: '每年', yearlyLunar: '每年（农历）', yearlyBeforeHoliday: '每个节假日前一天',
     custom: '自定义'
 };
 
@@ -1214,18 +1205,20 @@ function _batchRepeatOptionsHtml(d) {
             '<div class="border-t border-theme my-1"></div>' +
             opt('weeklyFirstWorkday', '每周首个工作日', null, val === 'weeklyFirstWorkday') +
             opt('weeklyLastWorkday', '工作周期最后一个工作日', null, val === 'weeklyLastWorkday')) +
-        group('每月', ['monthly', 'monthlyFirstWorkday', 'monthlyLastWorkday'],
+        group('每月', ['monthly', 'monthlyLunar', 'monthlyFirstWorkday', 'monthlyLastWorkday'],
             opt('monthly', '每月', null, val === 'monthly') +
+            opt('monthlyLunar', '每月（农历）', '{"type":"monthly","lunar":true}', val === 'monthlyLunar') +
             '<div class="border-t border-theme my-1"></div>' +
             opt('monthlyFirstWorkday', '每月首个工作日', null, val === 'monthlyFirstWorkday') +
             opt('monthlyLastWorkday', '每月最后一个工作日', null, val === 'monthlyLastWorkday')) +
-        group('每年', ['yearly', 'yearlyBeforeHoliday'],
+        group('每年', ['yearly', 'yearlyLunar', 'yearlyBeforeHoliday'],
             opt('yearly', '每年', null, val === 'yearly') +
+            opt('yearlyLunar', '每年（农历）', '{"type":"yearly","lunar":true}', val === 'yearlyLunar') +
             '<div class="border-t border-theme my-1"></div>' +
             opt('yearlyBeforeHoliday', '每个节假日前一天', '{"type":"yearly","beforeHoliday":true}', val === 'yearlyBeforeHoliday')) +
         opt('custom', '自定义', null, val === 'custom') +
         '<div id="batch-custom-repeat-container" class="' + (val === 'custom' ? '' : 'hidden') + ' space-y-2 pl-5">' +
-            '<input type="number" id="batch-custom-repeat-interval" value="' + customInterval + '" placeholder="间隔" ' +
+            '<input type="number" id="batch-custom-repeat-interval" value="' + customInterval + '" placeholder="间隔" min="1" step="1" inputmode="numeric" ' +
                 'class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" onchange="batchStageRepeat()">' +
             '<select id="batch-custom-repeat-unit" class="w-full px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary" onchange="batchStageRepeat()">' +
                 '<option value="days"' + (customUnit === 'days' ? ' selected' : '') + '>天</option>' +
@@ -1267,6 +1260,8 @@ function batchStageRepeat() {
     if (d.repeatValue === 'custom') {
         const intervalEl = document.getElementById('batch-custom-repeat-interval');
         const unitEl = document.getElementById('batch-custom-repeat-unit');
+        // 输入即纠正：非法间隔（负数 / 0 / 小数 / 非数字）清空，静默无提示
+        normalizePositiveIntInput(intervalEl);
         d.repeatCustomInterval = intervalEl ? intervalEl.value : '';
         d.repeatCustomUnit = unitEl ? unitEl.value : 'days';
     }
@@ -1285,9 +1280,10 @@ function batchUpdateRepeatText() {
         if (d.repeatValue === 'custom') {
             label = '自定义';
             if (customContainer) customContainer.classList.remove('hidden');
-            if (d.repeatCustomInterval) {
+            const interval = parsePositiveInt(d.repeatCustomInterval);
+            if (interval > 0) {
                 const unitName = { days: '天', weeks: '周', months: '月', years: '年' };
-                label = '每' + d.repeatCustomInterval + (unitName[d.repeatCustomUnit] || '天');
+                label = '每' + interval + (unitName[d.repeatCustomUnit] || '天');
             }
         } else {
             label = BATCH_REPEAT_LABELS[d.repeatValue] || '不重复';
@@ -1556,8 +1552,8 @@ function _batchBuildRepeat(d) {
     if (!d.repeatTouched) return undefined;
     if (!d.repeatValue) return null;
     if (d.repeatValue === 'custom') {
-        const interval = parseInt(d.repeatCustomInterval, 10);
-        if (interval && interval > 0) {
+        const interval = parsePositiveInt(d.repeatCustomInterval);
+        if (interval > 0) {
             return { type: 'custom', interval: interval, unit: d.repeatCustomUnit || 'days', repeatMode: d.repeatMode || 'startTime' };
         }
         return null;
@@ -1571,6 +1567,10 @@ function _batchRepeatLabel(repeatObj) {
     if (repeatObj.type === 'custom') {
         const unitName = { days: '天', weeks: '周', months: '月', years: '年' };
         return '每' + (repeatObj.interval || '?') + (unitName[repeatObj.unit] || '天');
+    }
+    if (repeatObj.lunar) {
+        if (repeatObj.type === 'monthly') return '每月（农历）';
+        if (repeatObj.type === 'yearly') return '每年（农历）';
     }
     return BATCH_REPEAT_LABELS[repeatObj.type] || repeatObj.type;
 }

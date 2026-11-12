@@ -431,13 +431,31 @@ def load_data_from_file():
     finally:
         release_file_lock(lock_fd)
 
+def _write_data_file_compact(data):
+    """紧凑 JSON + 临时文件原子替换（调用方需已持有 data_lock / 文件锁）。
+
+    旧实现用 indent=2 格式化整份 6.8MB 数据，每次勾选的 PATCH 都要额外写约 1.3MB 缩进空白，
+    且直接覆盖 DATA_FILE，写盘中异常会留下半截文件。改为 separators 紧凑输出 + os.replace，
+    既降低单次落盘体积与耗时，也保证磁盘上要么是旧完整快照、要么是新完整快照。
+    """
+    tmp_path = DATA_FILE + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+    os.replace(tmp_path, DATA_FILE)
+
+
 def save_data_to_file(data):
     lock_fd = acquire_file_lock()
     try:
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _write_data_file_compact(data)
     except Exception as e:
         print("Error saving data: %s" % str(e))
+        try:
+            tmp_path = DATA_FILE + '.tmp'
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
     finally:
         release_file_lock(lock_fd)
 
@@ -3569,8 +3587,8 @@ class TodoHandler(BaseHTTPRequestHandler):
                             tasks_list.append(task)
                         data['tasks'] = tasks_list
 
-                        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-                            json.dump(data, f, ensure_ascii=False, indent=2)
+                        # 已持有 data_lock + 文件锁，直接紧凑落盘（不再整份 indent=2 格式化）
+                        _write_data_file_compact(data)
                     finally:
                         release_file_lock(lock_fd)
                     _data_version += 1

@@ -39,6 +39,17 @@ else:
     TCPServer = SocketServer.TCPServer
 
 class MyHandler(BaseHandler):
+    # 部分 Python/Windows 环境的 mimetypes 不认识 .woff2（已实测 3.12 返回 None），
+    # SimpleHTTPRequestHandler 会把图标字体当作 application/octet-stream 返回，
+    # 部分浏览器会因此拒绝加载 Font Awesome，表现为图标全部空白。
+    extensions_map = dict(getattr(BaseHandler, 'extensions_map', {}) or {})
+    extensions_map.update({
+        '.woff': 'font/woff',
+        '.woff2': 'font/woff2',
+        '.ttf': 'font/ttf',
+        '.eot': 'application/vnd.ms-fontobject',
+    })
+
     def translate_path(self, path):
         if path == '/' or path == '':
             path = '/index_offline.html'

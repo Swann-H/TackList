@@ -8,6 +8,7 @@ let _savePutInFlight = false; // 是否有一个 /api/data PUT 请求在途
 let _savePutQueued = false; // PUT 在途期间又有新保存请求，待其完成后重发
 let _savePutQueuedWaiters = []; // 等待排队重发完成的回调（saveDataImmediate 依赖完成时机）
 let _forceNextRefreshRender = false; // 冲突合并后强制下次刷新重渲染，绕过版本号检测
+let _recurringFutureMigrationDirty = false; // 升级迁移删掉了旧配置字段，需写盘落定
 
 // ==================== IndexedDB 冗余缓存 ====================
 const IDB_NAME = 'tacklistBackup';
@@ -84,6 +85,9 @@ function notifyDataChange() {
 }
 
 async function refreshDataFromServer() {
+    // 跨天兜底通道：即使服务端 _version 未变（锁屏过夜数据无变化）也要推进日期上下文。
+    // checkDayRollover() 自带去重，只有日期真的变化才会触发一次静默重绘。
+    if (typeof checkDayRollover === 'function') checkDayRollover();
     // 当任务详情面板打开或有保存正在进行时，延迟刷新，避免覆盖本地未保存的数据
     if (currentDetailTaskId || _saveInFlight) {
         _dataRefreshPending = true;
@@ -528,6 +532,9 @@ function _doSaveData() {
             return;
         }
         _saveInFlight = false;
+        // 任务编辑采用自动保存：若跨天刷新因保存中/输入中被延后，保存落盘后即可补上。
+        // 这里只挂回调，不新增任何保存逻辑。
+        if (typeof flushPendingDayRollover === 'function') flushPendingDayRollover();
         // 保存完成后，如有被延迟的刷新，立即执行
         if (_dataRefreshPending) {
             _dataRefreshPending = false;
@@ -577,6 +584,8 @@ function saveTaskPatch(taskId) {
         }
         notifyDataChange();
         _saveInFlight = false;
+        // 增量保存（勾选完成、单任务编辑）落盘后同样补一次被延后的跨天刷新
+        if (typeof flushPendingDayRollover === 'function') flushPendingDayRollover();
         if (_dataRefreshPending) {
             _dataRefreshPending = false;
             refreshDataFromServer();
@@ -824,47 +833,6 @@ function performAutoBackup() {
     serverBackup();
 }
 
-function showBackupReminder() {
-    const reminder = document.createElement('div');
-    reminder.id = 'backup-reminder';
-    reminder.className = 'fixed bottom-4 right-4 bg-theme-secondary rounded-xl shadow-lg p-4 max-w-sm z-50 border border-theme';
-    reminder.innerHTML = `
-        <div class="flex items-start gap-3">
-            <div class="p-2 bg-accent-strong rounded-full">
-                <i class="fas fa-cloud-arrow-down text-accent-dark"></i>
-            </div>
-            <div class="flex-1">
-                <h4 class="font-medium text-theme-primary">备份提醒</h4>
-                <p class="text-sm text-theme-secondary mt-1">已到备份时间，是否下载配置文件？</p>
-                <div class="flex gap-2 mt-3">
-                    <button onclick="confirmBackup()" class="flex-1 px-3 py-2 bg-accent text-white rounded-lg hover:bg-accent-hover transition">下载</button>
-                    <button onclick="skipBackup()" class="flex-1 px-3 py-2 border border-theme text-theme-secondary rounded-lg hover:bg-theme-tertiary transition">这次不要</button>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(reminder);
-}
-
-function confirmBackup() {
-    serverBackup();
-    
-    const reminder = document.getElementById('backup-reminder');
-    if (reminder) {
-        reminder.remove();
-    }
-}
-
-function skipBackup() {
-    settings._lastBackupDate = new Date().toISOString();
-    saveData();
-    
-    const reminder = document.getElementById('backup-reminder');
-    if (reminder) {
-        reminder.remove();
-    }
-}
 
 function toggleAutoBackup() {
     const enabled = document.getElementById('backup-enabled').checked;
@@ -964,6 +932,9 @@ const DEFAULT_SETTINGS = {
     showCompleted: true,
     showLunar: true,
     noDateTaskPosition: 'last',
+    // 重复任务后续只读投影：全局开关（设置面板「视图与外观」统一控制，默认关闭）与投影窗口
+    showRecurringFuture: false,
+    recurringFutureRange: '1m',
     // FR-10：任务内容 Markdown 渲染总开关；关闭后详情面板/书写态按纯文本编辑
     notesMarkdown: true,
     focusDuration: 25,
@@ -1074,6 +1045,7 @@ const DEFAULT_SETTINGS = {
         sortBy: 'time',         // time | createdTime | modifiedTime | title | tag | priority
         sortDir: 'asc',         // asc | desc
         showDetails: false,     // 显示任务详情（备注/子任务）
+        separateCompleted: true, // 已完成任务独立分组（true=独立成组置底；false=留在原分组内置底、每组已完成只显示前 5 条）
         groupCollapseStrategy: 'only-completed-collapsed' // all-expanded | only-completed-collapsed | all-collapsed
     },
     // 日程视图配置（迁移自全局的可分离项，不设默认值=未显式设置）
@@ -1216,8 +1188,8 @@ function applySettings(parsed) {
         var targets = [
             [settings.taskViewConfig, ['showCompleted', 'showFocusButton']],
             [settings.scheduleConfig, ['showCompleted', 'showLunar', 'showFocusButton']],
-            [settings.weekConfig, ['showCompleted', 'showLunar']],
-            [settings.monthConfig, ['showCompleted', 'showLunar']],
+            [settings.weekConfig, ['showCompleted', 'showLunar', 'showFocusButton']],
+            [settings.monthConfig, ['showCompleted', 'showLunar', 'showFocusButton']],
             [settings.quadrantConfig, ['showCompleted', 'showFocusButton']],
             [settings.kanbanConfig, ['showCompleted', 'showFocusButton']]
         ];
@@ -1242,6 +1214,41 @@ function applySettings(parsed) {
             settings.kanbanConfig.noDateTaskPosition === undefined) {
             settings.kanbanConfig.noDateTaskPosition = legacy.noDateTaskPosition === 'first' ? 'first' : 'last';
         }
+    })();
+    // 升级迁移：旧版把「显示未来重复任务」分散在各视图配置 / 清单级 viewPrefs 里，
+    // 新版本统一由设置面板「视图与外观」控制，且默认关闭。
+    // 删除旧字段是幂等的，每次加载都跑；全局开关只在首次迁移时回落为关闭，
+    // 用运行时标记 recurringFutureConfigMigrated 保证用户之后手动开启不会被反复重置。
+    // 依赖后续任意一次 saveData 落盘（与 applySettings 内其它 delete 型迁移口径一致）。
+    (function migrateRecurringFutureConfig() {
+        let removed = false;
+        const viewKeys = ['taskViewConfig', 'scheduleConfig', 'weekConfig', 'monthConfig', 'quadrantConfig', 'kanbanConfig'];
+        viewKeys.forEach(function (key) {
+            const cfg = settings[key];
+            if (cfg && typeof cfg === 'object' && 'showRecurringFuture' in cfg) {
+                delete cfg.showRecurringFuture;
+                removed = true;
+            }
+        });
+        if (typeof lists !== 'undefined' && Array.isArray(lists)) {
+            lists.forEach(function (list) {
+                const vp = list && list.viewPrefs;
+                if (!vp || typeof vp !== 'object') return;
+                Object.keys(vp).forEach(function (view) {
+                    const cfg = vp[view];
+                    if (cfg && typeof cfg === 'object' && 'showRecurringFuture' in cfg) {
+                        delete cfg.showRecurringFuture;
+                        removed = true;
+                    }
+                });
+            });
+        }
+        if (settings.recurringFutureConfigMigrated !== true) {
+            settings.showRecurringFuture = false;
+            settings.recurringFutureConfigMigrated = true;
+            removed = true;
+        }
+        if (removed) _recurringFutureMigrationDirty = true;
     })();
     pomodoroState.focusDuration = settings.focusDuration;
     pomodoroState.shortBreakDuration = settings.shortBreakDuration || 5;
@@ -1384,6 +1391,13 @@ async function loadData() {
         }
     }
     
+    // 升级迁移删掉了旧配置字段：写盘落定，避免 data.json 里残留已废弃配置。
+    // 放在所有加载分支的汇合处；saveData 自带节流，与下方空任务清理的保存会合并成一次。
+    if (_recurringFutureMigrationDirty) {
+        _recurringFutureMigrationDirty = false;
+        saveData();
+    }
+
     if (!_initialLoadDone) {
         // 首次加载：清理上次会话残留的空任务（不关详情面板直接刷新/关页面会留下空白卡片）。
         // 只在此处调用，不能在 refreshDataFromServer / 后续 loadData 调用里做，
@@ -1469,27 +1483,6 @@ function _registerManualThemeForCurrentImage(theme) {
     return theme;
 }
 
-// 当前图片的自动判定结果：复用已取色的亮度，避免再次读像素
-function _autoThemeForCurrentImage() {
-    const pal = settings.themePaletteColors;
-    const b = (pal && typeof pal._brightness === 'number') ? pal._brightness : bgImageBrightness;
-    return b < 0.45 ? 'dark' : 'light';
-}
-
-// 显式撤销当前图片的手动主题，回到明暗自动判定（供设置面板入口调用）。
-// 刻意不挂在主题按钮上：点「已生效」的主题按钮应当是无副作用的幂等操作。
-// ⚠️ 这里必须走 _applyAutoTheme：若走 setTheme 会被 _registerManualThemeForCurrentImage
-// 立刻重新登记回去，等于撤销失效。
-function resetBgThemeOverrideForCurrentImage() {
-    const key = _currentBgImageKey();
-    if (!key || !settings.bgThemeOverrides || !Object.prototype.hasOwnProperty.call(settings.bgThemeOverrides, key)) {
-        return false;
-    }
-    delete settings.bgThemeOverrides[key];
-    _applyAutoTheme(_autoThemeForCurrentImage());
-    saveData(); // _applyAutoTheme 在主题未变时会早退，需补一次落盘
-    return true;
-}
 
 function applyTheme() {
     if (settings.theme === 'dark') {
@@ -1692,7 +1685,7 @@ function clearBgImage() {
         // 第二次点击：确认删除
         _bgImageDeleteConfirming = false;
         if (_bgImageDeleteTimer) { clearTimeout(_bgImageDeleteTimer); _bgImageDeleteTimer = null; }
-        _resetBgImageDeleteBtn(btn);
+        _resetBgDeleteBtn(btn);
         _doClearBgImage();
         return;
     }
@@ -1707,11 +1700,12 @@ function clearBgImage() {
     if (_bgImageDeleteTimer) clearTimeout(_bgImageDeleteTimer);
     _bgImageDeleteTimer = setTimeout(() => {
         _bgImageDeleteConfirming = false;
-        _resetBgImageDeleteBtn(btn);
+        _resetBgDeleteBtn(btn);
     }, 3000);
 }
 
-function _resetBgImageDeleteBtn(btn) {
+// 单张背景图 / 轮播背景图两个「删除」按钮的二次确认复位（样式完全相同，故共用一份）
+function _resetBgDeleteBtn(btn) {
     if (!btn) return;
     btn.classList.remove('bg-red-500', 'border-red-500', 'text-white');
     btn.classList.add('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
@@ -1773,7 +1767,7 @@ function clearBgCarousel() {
         // 而非切换到单张模式）；服务端进入 no_directory 空目录提示态、回退默认背景
         _bgCarouselDeleteConfirming = false;
         if (_bgCarouselDeleteTimer) { clearTimeout(_bgCarouselDeleteTimer); _bgCarouselDeleteTimer = null; }
-        _resetBgCarouselDeleteBtn(btn);
+        _resetBgDeleteBtn(btn);
         bgCarouselUpdateConfig({ directory: '' }).then(state => {
             if (state && state.success !== false) {
                 showToast('背景图目录已清除', 'success');
@@ -1792,15 +1786,8 @@ function clearBgCarousel() {
     if (_bgCarouselDeleteTimer) clearTimeout(_bgCarouselDeleteTimer);
     _bgCarouselDeleteTimer = setTimeout(() => {
         _bgCarouselDeleteConfirming = false;
-        _resetBgCarouselDeleteBtn(btn);
+        _resetBgDeleteBtn(btn);
     }, 3000);
-}
-
-function _resetBgCarouselDeleteBtn(btn) {
-    if (!btn) return;
-    btn.classList.remove('bg-red-500', 'border-red-500', 'text-white');
-    btn.classList.add('bg-theme-tertiary', 'text-theme-secondary', 'hover:bg-red-50', 'hover:text-red-500');
-    btn.title = '删除背景图片';
 }
 
 // ==================== 背景图目录自动轮播（客户端被动接收） ====================

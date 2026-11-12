@@ -1,5 +1,7 @@
 async function init() {
     await loadData();
+    // 统一跨天观察器：必须在首次 renderView() 之前启动，确保「今天」基准就绪
+    if (typeof startDayRolloverWatch === 'function') startDayRolloverWatch();
     // FR-09：预置模板（3 个，随 TEMPLATE_PRESET_VERSION 变化整体重建；用户删空后不再自动恢复）
     if (typeof seedTaskTemplatesIfNeeded === 'function') seedTaskTemplatesIfNeeded();
     // FR-06：探测附件能力（有服务端才展示上传入口；失败静默降级为不支持）
@@ -682,6 +684,13 @@ function validateFuzzyTimeInput(inputEl, wordKey) {
     inputEl.value = toTime(clamped);
 }
 
+// 「预览范围」仅在「显示未来重复任务」开启时显示（设置面板内实时联动，不等保存）
+function updateRecurringFutureRangeVisibility() {
+    const toggle = document.getElementById('settings-show-recurring-future');
+    const wrap = document.getElementById('settings-recurring-future-range-wrap');
+    if (toggle && wrap) wrap.classList.toggle('hidden', !toggle.checked);
+}
+
 function openSettingsModal() {
     document.getElementById('settings-default-list').value = settings.defaultListId || 'default';
     document.getElementById('settings-default-important').checked = settings.defaultImportant || false;
@@ -692,6 +701,15 @@ function openSettingsModal() {
     if (_wWidth) _wWidth.value = settings.writeModeWidth || 'standard';
     const _notesMd = document.getElementById('settings-notes-markdown');
     if (_notesMd) _notesMd.checked = settings.notesMarkdown !== false;
+    // 未来重复任务：全局统一开关（各视图配置面板不再单独提供）
+    const _showFuture = document.getElementById('settings-show-recurring-future');
+    if (_showFuture) _showFuture.checked = settings.showRecurringFuture === true;
+    const _futureRange = document.getElementById('settings-recurring-future-range');
+    if (_futureRange) {
+        const v = settings.recurringFutureRange;
+        _futureRange.value = (v === '2w' || v === '1m' || v === '3m') ? v : '1m';
+    }
+    updateRecurringFutureRangeVisibility();
     document.getElementById('settings-show-holiday-countdown').checked = settings.showHolidayCountdown !== false;
     document.getElementById('settings-show-sidebar-extras').checked = settings.showSidebarExtras !== false;
     document.getElementById('settings-easter-egg').checked = settings.easterEggEnabled !== false;
@@ -1556,6 +1574,13 @@ function saveSettings(silent) {
     if (_wWidthEl) settings.writeModeWidth = _wWidthEl.value || 'standard';
     const _notesMdEl = document.getElementById('settings-notes-markdown');
     if (_notesMdEl) settings.notesMarkdown = _notesMdEl.checked;
+    const _showFutureEl = document.getElementById('settings-show-recurring-future');
+    if (_showFutureEl) settings.showRecurringFuture = _showFutureEl.checked;
+    const _futureRangeEl = document.getElementById('settings-recurring-future-range');
+    if (_futureRangeEl) {
+        const v = _futureRangeEl.value;
+        settings.recurringFutureRange = (v === '2w' || v === '1m' || v === '3m') ? v : '1m';
+    }
     settings.showHolidayCountdown = document.getElementById('settings-show-holiday-countdown').checked;
     settings.showSidebarExtras = document.getElementById('settings-show-sidebar-extras').checked;
     settings.easterEggEnabled = document.getElementById('settings-easter-egg').checked;
@@ -1654,6 +1679,8 @@ function saveSettings(silent) {
     applyVAFromTemp();
     // 视图操作按钮数量可能已变更，立即重算右上角溢出
     if (typeof applyHeaderActionOverflow === 'function') applyHeaderActionOverflow();
+    // 投影开关/窗口可能已变更，先失效缓存再重绘
+    if (typeof invalidateRecurringGhostCache === 'function') invalidateRecurringGhostCache();
     saveData();
     // FR-01-4：settings 变更保存后撤销栈失效（结构性变更使旧撤销上下文不可靠）
     if (typeof clearUndoStack === 'function') clearUndoStack();
@@ -2026,38 +2053,26 @@ function onBindAddressChange() {
     updateNetworkInfoDisplay();
 }
 
-function copyLanUrl() {
-    const el = document.getElementById('lan-access-url');
-    if (el && el.textContent) {
-        navigator.clipboard.writeText(el.textContent).then(() => {
-            showToast('已复制局域网地址', 'success');
-        }).catch(() => {
-            // 降级：选择文本
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-            showToast('请手动复制选中的地址', 'warning');
-        });
-    }
+// 复制网络信息里的地址：两个入口只差元素 id 与成功文案
+function _copyAccessUrl(elId, okText) {
+    const el = document.getElementById(elId);
+    if (!el || !el.textContent) return;
+    navigator.clipboard.writeText(el.textContent).then(() => {
+        showToast(okText, 'success');
+    }).catch(() => {
+        // 降级：选择文本
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        showToast('请手动复制选中的地址', 'warning');
+    });
 }
 
-function copyLocalhostUrl() {
-    const el = document.getElementById('localhost-access-url');
-    if (el && el.textContent) {
-        navigator.clipboard.writeText(el.textContent).then(() => {
-            showToast('已复制本机地址', 'success');
-        }).catch(() => {
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-            showToast('请手动复制选中的地址', 'warning');
-        });
-    }
-}
+function copyLanUrl() { _copyAccessUrl('lan-access-url', '已复制局域网地址'); }
+
+function copyLocalhostUrl() { _copyAccessUrl('localhost-access-url', '已复制本机地址'); }
 
 // ==================== 网页模式（在线/离线）切换 ====================
 let _cdnHeartbeatTimerId = null;
@@ -2065,6 +2080,27 @@ let _cdnHeartbeatFailCount = 0;
 const CDN_HEARTBEAT_URL = 'https://cdn.tailwindcss.com';
 const CDN_HEARTBEAT_INTERVAL = 60000; // 60秒
 const CDN_HEARTBEAT_FAIL_THRESHOLD = 2; // 连续2次失败则回退
+// 用户显式选择的网页模式，同步写入 localStorage。
+// 优先级高于 data.json 里的 settings.webMode：整包保存（约 9MB）可能被页面跳转打断，
+// 若只依赖服务端 settings，用户切到在线版后一旦保存没落盘，下次开机就会被当成离线版。
+const WEB_MODE_STORAGE_KEY = 'tacklist_web_mode';
+// init() 在导入数据后会被再次调用，online 事件监听只绑定一次
+let _webModeOnlineRetryBound = false;
+
+function getDesiredWebMode() {
+    try {
+        const stored = localStorage.getItem(WEB_MODE_STORAGE_KEY);
+        if (stored === 'online' || stored === 'offline') return stored;
+    } catch (e) { /* 隐私模式/存储不可用：回退到服务端设置 */ }
+    return settings.webMode === 'online' ? 'online' : 'offline';
+}
+
+function rememberWebMode(mode) {
+    settings.webMode = mode;
+    try {
+        localStorage.setItem(WEB_MODE_STORAGE_KEY, mode);
+    } catch (e) { /* 存储不可用时仍会随 data.json 保存 */ }
+}
 
 // 检测 CDN 可达性（3秒超时）
 function checkOnlineConnectivity() {
@@ -2086,19 +2122,54 @@ function checkOnlineConnectivity() {
     });
 }
 
+// 带重试的连通性检测：开机冷启动时网络往往尚未就绪，单次 3 秒判定容易误判为离线
+function checkOnlineConnectivityWithRetry(attempts) {
+    const max = attempts || 2;
+    const delays = [0, 4000]; // 首次立即检测，随后再补一次
+    return new Promise((resolve) => {
+        let index = 0;
+        const next = () => {
+            if (index >= max) {
+                resolve(false);
+                return;
+            }
+            const delay = delays[index] || 0;
+            index++;
+            setTimeout(() => {
+                checkOnlineConnectivity().then(online => {
+                    if (online) resolve(true);
+                    else next();
+                });
+            }, delay);
+        };
+        next();
+    });
+}
+
 // 初始化网页模式：离线版入口检测是否需要跳转到在线版
 function initWebMode() {
     const currentVersion = window._WEB_VERSION || 'offline';
-    const savedMode = settings.webMode || 'offline';
+    const desiredMode = getDesiredWebMode();
+    // 以本地偏好修正内存设置，保证设置面板展示与实际意图一致
+    if (settings.webMode !== desiredMode) settings.webMode = desiredMode;
 
-    if (currentVersion === 'offline' && savedMode === 'online') {
-        // 离线版入口但用户设置为在线版：检测 CDN 后决定是否跳转
-        checkOnlineConnectivity().then(online => {
+    if (currentVersion === 'offline' && desiredMode === 'online') {
+        // 离线版入口但用户希望使用在线版：多试一次，避免开机瞬间网络未就绪导致停在离线版
+        checkOnlineConnectivityWithRetry(2).then(online => {
             if (online) {
                 window.location.href = '/index.html';
-            } else {
-                // CDN 不可达，保持离线版并提示
-                showToast('互联网不可达，已保持在离线版', 'warning');
+                return;
+            }
+            showToast('互联网暂不可达，本次以离线版运行；网络恢复后会自动回到在线版', 'warning');
+            // 网络恢复时（浏览器触发 online 事件）不必手动刷新即可回到在线版
+            if (!_webModeOnlineRetryBound) {
+                _webModeOnlineRetryBound = true;
+                window.addEventListener('online', function () {
+                    if (window._WEB_VERSION !== 'offline') return;
+                    checkOnlineConnectivity().then(ok => {
+                        if (ok) window.location.href = '/index.html';
+                    });
+                });
             }
         });
     } else if (currentVersion === 'online') {
@@ -2112,23 +2183,35 @@ function startCdnHeartbeat() {
     if (_cdnHeartbeatTimerId) clearInterval(_cdnHeartbeatTimerId);
     _cdnHeartbeatFailCount = 0;
     _cdnHeartbeatTimerId = setInterval(async () => {
+        // 页面不可见（标签页切后台/锁屏）期间不做判定，避免唤醒瞬间的连续失败被误算
+        if (document.hidden) return;
         const online = await checkOnlineConnectivity();
         if (online) {
             _cdnHeartbeatFailCount = 0;
         } else {
             _cdnHeartbeatFailCount++;
             if (_cdnHeartbeatFailCount >= CDN_HEARTBEAT_FAIL_THRESHOLD) {
-                // 连续失败达阈值：回退到离线版
+                // 仅本次会话临时回退到离线版：
+                // 不写 settings.webMode / 不落盘，否则一次网络抖动就会把用户
+                // 「想用在线版」的选择永久覆盖成离线版（表现为第二天开机回不到在线版）。
                 stopCdnHeartbeat();
-                settings.webMode = 'offline';
-                saveDataImmediate();
-                showToast('CDN 不可达，已自动切换回离线版', 'warning');
+                showToast('CDN 不可达，本次已临时切换到离线版；网络恢复后重新打开即回到在线版', 'warning');
                 setTimeout(() => {
                     window.location.href = '/index_offline.html';
                 }, 1500);
             }
         }
     }, CDN_HEARTBEAT_INTERVAL);
+}
+
+// 保存偏好后跳转：先让整包数据落盘，避免页面跳转中断在途 PUT 导致 webMode 未持久化
+async function _saveWebModeAndNavigate(url) {
+    try {
+        await saveDataImmediate();
+    } catch (e) {
+        console.warn('Save web mode failed:', e);
+    }
+    window.location.href = url;
 }
 
 function stopCdnHeartbeat() {
@@ -2149,7 +2232,7 @@ async function onWebModeChange() {
     // 如果与当前运行版本一致，无需操作
     if ((newMode === 'online' && currentVersion === 'online') ||
         (newMode === 'offline' && currentVersion === 'offline')) {
-        settings.webMode = newMode;
+        rememberWebMode(newMode);
         saveData();
         return;
     }
@@ -2157,28 +2240,22 @@ async function onWebModeChange() {
     // 切换到在线版：先检测 CDN
     if (newMode === 'online') {
         showToast('正在检测网络连通性…', 'info');
-        const online = await checkOnlineConnectivity();
+        const online = await checkOnlineConnectivityWithRetry(2);
         if (!online) {
             // CDN 不可达，回退选择项并提示
             selectEl.value = 'offline';
             showToast('无法连接 CDN，已保持在离线版', 'warning');
             return;
         }
-        // CDN 可达：保存设置并跳转
-        settings.webMode = 'online';
-        saveDataImmediate();
+        // CDN 可达：先记下用户选择（localStorage 同步落盘），再保存整包数据后跳转
+        rememberWebMode('online');
         showToast('正在切换到在线版…', 'info', 'short');
-        setTimeout(() => {
-            window.location.href = '/index.html';
-        }, 800);
+        await _saveWebModeAndNavigate('/index.html');
     } else {
         // 切换到离线版：直接保存并跳转
-        settings.webMode = 'offline';
-        saveDataImmediate();
+        rememberWebMode('offline');
         showToast('正在切换到离线版…', 'info', 'short');
-        setTimeout(() => {
-            window.location.href = '/index_offline.html';
-        }, 800);
+        await _saveWebModeAndNavigate('/index_offline.html');
     }
 }
 
@@ -3180,7 +3257,6 @@ function selectThemePalette(name) {
 // 交互：短按（<300ms）= 保存应用；长按 = 预览（隐藏设置面板），松开恢复
 let _palettePreviewSaved = null;  // 预览前状态：null 表示当前未在预览
 let _palettePreviewActiveName = null;  // 当前预览的调色板名
-let _palettePreviewDownTime = 0;  // mousedown 时间戳，用于区分短按/长按
 let _palettePreviewLongPress = false;  // 是否已进入长按预览状态（已隐藏设置面板）
 let _palettePreviewLongPressTimer = null;  // 长按判定定时器
 const PALETTE_PREVIEW_CLICK_THRESHOLD = 300;

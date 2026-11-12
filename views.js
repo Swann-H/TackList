@@ -72,7 +72,8 @@ function switchView(view) {
         leaveKanbanView();
     }
     if (currentView === 'month' && view !== 'month') {
-        closeMonthDayPopover();
+        // 切视图属场景切换：浮层立即移除，不播退场（否则会卡在新视图里播完才消失）
+        closeMonthDayPopover(true);
     }
     // 四象限展开态：离开视图时清空（FR5-5，不持久化；切回时从折叠态起步）
     if (currentView === 'quadrant' && view !== 'quadrant' && typeof collapseQuadrantExpand === 'function') {
@@ -274,7 +275,14 @@ function updateViewButtons() {
 }
 
 function renderView() {
+    // 任何路径触发的重绘都先对齐「今天」上下文（用户操作可能先于跨天观察器），
+    // 但当前正在重绘，故内部不会再触发第二次重绘。
+    if (typeof syncRenderDayContext === 'function') syncRenderDayContext();
     const container = document.getElementById('view-container');
+    // 离开任务视图时释放行级窗口化的滚动/尺寸监听，避免监听挂在已脱离 DOM 的滚动容器上
+    if (currentView !== 'task' && typeof _teardownTaskListVirtualScroll === 'function') {
+        _teardownTaskListVirtualScroll();
+    }
     // 离开日程视图：在 DOM 被替换前记录视口锚点，供下次切回日程时恢复上次位置
     if (currentView !== 'schedule' && typeof captureScheduleViewport === 'function') {
         const viewport = captureScheduleViewport();

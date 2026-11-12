@@ -9,17 +9,47 @@ let currentListId = null;
 let currentFilter = null;
 let currentTagIds = []; // 当前标签筛选（并集）
 let currentFilterId = null;
+// 周/月视图的翻页锚点。跨天后由 dayRollover.js 的 _drShiftAnchor() 推进（周视图直接回本周），
+// 否则会永远停在页面加载当天。
 let currentDate = new Date();
 let currentTaskMode = 'text';
 let holidayData = {};
 
-// 日期边界缓存：避免每个任务都重复构造 todayStart/tomorrowStart 等 7 个 Date 对象。
-// 跨天失效：缓存中记录计算时的日期签名（年-月-日），若取用时发现已跨天则自动重建。
+// ==================== 通用工具（跨模块共用） ====================
+// HTML 转义：文本节点 -> innerHTML 会转义 & < >，引号需补转义（属性值里也要安全）。
+// 原先放在 commandPalette.js（最后加载），导致 utils.js 只能写 typeof 兜底；统一收到这里。
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML.replace(/"/g, '&quot;');
+}
+
+// 「界面交互动效」总开关：设置开启且系统未请求减少动态。
+// 番茄页入场/设置弹窗（pomodoro.js）与四象限场景过渡（quadrantView.js）共用同一判定，
+// 原先两处各写一份同名逻辑，改一处忘另一处会出现「一边看不出一边有动效」。
+function _fxFeatureOn() {
+    return typeof settings !== 'undefined' && settings.featureAnimations === true
+        && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+// 「今天」日期键：全项目判断跨天的唯一口径。dayRollover.js 的 watcher、
+// getDateBounds()._sig、任务视图分组签名都以此为准，避免各自拼字符串导致口径漂移。
+// 传入 Date 可计算任意一天；不传即当前系统日期。
+function getTodayKey(d) {
+    const x = d || new Date();
+    return x.getFullYear() + '-' + (x.getMonth() + 1) + '-' + x.getDate();
+}
+
+// 日期边界缓存：避免每个任务都重复构造 todayStart/tomorrowStart 等一组 Date 对象。
+// 跨天失效：缓存中记录计算时的日期签名，若取用时发现已跨天则自动重建。
 let _dateBoundsCache = null;
 function getDateBounds() {
     const now = new Date();
-    const todaySig = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    const todaySig = getTodayKey(now);
     if (_dateBoundsCache && _dateBoundsCache._sig === todaySig) {
+        // 日期边界当天可复用，但 now 必须实时：「是否已逾期」是分钟级判定，
+        // 沿用当天首次计算的时刻会让早上 9 点开到下午 6 点的页面一直按 9 点判断。
+        _dateBoundsCache.now = now;
         return _dateBoundsCache;
     }
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -34,10 +64,13 @@ function getDateBounds() {
     sevenDaysLaterEnd.setHours(23, 59, 59, 999);
     const yesterdayStart = new Date(todayStart);
     yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    // 「前天」起始边界：任务视图时间文案需要区分昨天/前天/更早，与近端相对词共用同一日期真源
+    const dayBeforeYesterdayStart = new Date(todayStart);
+    dayBeforeYesterdayStart.setDate(dayBeforeYesterdayStart.getDate() - 2);
     _dateBoundsCache = {
         _sig: todaySig,
         now, todayStart, tomorrowStart, dayAfterTomorrowStart,
-        threeDaysLaterStart, sevenDaysLaterEnd, yesterdayStart
+        threeDaysLaterStart, sevenDaysLaterEnd, yesterdayStart, dayBeforeYesterdayStart
     };
     return _dateBoundsCache;
 }
@@ -171,13 +204,15 @@ function isEventInsideOpenOverlay(e) {
     try { return _isOverlayVisible(t.closest(OPEN_OVERLAY_SELECTOR)); } catch (err) { return false; }
 }
 
-// 方案A：子任务逐行列表展示（最多3行，超出显示"……(已完成/总数)"）
+// 子任务逐行列表的「行」，不含外层容器——行间距由调用方容器统一提供，
+// 这样组合块（描述 + 子任务）才能保证两类内容间距一致，不出现额外的间隔差。
+// 返回 { html, total, shown }：total 是有效子任务总数，shown 是实际渲染条数。
 // colorMode: 'theme'（默认，跟随主题）| 'dark'（深色背景，如 Toast）
-function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null) {
-    // 文本模式下不显示子任务，回退到 notes 显示
-    if (task.mode === 'text') return '';
+function _buildSubtaskRows(task, colorMode = 'theme', highlightId = null, maxShow = 3) {
+    // 文本模式下不显示子任务
+    if (!task || task.mode === 'text') return null;
     let validSubtasks = (task.subtasks || []).filter(st => st.text && st.text.trim());
-    if (validSubtasks.length === 0) return '';
+    if (validSubtasks.length === 0) return null;
 
     // 与任务详情栏保持一致：未完成的子任务排在已完成子任务之前，
     // 每组内部再按 originalOrder（创建/拖拽顺序）排序。
@@ -193,8 +228,7 @@ function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null)
 
     const total = validSubtasks.length;
     const completedCount = validSubtasks.filter(st => st.completed).length;
-    const maxShow = 3;
-    // 高亮的子任务（本次到点的那一个）必须出现在列表中，即使排序上排在 3 条之后
+    // 高亮的子任务（本次到点的那一个）必须出现在列表中，即使排序上排在 maxShow 条之后
     let showItems = validSubtasks.slice(0, maxShow);
     if (highlightId && !showItems.some(st => st.id === highlightId)) {
         const target = validSubtasks.find(st => st.id === highlightId);
@@ -206,7 +240,7 @@ function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null)
         ? { completed: 'text-slate-500', uncompleted: 'text-slate-300', muted: 'text-slate-500' }
         : { completed: 'text-theme-secondary', uncompleted: 'text-theme-muted', muted: 'text-theme-muted' };
 
-    let html = '<div class="text-xs mt-1 space-y-0.5">';
+    let html = '';
     showItems.forEach(st => {
         const icon = st.completed ? 'fa-check-circle' : 'fa-circle';
         const isActive = highlightId && st.id === highlightId;
@@ -225,8 +259,108 @@ function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null)
         html += `<div class="${colors.muted}">…… [ ${completedCount}/${total} ]</div>`;
     }
 
-    html += '</div>';
-    return html;
+    return { html: html, total: total, shown: showItems.length };
+}
+
+// 方案A：子任务逐行列表展示（默认最多3行，超出显示"……(已完成/总数)"）
+// colorMode: 'theme'（默认，跟随主题）| 'dark'（深色背景，如 Toast）
+function renderSubtaskListDisplay(task, colorMode = 'theme', highlightId = null, maxShow = 3) {
+    const rows = _buildSubtaskRows(task, colorMode, highlightId, maxShow);
+    if (!rows) return '';
+    return '<div class="text-xs mt-1 space-y-0.5">' + rows.html + '</div>';
+}
+
+
+// ==================== 视图任务卡「任务详情」预览块 ====================
+// 任务 / 日程 / 月视图单天浮层 / 四象限（列表卡 + 矩阵卡）/ 看板 五处共用，
+// 与提醒 Toast 同一套口径（utils.js buildReminderDisplayMessage + markdown.js mdToPlainText）：
+//   · Markdown 源文 → mdToPlainText 纯文本投影：保留换行、列表符号（- / 1. / ☐☑）与 2 空格/级缩进，
+//     去掉 ** / # / > 等标记，图片统一 [图片]，链接只留文字，代码块压成一行；
+//   · 行数交给 CSS 裁剪（.task-note-preview 默认 4 行；组合块按方案 C 内联 1-3 行），
+//     超出部分由 -webkit-line-clamp 打省略号，**不额外叠加任何视觉提示**（无渐隐/无遮罩）；
+//   · settings.notesMarkdown 关闭时退原文，但仍受行数裁剪约束（与 Toast 的降级一致）。
+// 返回 '' 表示不渲染（无备注 / 备注只有标记与空行），调用方直接拼接即可。
+const _taskNotesPlainCache = new Map();
+const _TASK_NOTES_PLAIN_CACHE_MAX = 400;
+
+// notes 全文作 key：内容一变即自然失效，无需额外签名
+function _taskNotesPlain(src) {
+    const hit = _taskNotesPlainCache.get(src);
+    if (hit !== undefined) return hit;
+    const plain = (typeof mdToPlainText === 'function') ? mdToPlainText(src) : '';
+    // 简单容量控制：超出即整体清空（视图渲染是批量的，LRU 精细淘汰收益很低）
+    if (_taskNotesPlainCache.size >= _TASK_NOTES_PLAIN_CACHE_MAX) _taskNotesPlainCache.clear();
+    _taskNotesPlainCache.set(src, plain);
+    return plain;
+}
+
+// opts.source   ：'notes'（默认）| 'description' —— 取哪个字段（子任务模式的详情文本是 description）
+// opts.lines    ：行数上限（1-4，默认 4）。非 4 时用内联 -webkit-line-clamp 覆盖，避免为 1/2/3 行各建一个类
+// opts.clampClass：追加的行数档类名（看板传 'task-note-preview-2'）
+// opts.noMargin ：不加 mt-1（放进组合块时由容器统一管间距）
+function renderTaskNotesPreview(task, opts) {
+    opts = opts || {};
+    if (!task) return '';
+    const useDesc = opts.source === 'description';
+    const raw = String((useDesc ? task.description : task.notes) == null ? '' : (useDesc ? task.description : task.notes));
+    if (!raw.trim()) return '';
+    const markdownOn = (typeof _mdIsMarkdownOn === 'function') ? _mdIsMarkdownOn() : true;
+    let text = raw;
+    let md = false;
+    if (markdownOn && typeof mdToPlainText === 'function') {
+        const plain = _taskNotesPlain(raw);
+        // 只有格式标记/空行/分割线：不占详情行（与 Toast「投影为空则不显示正文」同口径）
+        if (!plain) return '';
+        text = plain;
+        md = true;
+    }
+    const lines = Math.min(4, Math.max(1, parseInt(opts.lines, 10) || 4));
+    const cls = 'task-note-preview text-xs' + (opts.noMargin ? '' : ' mt-1')
+        + (task.completed ? ' text-theme-secondary' : ' text-theme-muted')
+        + (md ? ' task-note-preview-md' : '')
+        + (opts.clampClass ? ' ' + opts.clampClass : '');
+    const styleAttr = (lines === 4) ? '' : ' style="-webkit-line-clamp:' + lines + ';"';
+    // 截断提示只靠 -webkit-line-clamp 自带的省略号，不套 wrapper、不加渐隐
+    return '<div class="' + cls + '"' + styleAttr + '>' + escapeHtml(text) + '</div>';
+}
+
+// 视图任务卡「任务详情」组合块（各视图统一入口）：文本模式看备注，子任务模式看「任务详情描述 + 子任务列表」。
+// 【文本口径】与提醒 Toast 一致（utils.js buildReminderDisplayMessage）：
+//   子任务模式取 description，文本模式取 notes。
+//   ⚠️ 子任务模式下 notes 只是「文本模式 → 子任务模式」转换时留下的原文残留，
+//      在详情面板里该字段是隐藏的（tasks.js 打开子任务模式即 hidden），既看不到也不能编辑，
+//      且与子任务文本重复（历史数据里 366/366 全部重复），所以视图不再把它当详情文本。
+// 【行数分配（方案 C）】maxLines 默认 4（看板 2）：
+//   n = 有效子任务数，显示条数 = min(n, 3)；
+//   描述行数 = maxLines - 显示条数，最少 1 行 → n=1 时描述 3 行、n=2 时 2 行、n=3 及更多时 1 行；
+//   n>3 时额外多一行「…… [ 已完成/总数 ]」，故组合块最多 5 行（与纯子任务列表的 4 行对齐）。
+//   描述为空时行数全部让给子任务，回到改造前的表现。
+// 【视觉】描述行与子任务行同容器、同行间距、同字号配色，**只靠有没有圆圈图标区分**；
+//   描述不占图标位（文字顶格），不额外加 margin / 分割线。
+// 【看板 2 行档】2 行放不下两类内容：有子任务时只看子任务；没有子任务时才把 2 行给描述。
+function renderTaskDetailsBlock(task, opts) {
+    opts = opts || {};
+    const maxLines = opts.maxLines || 4;
+    if (!task) return '';
+    const isSubtaskMode = (task.mode !== 'text');
+    // 文本模式：备注（与改造前完全一致）
+    if (!isSubtaskMode) return renderTaskNotesPreview(task, { lines: maxLines });
+
+    const rows = _buildSubtaskRows(task, 'theme', null, 3);
+    const wrap = (inner) => '<div class="text-xs mt-1 space-y-0.5">' + inner + '</div>';
+
+    // 子任务模式但没有有效子任务：描述占满（不再回落 notes —— 那是模式转换的残留原文）
+    if (!rows) return renderTaskNotesPreview(task, { source: 'description', lines: maxLines });
+
+    // 看板：2 行预算只够一类内容
+    if (maxLines <= 2) return wrap(rows.html);
+
+    const descLines = Math.max(1, maxLines - rows.shown);
+    const descHtml = renderTaskNotesPreview(task, {
+        source: 'description', lines: descLines, noMargin: true
+    });
+    if (!descHtml) return wrap(rows.html);
+    return wrap(descHtml + rows.html);
 }
 
 // ==================== Toast 标题词表（方案 A） ====================
@@ -297,12 +431,70 @@ const TOAST_THEMES = Object.freeze({
     }
 });
 
+// ==================== 日期快捷选择器（通用外壳） ====================
+// 任务详情的日期输入与番茄钟「新增记录」的日期输入是同一套浮层：关闭其他浮层 → 切换显隐 →
+// 渲染选项行（label + YYYY-MM-DD，点击回填并派发 change）→ 滚动到当前已选值。
+// 两者只差「快捷项集合」，故外壳收在这里，buildItems(addItem, now) 由调用方提供，
+// onPicked 为选中后的额外回调（不传则只派发 change）。
+function _openDateQuickPicker(inputEl, pickerId, buildItems, onPicked) {
+    const picker = document.getElementById(pickerId);
+    if (!picker) return;
+
+    document.querySelectorAll('.date-picker-dropdown').forEach(p => {
+        if (p.id !== pickerId) p.classList.add('hidden');
+    });
+    // 同时关闭时间选择器
+    document.querySelectorAll('.time-picker-dropdown').forEach(p => {
+        p.classList.add('hidden');
+    });
+
+    if (!picker.classList.contains('hidden')) {
+        picker.classList.add('hidden');
+        return;
+    }
+
+    picker.innerHTML = '';
+    const now = new Date();
+
+    const addItem = (label, date) => {
+        const dateStr = formatDate(date);
+        const item = document.createElement('div');
+        item.className = 'px-3 py-1.5 text-sm cursor-pointer text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition flex justify-between items-center';
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = label;
+        const dateSpan = document.createElement('span');
+        dateSpan.className = 'text-xs opacity-60';
+        dateSpan.textContent = dateStr;
+        item.appendChild(labelSpan);
+        item.appendChild(dateSpan);
+        item.dataset.value = dateStr;
+        item.onclick = (e) => {
+            e.stopPropagation();
+            inputEl.value = dateStr;
+            picker.classList.add('hidden');
+            inputEl.dispatchEvent(new Event('change'));
+            if (typeof onPicked === 'function') onPicked();
+        };
+        picker.appendChild(item);
+    };
+
+    if (typeof buildItems === 'function') buildItems(addItem, now);
+
+    picker.classList.remove('hidden');
+    picker.classList.add('date-picker-dropdown');
+
+    // 滚动到当前选中的日期
+    requestAnimationFrame(() => {
+        const currentValue = inputEl.value;
+        if (!currentValue) return;
+        const targetItem = picker.querySelector(`[data-value="${currentValue}"]`);
+        if (targetItem) targetItem.scrollIntoView({ block: 'center' });
+    });
+}
+
 // 正文默认转义。内核自己拼的 HTML 片段（子任务列表 / 聚合提示 / 徽标）走 raw，不经过这里。
 function _toastEscape(s) {
-    if (typeof escapeHtml === 'function') return escapeHtml(s);
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
+    return escapeHtml(String(s == null ? '' : s));
 }
 
 // 时长三档：由 settings.toastPace 选一组固定值（不做乘法，便于断言与解释）
@@ -891,8 +1083,14 @@ function showReminderToast(title, message, taskId, opts = {}) {
         if (!taskId) return;
         // 若处于番茄专注页面或其他非默认视图，先切换回默认视图
         const pomodoroPage = document.getElementById('pomodoro-page');
-        if (pomodoroPage && !pomodoroPage.classList.contains('hidden')) {
-            if (typeof closePomodoroPage === 'function') closePomodoroPage();
+        const fromPomodoro = !!(pomodoroPage && !pomodoroPage.classList.contains('hidden')
+            && typeof closePomodoroPage === 'function');
+        if (fromPomodoro) {
+            // 把「要打开哪个任务」交给 closePomodoroPage 统一处理（在退出动画结束后打开）。
+            // 旧写法 closePomodoroPage() + setTimeout(openTaskDetailPanel(taskId), 0) 有竞态：
+            // closePomodoroPage 自己会恢复「专注关联任务 / 进入番茄页前的任务」详情，
+            // 开启界面交互动效时恢复发生在退出动画之后，必然把这里的提醒任务覆盖掉。
+            closePomodoroPage({ detailTaskId: taskId });
         }
         // 确保处于默认任务视图
         if (typeof currentView !== 'undefined' && currentView !== 'task') {
@@ -904,7 +1102,7 @@ function showReminderToast(title, message, taskId, opts = {}) {
                 if (typeof updateSidebarHighlight === 'function') updateSidebarHighlight();
             }
         }
-        if (typeof openTaskDetailPanel === 'function') {
+        if (!fromPomodoro && typeof openTaskDetailPanel === 'function') {
             // 等待视图切换渲染完成后再打开详情面板
             setTimeout(() => openTaskDetailPanel(taskId), 0);
         }
@@ -1017,22 +1215,6 @@ function requestNotificationPermission() {
     }
 }
 
-function sendBrowserNotification(title, body) {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    try {
-        const notif = new Notification(title, {
-            body: body || '',
-            icon: '/favicon.ico',
-            requireInteraction: true
-        });
-        notif.onclick = () => {
-            window.focus();
-            notif.close();
-        };
-    } catch (e) {
-        console.error('Browser notification error:', e);
-    }
-}
 
 // 系统通知（番茄阶段 / 休眠检测等）的 title 是「信息」而非「状态」。
 // 方案 A 下标题行只放状态词，故把标题并入正文首段；系统通知栏仍用原标题（那里只有一行，必须有标题）。
@@ -1210,24 +1392,6 @@ function shouldUseLightText() {
     return false;
 }
 
-function getAdaptiveTextColor(baseColor) {
-    if (shouldUseLightText()) {
-        return lightenColor(baseColor, 40);
-    }
-    return baseColor;
-}
-
-function lightenColor(hex, amount) {
-    hex = hex.replace('#', '');
-    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-    let r = parseInt(hex.substring(0, 2), 16);
-    let g = parseInt(hex.substring(2, 4), 16);
-    let b = parseInt(hex.substring(4, 6), 16);
-    r = Math.min(255, r + amount);
-    g = Math.min(255, g + amount);
-    b = Math.min(255, b + amount);
-    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-}
 
 // 获取优先级显示模式（含旧数据兼容）
 // 'bg'=任务底色 / 'checkbox'=复选框边框(默认) / 'bar'=左侧色条 / 'none'=不显示
@@ -1374,22 +1538,6 @@ function shouldHideExternalList(list) {
     return !!(list && list.extSourceId);
 }
 
-// 开关：是否在侧边栏显示外部日历分组（离线版设置面板提供；默认 true）
-function toggleShowExternalCalendars(checked) {
-    if (!settings) return;
-    settings.showExternalCalendars = !!checked;
-    // 关闭时若正停留在订阅聚合视图（__extsrc__:）或订阅专属清单（extlist_），其任务已全部被过滤且清单入口隐藏，重置回全部任务避免空视图
-    const _curList = (typeof getList === 'function' && currentListId) ? getList(currentListId) : null;
-    if (!checked && currentListId && (currentListId.indexOf('__extsrc__:') === 0 || !!(_curList && _curList.extSourceId))) {
-        currentListId = null;
-        currentTagIds = [];
-        currentFilter = '';
-        currentFilterId = null;
-    }
-    if (typeof saveData === 'function') saveData();
-    if (typeof renderLists === 'function') renderLists();  // 立即生效：侧边栏显隐切换
-    if (typeof renderView === 'function') renderView();    // 立即生效：各视图外部任务显隐（分组缓存签名含本开关）
-}
 
 function getCalendarSubscription(id) {
     if (!settings || !Array.isArray(settings.calendarSubscriptions)) return null;
@@ -1803,7 +1951,12 @@ function getTasksForDate(date, opts) {
     const dateTasks = filterTasks(tasks, { includeCompleted }).filter(t => {
         return isTaskVisibleOnDate(t, date);
     });
-    return sortTasksByCompletion(dateTasks);
+    const sorted = sortTasksByCompletion(dateTasks);
+    if (opts && opts.includeRecurringGhosts && typeof getRecurringGhostsForDate === 'function') {
+        const ghosts = getRecurringGhostsForDate(date, opts.recurringGhostView || 'month');
+        if (ghosts.length) return sorted.concat(ghosts);
+    }
+    return sorted;
 }
 
 // ---------- 视图自定义（增删 / 排序 / 默认首页）----------
@@ -1853,10 +2006,6 @@ function getHomeView() {
     return first ? first.id : VIEW_ORDER_DEFAULT[0];
 }
 
-function setHomeView(id) {
-    settings.defaultHomeView = id;
-    settings.defaultView = id; // 兼容旧读取方
-}
 
 // 视图右上角操作按钮：元数据与默认顺序（从左到右，不含「更多」）。
 // 所有操作按钮固定启用，仅支持排序；「视图配置」聚合当前视图的 6 个配置按钮为 1 项。
@@ -2270,37 +2419,6 @@ function isTaskVisibleOnDate(task, date) {
     return isSameDay(start, date);
 }
 
-// 获取跨天任务在指定日期的显示时间文本
-function getMultiDayTimeDisplay(task, date) {
-    if (!task.startTime) return '';
-    const start = new Date(task.startTime);
-    const end = new Date(task.endTime);
-    const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-    const startOnly = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-    const endOnly = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-    
-    if (isMultiDayTask(task)) {
-        if (isSameDay(dateOnly, startOnly)) {
-            // 开始日期：显示开始时间
-            return formatTime(start) + ' - ...';
-        } else if (isSameDay(dateOnly, endOnly)) {
-            // 结束日期：显示结束时间
-            return '... - ' + formatTime(end);
-        } else {
-            // 中间日期
-            return '全天';
-        }
-    }
-    // 非跨天任务
-    if (task.endTime) {
-        return formatTime(start) + ' - ' + formatTime(end);
-    }
-    return formatTime(start);
-}
-
-function formatMonthYear(date) {
-    return `${date.getFullYear()}年${date.getMonth() + 1}月`;
-}
 
 // 第二象限（重要不紧急）逾期判定阈值
 // 7 天：卡片开始显示「逾期 N 天」徽章；30 天：进视图时弹出提醒（避免新导入数据一进视图就弹）
@@ -2332,10 +2450,6 @@ function getQuadrantStagnationLevel(task) {
     return 3;
 }
 
-function formatWeekday(date) {
-    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    return weekdays[date.getDay()];
-}
 
 function generateId() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -3338,15 +3452,60 @@ function isTaskOverdue(task) {
 }
 
 // 渲染"开始专注"按钮（受 showFocusButton 开关控制；视图级可传布尔覆盖，不传则回退全局 settings.showFocusButton）
-function renderFocusButton(taskId, showFocusButton, extraClasses = '') {
+// opts（可选，供周/月视图这类紧凑条目覆盖默认规格）：
+//   box  —— 按钮外框尺寸类，默认 w-5 h-5（周/月视图传 w-4 h-4，与各自任务条的完成勾选框同尺寸）
+//   icon —— 时钟图标字号类，默认 text-xs（周/月视图传 text-[10px]，同样对齐勾选框图标）
+//   base —— 替换默认的显隐类（默认 flex-shrink-0 opacity-0 group-hover:opacity-100）。
+//          周/月视图不能靠 group-hover 显隐：显示与否要先判断「标题是否被截断」，由视图级 CSS 控制，故传 flex-shrink-0
+function renderFocusButton(taskId, showFocusButton, extraClasses = '', opts = null) {
     const visible = (typeof showFocusButton === 'boolean')
         ? showFocusButton
         : (settings.showFocusButton !== false);
     if (!visible) return '';
+    const boxCls = (opts && opts.box) || 'w-5 h-5';
+    const iconCls = (opts && opts.icon) || 'text-xs';
+    const baseCls = (opts && typeof opts.base === 'string')
+        ? opts.base
+        : 'flex-shrink-0 opacity-0 group-hover:opacity-100';
     return `<button onclick="event.stopPropagation(); startPomodoroForTask('${taskId}')"
-            class="pomodoro-focus-btn flex-shrink-0 opacity-0 group-hover:opacity-100 text-green-600 w-5 h-5 flex items-center justify-center transition duration-200 ${extraClasses}"
+            class="pomodoro-focus-btn ${baseCls} text-green-600 ${boxCls} flex items-center justify-center transition duration-200 ${extraClasses}"
             title="开始专注">
-        <i class="far fa-clock text-xs pf-icon-outline"></i>
-        <i class="fas fa-clock text-xs pf-icon-solid"></i>
+        <i class="far fa-clock ${iconCls} pf-icon-outline"></i>
+        <i class="fas fa-clock ${iconCls} pf-icon-solid"></i>
     </button>`;
+}
+
+// ==================== 正整数输入规范化（自定义重复间隔等） ====================
+// 约定：只接受十进制正整数；负数、0、小数、科学计数法、非数字一律视为「未填」（返回 0）。
+// 三个自定义间隔入口（任务详情面板 / 批量编辑 / 任务模板面板）共用同一口径，
+// 交互上「输入即纠正、静默无提示」，不要在这里加 toast。
+// 注意：不要用 parseInt —— 它会把 "2.5"、"3abc" 静默截断成 2 / 3。
+/**
+ * 纯函数：把任意值解析为正整数，非法返回 0。写入 task.repeat.interval 前必须经此函数。
+ * @param {*} value
+ * @returns {number} 正整数或 0
+ */
+function parsePositiveInt(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!/^\d+$/.test(raw)) return 0;
+    const n = Number(raw);
+    return (Number.isSafeInteger(n) && n >= 1) ? n : 0;
+}
+
+/**
+ * 输入框就地规范：合法值去掉前导零写回，非法值清空（等价于「未填」）。
+ * 建议只在 onchange（失焦）中调用，避免打断 "-"/"1." 之类的输入中间态。
+ * @param {HTMLInputElement} el
+ * @returns {number} 正整数或 0
+ */
+function normalizePositiveIntInput(el) {
+    if (!el) return 0;
+    const raw = String(el.value == null ? '' : el.value).trim();
+    const n = parsePositiveInt(raw);
+    if (n > 0) {
+        if (String(n) !== raw) el.value = String(n);
+        return n;
+    }
+    if (raw !== '') el.value = '';
+    return 0;
 }
