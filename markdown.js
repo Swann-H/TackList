@@ -44,19 +44,48 @@ function mdIsBlankLine(line) {
     return /^\s*$/.test(line);
 }
 
-/* ==================== 行内解析 ==================== */
+/* ==================== 行内强调 ==================== */
+
+// 单 * 强调的定界符 flank 判定（方案D）：
+// · 允许作为开/闭边界：行首/行尾、空白、标点/符号、CJK 文字（中日韩字与假名）——
+//   中文没有空格，`这是*斜体*文本` 这类相邻写法必须继续生效；
+// · 不允许：数字与拉丁字母（视作词内字符）——避免 `3*4*5` / `a*b*c` 被误判为斜体；
+// · 行内代码/链接/提及的 token 收尾（`\u0000` 占位符）同样算边界。
+// 与 mdInlineEmphasisToPlain 共用同一组判定，改一处必须同步另一处。
+function _mdEmphasisBoundary(ch) {
+    if (ch === undefined || ch === '\u0000') return true;
+    return /[\s\p{P}\p{S}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(ch);
+}
+function _mdCanOpenEmphasis(full, pos) {
+    return _mdEmphasisBoundary(full[pos - 1])
+        && pos + 1 < full.length
+        && !/\s/.test(full[pos + 1]);
+}
+function _mdCanCloseEmphasis(full, pos) {
+    return _mdEmphasisBoundary(full[pos + 1])
+        && pos > 0
+        && !/\s/.test(full[pos - 1]);
+}
 
 function mdInlineEmphasis(str) {
     let s = String(str == null ? '' : str);
     s = s.replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/__([^\n]+?)__/g, '<strong>$1</strong>');
     s = s.replace(/~~([^\n]+?)~~/g, '<del>$1</del>');
-    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1<em>$2</em>');
+    // 单 * 斜体：开口星号左侧、闭口星号右侧都必须满足 flank 条件，否则原样保留
+    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, function (all, before, content, offset, full) {
+        const openPos = offset + before.length;
+        const closePos = offset + all.length - 1;
+        if (!_mdCanOpenEmphasis(full, openPos) || !_mdCanCloseEmphasis(full, closePos)) return all;
+        return before + '<em>' + content + '</em>';
+    });
+    // _ 斜体沿用原词边界规则（[^_\w]）：Latin 词内本就不命中，CJK 相邻可命中，无需改动
     s = s.replace(/(^|[^_\w])_([^_\n]+?)_(?!\w)/g, '$1<em>$2</em>');
     return s;
 }
 
-function mdInline(text) {
+// opts.noImages：不渲染图片（子任务行内子集用，行高不可控），图片语法按原文显示
+function mdInline(text, opts) {
     let s = String(text == null ? '' : text);
     const store = [];
     const tok = function (html) {
@@ -72,13 +101,15 @@ function mdInline(text) {
     s = s.replace(/\\([\\`*_{}\[\]()#+\-.!~>])/g, function (_, ch) {
         return tok(mdEscapeHtml(ch));
     });
-    // 3) 图片
-    s = s.replace(/!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, function (all, alt, url, title) {
-        const safe = mdSanitizeUrl(url);
-        if (!safe) return all;
-        return tok('<img class="md-img" src="' + mdEscapeHtml(safe) + '" alt="' + mdEscapeHtml(alt) + '" loading="lazy"'
-            + (title ? ' title="' + mdEscapeHtml(title) + '"' : '') + '>');
-    });
+    // 3) 图片（noImages 时跳过，语法原样透传）
+    if (!(opts && opts.noImages)) {
+        s = s.replace(/!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, function (all, alt, url, title) {
+            const safe = mdSanitizeUrl(url);
+            if (!safe) return all;
+            return tok('<img class="md-img" src="' + mdEscapeHtml(safe) + '" alt="' + mdEscapeHtml(alt) + '" loading="lazy"'
+                + (title ? ' title="' + mdEscapeHtml(title) + '"' : '') + '>');
+        });
+    }
     // 4) 链接
     s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)/g, function (all, label, url, title) {
         const safe = mdSanitizeUrl(url);
@@ -88,6 +119,30 @@ function mdInline(text) {
             + mdInlineEmphasis(mdEscapeHtml(label)) + '</a>');
     });
 
+    // 4.5) 人员提及（FR-03）：@名字 → 强调色可点击 span；归档成员灰色。
+    // 此时代码/转义/图片/链接已占位，剩余文本中的 @ 才参与匹配（与 parsePeopleMentions 口径一致）
+    if (typeof parsePeopleMentions === 'function') {
+        const mentions = parsePeopleMentions(s);
+        if (mentions.length) {
+            // FR-08：当前详情任务等待中的联系人，其提及附沙漏图标（历史标记在任务完成后保留）
+            const waitTask = (typeof _mdCurrentTask === 'function') ? _mdCurrentTask() : null;
+            const waitingIds = (waitTask && Array.isArray(waitTask.waitingForIds)) ? waitTask.waitingForIds : [];
+            let out = '';
+            let cursor = 0;
+            mentions.forEach(function (m) {
+                const person = getPersonById(m.id);
+                const cls = 'md-mention' + (person && person.archived ? ' md-mention-archived' : '');
+                const waitIcon = waitingIds.indexOf(m.id) !== -1
+                    ? '<i class="fas fa-hourglass-half ml-1 text-[10px] opacity-70" title="等待该联系人"></i>' : '';
+                out += s.slice(cursor, m.start)
+                    + tok('<span class="' + cls + '" data-person-id="' + mdEscapeHtml(m.id) + '">@'
+                        + mdEscapeHtml(s.slice(m.start + 1, m.end)) + waitIcon + '</span>');
+                cursor = m.end;
+            });
+            s = out + s.slice(cursor);
+        }
+    }
+
     // 5) 其余文本统一转义后再套强调/换行
     s = mdEscapeHtml(s);
     s = mdInlineEmphasis(s);
@@ -95,6 +150,15 @@ function mdInline(text) {
     return s.replace(/\u0000(\d+)\u0000/g, function (_, i) {
         return store[+i] || '';
     });
+}
+
+// 子任务行内 Markdown 入口（FR-10 扩展）：mdInline 的行内子集，不渲染 <img>（行高不可控），
+// 图片语法降级为「! + 链接」形态。子任务本身就是列表项（Enter 拆行成新子任务），
+// 块级语法（列表/标题/代码块）刻意不适用；
+// 其余支持范围与 mdInline 一致：行内代码、反斜杠转义、链接、@提及、**粗体**/_斜体_/~~删除线~~。
+// 纯文本投影复用 mdInlineToPlain（视图预览/Toast 路径），规则同源勿另起解析。
+function mdInlineSubtask(text) {
+    return mdInline(text, { noImages: true });
 }
 
 /* ==================== 块解析 ==================== */
@@ -314,13 +378,19 @@ function mdRenderBlock(block, source, opts) {
 // 只是输出纯文字、不生成 HTML，避免把富文本渲染/图片加载带进通知路径。
 
 // 行内强调去标记。与 mdInlineEmphasis 的规则逐条对应，只是输出文字而不是 <strong>。
-// ⚠️ mdInlineEmphasis / mdInline 的规则若有调整，必须同步这里。
+// ⚠️ mdInlineEmphasis / mdInline 的规则若有调整，必须同步这里（含共用的 flank 判定）。
 function mdInlineEmphasisToPlain(str) {
     let s = String(str == null ? '' : str);
     s = s.replace(/\*\*([^\n]+?)\*\*/g, '$1');
     s = s.replace(/__([^\n]+?)__/g, '$1');
     s = s.replace(/~~([^\n]+?)~~/g, '$1');
-    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1$2');
+    // 单 * 斜体：与渲染侧同口径的 flank 判定，误伤时不吞掉星号
+    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, function (all, before, content, offset, full) {
+        const openPos = offset + before.length;
+        const closePos = offset + all.length - 1;
+        if (!_mdCanOpenEmphasis(full, openPos) || !_mdCanCloseEmphasis(full, closePos)) return all;
+        return before + content;
+    });
     s = s.replace(/(^|[^_\w])_([^_\n]+?)_(?!\w)/g, '$1$2');
     return s;
 }
@@ -745,7 +815,73 @@ function refreshTaskTemplatePanelNotesEditor() {
     });
 }
 
+// 点击 vs 拖动划选的判定阈值（px）：指针位移小于该值视为「纯点击 → 进入块编辑」，
+// 达到该值视为「拖动划选 → 保留浏览器原生选区，不进入编辑态」。
+const _MD_CLICK_DRAG_THRESHOLD = 6;
+
+// 未完成的 down-up 手势清理（mouse 移出窗口导致 mouseup 丢失时兜底），
+// 避免上一次手势的 onUp 在下一次 mouseup 时用过期偏移误切块。
+let _mdSelectGestureCleanup = null;
+// 划选手势进行中标记：textarea blur 的延时落定据此改走「就地落定」，
+// 避免全量重渲染摧毁正在拖动建立的选区。
+let _mdSelectGestureActive = false;
+// Ctrl+A 两段式全选的「武装」标记：第一击放行 textarea 原生全选本行并置位，
+// 第二击升级为全选整篇详情文本。按其它键 / 按下鼠标 / 重新绑定时复位。
+let _mdSelectAllArmed = false;
+// Ctrl+A keydown 全局句柄：编辑区每次重建只复位武装标记、不重复注册监听器
+// （旧实现每次 _mdBindEditorEvents 都往 document 挂一个捕获 keydown 且永不移除，
+// 闭包连同捕获的 el 随开合次数线性累积，形成确定性内存泄漏）
+let _mdSelectAllKeyBound = false;
+
+function _mdBindSelectAllKeys() {
+    if (_mdSelectAllKeyBound) return;
+    _mdSelectAllKeyBound = true;
+    // Ctrl+A 两段式全选（capture 阶段接管，赶在浏览器默认行为与本块 Enter/Esc 处理之前）：
+    //   · 第 1 击（编辑行内）：不拦截，textarea 原生全选本行（源码），并「武装」升级意图；
+    //   · 第 2 击：落定当前块并整篇选中详情文本的渲染内容，可直接 Ctrl+C 复制；
+    //   · 无编辑块时若选区已落在编辑区内：维持「全选详情文本」语义（再次 Ctrl+A 不落成整页全选）；
+    //   · 选区不在编辑区内：放行，保持浏览器默认行为。
+    document.addEventListener('keydown', function (e) {
+        const key = (e.key || '').toLowerCase();
+        const isAll = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === 'a';
+        if (!isAll) {
+            // 修饰键自身（Ctrl/Shift/Alt/Meta）不清除升级意图：用户的习惯是「按一次 Ctrl+A
+            // 选本行 → 松开 Ctrl → 再按一次 Ctrl+A 升级全选」，第二次按下时浏览器先派发
+            // keydown key='Control'，若这里清除武装标记，第二段永远走不到升级分支
+            // （只有按住 Ctrl 不放连按两次 A 才能触发，与常见操作习惯不符）。
+            const isModifierOnly = key === 'control' || key === 'meta' || key === 'shift' || key === 'alt';
+            if (!isModifierOnly) _mdSelectAllArmed = false; // 其它按键打断升级意图
+            return;
+        }
+        const el = _mdEditorEl();
+        if (!el) return; // 当前无激活编辑区
+        const ta = _mdEditor.activeTextarea;
+        if (ta) {
+            if (_mdSelectAllArmed) {
+                e.preventDefault();
+                e.stopPropagation();
+                _mdSelectAllArmed = false;
+                _mdCommitActive(); // 全量重渲染后选区按新 DOM 重建
+                _mdSelectWholeEditor();
+            } else {
+                _mdSelectAllArmed = true;
+                // 放行：textarea 原生全选本行
+            }
+            return;
+        }
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount
+            && el.contains(sel.anchorNode) && el.contains(sel.focusNode)) {
+            e.preventDefault();
+            _mdSelectWholeEditor();
+        }
+    }, true);
+}
+
 function _mdBindEditorEvents(el) {
+    // Ctrl+A 两段式全选状态随编辑区重建复位（切换备注/描述、重新打开面板都会重建）
+    _mdSelectAllArmed = false;
+    _mdBindSelectAllKeys();
     el.addEventListener('mousedown', function (e) {
         if (e.button !== 0) return;
         const img = e.target.closest('.md-img');
@@ -762,6 +898,13 @@ function _mdBindEditorEvents(el) {
             }
             return;
         }
+        // 人员提及：只读/编辑态都可点击打开成员卡片，不进入块编辑
+        const mention = e.target.closest('.md-mention');
+        if (mention) {
+            e.preventDefault();
+            if (typeof openPersonCard === 'function') openPersonCard(mention.dataset.personId, mention);
+            return;
+        }
         if (_mdEditor.readOnly) return;
         const taskCb = e.target.closest('input[data-md-task-offset]');
         if (taskCb) {
@@ -771,8 +914,13 @@ function _mdBindEditorEvents(el) {
         }
         if (e.target.closest('a')) return; // 链接走原生跳转
         const wrap = e.target.closest('.md-block');
+        // 「点击进入编辑」的意图记录；null 表示无编辑意图（只放行原生选区）
+        let pendingStart = null;
+        let pendingCaret = 0;
+        let pendingEmpty = false;
         if (!wrap) {
             if (e.target.closest('.md-empty-placeholder')) {
+                // 空态占位没有文本可选，保持原逻辑：立即进入编辑
                 e.preventDefault();
                 _mdStartEmptyBlock();
                 return;
@@ -786,16 +934,52 @@ function _mdBindEditorEvents(el) {
                     || (sbH > 0 && e.clientY >= r.top + el.clientHeight)) {
                     return;
                 }
-                e.preventDefault();
+                // 块间空隙 / 编辑器空白区：纯点击 = 新起段落，拖动 = 从这里开始划选
+                pendingEmpty = true;
+            } else {
+                return;
+            }
+        } else {
+            if (_mdEditor.activeTextarea && wrap.contains(_mdEditor.activeTextarea)) return;
+            pendingStart = parseInt(wrap.dataset.mdBlockStart, 10);
+            pendingCaret = _mdCaretFromClick(wrap, e, pendingStart);
+        }
+        // 放开 mousedown 默认行为，让浏览器先建立选区锚点；mouseup 时按指针位移分流：
+        //   · 纯点击 → 按原逻辑切换/新建编辑块（textarea 替换渲染行）；
+        //   · 拖动划选 → 不进编辑态，保留原生选区供复制。
+        // 旧实现在 mousedown 就 preventDefault 并立即把块替换成 textarea，
+        // 原生选择从未建立（DOM 还被中途换掉），详情文本因此完全无法拖选复制。
+        if (_mdSelectGestureCleanup) _mdSelectGestureCleanup();
+        const sx = e.clientX;
+        const sy = e.clientY;
+        let dragged = false;
+        _mdSelectGestureActive = true;
+        _mdSelectAllArmed = false; // 换了交互起点，两段式全选重新计数
+        const onMove = function (ev) {
+            if (Math.abs(ev.clientX - sx) >= _MD_CLICK_DRAG_THRESHOLD
+                || Math.abs(ev.clientY - sy) >= _MD_CLICK_DRAG_THRESHOLD) {
+                dragged = true;
+            }
+        };
+        const onUp = function () {
+            cleanup();
+            if (_mdEditorEl() !== el) return; // 编辑区已切换/关闭
+            if (dragged) return;              // 拖动划选：保留原生选区
+            if (pendingStart != null) {
+                _mdSwitchToBlock(pendingStart, pendingCaret);
+            } else if (pendingEmpty) {
                 _mdStartEmptyBlock();
             }
-            return;
+        };
+        function cleanup() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            _mdSelectGestureCleanup = null;
+            _mdSelectGestureActive = false;
         }
-        if (_mdEditor.activeTextarea && wrap.contains(_mdEditor.activeTextarea)) return;
-        e.preventDefault();
-        const start = parseInt(wrap.dataset.mdBlockStart, 10);
-        const caret = _mdCaretFromClick(wrap, e, start);
-        _mdSwitchToBlock(start, caret);
+        _mdSelectGestureCleanup = cleanup;
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
     });
     // 点击编辑器外部的任意位置时先落定当前块：不依赖 textarea 的原生 blur
     //（部分嵌入环境/被 CSS 隐藏的输入框不会派发 blur），也避免切换任务时丢内容。
@@ -803,8 +987,23 @@ function _mdBindEditorEvents(el) {
         if (!_mdEditor.activeTextarea) return;
         if (_mdEditorEl() !== el) return; // 只由当前激活的编辑区处理
         if (el.contains(e.target)) return;
+        // @ 候选面板浮于编辑器外：点选候选不应落定当前块（会重建 DOM 打断选择）
+        if (e.target.closest && e.target.closest('#people-mention-picker')) return;
         _mdCommitActive();
     }, true);
+}
+
+// 整篇选中详情文本（渲染内容，可直接复制）：
+// Range 覆盖编辑器容器的全部子节点（含各块之间的文本节点），不波及面板其它区域。
+function _mdSelectWholeEditor() {
+    const target = _mdEditorEl();
+    if (!target || !document.createRange) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    sel.removeAllRanges();
+    sel.addRange(range);
 }
 
 function _mdStartEmptyBlock() {
@@ -914,11 +1113,21 @@ function _mdBindActiveTextarea(ta) {
         _mdAutoGrow(ta);
         _mdScheduleSave();
         _mdRerenderGlass();
+        if (typeof peopleMentionInputHook === 'function') peopleMentionInputHook(ta);
     });
     ta.addEventListener('blur', function () {
+        if (typeof closePeopleMentionPicker === 'function') closePeopleMentionPicker();
         // 延后一拍：若紧接着 mousedown 切到别的块，由 _mdSwitchToBlock 接管
         setTimeout(function () {
-            if (_mdEditor.activeTextarea === ta) _mdCommitActive();
+            if (_mdEditor.activeTextarea !== ta) return;
+            // 划选手势进行中（用户正从其它块拖动划选）：改走就地落定。
+            // 全量 _mdRenderAll 会重建整棵 DOM，摧毁正在拖动建立的选区；
+            // 就地落定只把本块恢复为渲染态，选区锚点所在节点不受影响。
+            if (_mdSelectGestureActive) {
+                _mdCommitActiveInPlace();
+                return;
+            }
+            _mdCommitActive();
         }, 0);
     });
     if (_mdEditor.target && _mdEditor.target.allowAttachmentPaste) {
@@ -934,6 +1143,7 @@ function _mdBindActiveTextarea(ta) {
         _mdEditor.composing = false;
         _mdUpdateActiveSource();
         _mdAutoGrow(ta);
+        if (typeof peopleMentionInputHook === 'function') peopleMentionInputHook(ta);
     });
 }
 
@@ -982,6 +1192,7 @@ function _mdUpdateActiveSource() {
 }
 
 function _mdCommitActive(render) {
+    if (typeof closePeopleMentionPicker === 'function') closePeopleMentionPicker();
     const ta = _mdEditor.activeTextarea;
     if (!ta) return 0;
     const block = _mdActiveBlock();
@@ -1023,6 +1234,45 @@ function _mdCommitActive(render) {
             _mdRenderAll();
         }, 0);
     }
+    return delta;
+}
+
+// 划选手势进行中的「就地落定」：把活动块的数据同步回源码，并将该块
+// 单独恢复为渲染态（只替换本块 innerHTML，不整树重建）。
+// 与 _mdCommitActive 的差别：不走 _mdRenderAll 全量重建，因此不会摧毁
+// 用户正在拖动建立的选区（选区锚点位于其它块的节点上，未受影响）。
+function _mdCommitActiveInPlace() {
+    const ta = _mdEditor.activeTextarea;
+    if (!ta) return 0;
+    // 数据侧与 _mdCommitActive 同口径：实时同步 + 撤销文末补白
+    _mdUpdateActiveSource();
+    const block = _mdActiveBlock();
+    let delta = 0;
+    if (ta.value === '' && _mdEditor.emptyPad) {
+        _mdEditor.source = _mdEditor.source.slice(0, Math.max(0, _mdEditor.source.length - _mdEditor.emptyPad));
+        delta = -_mdEditor.emptyPad;
+        _mdEditor.blocks = mdParseBlocks(_mdEditor.source);
+        _mdSyncHiddenTextarea();
+    }
+    _mdEditor.emptyPad = 0;
+    _mdEditor.activeStart = null;
+    _mdEditor.activeTextarea = null;
+    const wrap = ta.closest('.md-block');
+    if (wrap) {
+        let b = null;
+        const startAttr = wrap.dataset ? wrap.dataset.mdBlockStart : null;
+        if (startAttr != null) {
+            const s = parseInt(startAttr, 10);
+            b = _mdEditor.blocks.find(function (x) { return x.start === s && !x.synthetic; })
+                || _mdEditor.blocks.find(function (x) { return x.start === s; });
+        }
+        if (!b) b = block;
+        if (b) {
+            wrap.classList.remove('md-block-editing');
+            wrap.innerHTML = mdRenderBlock(b, _mdEditor.source, { readOnly: _mdEditor.readOnly });
+        }
+    }
+    _mdRerenderGlass();
     return delta;
 }
 
@@ -1106,6 +1356,9 @@ function _mdSplitActiveLine(selStart, selEnd) {
 function _mdHandleActiveKeydown(e) {
     const ta = e.target;
     if (e.isComposing || _mdEditor.composing) return;
+
+    // @ 候选面板打开时优先接管 ↑/↓/Enter/Tab/Esc（须先于块编辑快捷键）
+    if (typeof peopleMentionKeydownHook === 'function' && peopleMentionKeydownHook(e, ta)) return;
 
     const start = ta.selectionStart;
     const end = ta.selectionEnd;

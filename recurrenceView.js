@@ -216,6 +216,8 @@ function _recurringGhostCacheKey(view) {
         (currentTagIds || []).join(','),
         currentFilter || '',
         currentFilterId || '',
+        currentPersonId || '',
+        currentWaitingFilter ? '1' : '',
         new Date().toDateString()
     ].join('|');
 }
@@ -299,7 +301,7 @@ function renderRecurringGhostTaskListHtml(task, useShortTime) {
             <div class="flex items-center gap-2 flex-shrink-0 text-xs text-theme-primary whitespace-nowrap">
                 ${RECURRING_PREVIEW_BADGE}
                 ${typeof renderAttachmentBadge === 'function' ? renderAttachmentBadge(task) : ''}
-                ${typeof renderTagCapsules === 'function' ? renderTagCapsules(task, 2, 'right') : ''}
+                ${typeof renderTagCapsules === 'function' ? renderTagCapsules(task, 'auto', 'right') : ''}
                 ${listName ? `<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background-color: ${listColor}"></span><span class="hidden sm:inline">${escapeHtml(listName)}</span></span>` : ''}
             </div>
             ${timeDisplay ? `<span class="flex-shrink-0 text-xs text-theme-primary whitespace-nowrap" style="min-width: 50px; text-align: right;"><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
@@ -323,7 +325,7 @@ function renderRecurringGhostScheduleHtml(task, timeDisplay, opts) {
     const list = listMap.get(task.listId);
     const listColor = list ? list.color : '#9ca3af';
     const listName = list ? list.name : '';
-    const tagCapsules = (typeof renderTagCapsules === 'function') ? renderTagCapsules(task, 2, 'right') : '';
+    const tagCapsules = (typeof renderTagCapsules === 'function') ? renderTagCapsules(task, 'auto', 'right') : '';
     if (opts && opts.simple) {
         return `<div class="recurring-ghost-row task-row flex items-center gap-2 py-2.5 border-b border-theme/50 last:border-b-0 cursor-pointer"
                     onclick="event.stopPropagation(); openRecurringGhostPreview('${task._projectedFrom}')">

@@ -162,7 +162,8 @@ function inlineNameInput(id, value, saveCall, cancelCall, options = {}) {
     const blurAttr = options.blurSave === false ? '' :
         ` onblur="if(document.getElementById('${id}') && !(event.relatedTarget && event.relatedTarget.closest('[data-edit-form]'))){ ${saveCall} }"`;
     const clickAttr = options.stopClick === true ? ' onclick="event.stopPropagation()"' : '';
-    return `<input id="${id}" type="text" value="${escapeHtml(value)}" maxlength="20" class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm"${clickAttr} onkeydown="if(event.key==='Enter'){event.preventDefault(); ${saveCall}} else if(event.key==='Escape'){event.preventDefault(); ${cancelCall}}"${blurAttr}>`;
+    const phAttr = options.placeholder ? ` placeholder="${escapeHtml(options.placeholder)}"` : '';
+    return `<input id="${id}" type="text" value="${escapeHtml(value)}" maxlength="20"${phAttr} class="flex-1 min-w-0 px-1 py-0 rounded border border-accent bg-theme-secondary text-theme-primary text-sm"${clickAttr} onkeydown="if(event.key==='Enter'){event.preventDefault(); ${saveCall}} else if(event.key==='Escape'){event.preventDefault(); ${cancelCall}}"${blurAttr}>`;
 }
 
 function renderListNode(node, depth, container, uncompletedMap) {
@@ -325,13 +326,14 @@ function toggleFolder(folderId) {
 // ==================== 侧边栏分区（清单/标签/过滤器）展开/收起 ====================
 // 折叠状态持久化到 localStorage，刷新后保持
 const SECTION_COLLAPSE_KEY = 'tacklist_section_collapsed';
-let sectionCollapsed = { lists: false, tags: false, filters: false };
+let sectionCollapsed = { lists: false, tags: false, people: false, filters: false };
 (function loadSectionCollapse() {
     try {
         const saved = JSON.parse(localStorage.getItem(SECTION_COLLAPSE_KEY) || '{}');
         if (saved && typeof saved === 'object') {
             sectionCollapsed.lists = !!saved.lists;
             sectionCollapsed.tags = !!saved.tags;
+            sectionCollapsed.people = !!saved.people;
             sectionCollapsed.filters = !!saved.filters;
         }
     } catch (_) {}
@@ -347,9 +349,9 @@ function toggleSectionCollapse(key) {
 }
 // 依据状态设置各分区容器可见性与头部箭头
 function applySectionCollapse() {
-    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
-    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
-    ['lists', 'tags', 'filters'].forEach(key => {
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', people: 'sidebar-people-container', filters: 'sidebar-filters-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', people: 'sidebar-people-section', filters: 'sidebar-filters-section' };
+    ['lists', 'tags', 'people', 'filters'].forEach(key => {
         const c = document.getElementById(containers[key]);
         if (c) c.classList.toggle('hidden', !!sectionCollapsed[key]);
         const h = document.getElementById(headers[key]);
@@ -361,8 +363,8 @@ function applySectionCollapse() {
 }
 // 编辑某分区时强制展开（不影响已保存的折叠状态）
 function ensureSectionVisible(key) {
-    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', filters: 'sidebar-filters-container' };
-    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', filters: 'sidebar-filters-section' };
+    const containers = { lists: 'lists-container', tags: 'sidebar-tags-container', people: 'sidebar-people-container', filters: 'sidebar-filters-container' };
+    const headers = { lists: 'sidebar-lists-header', tags: 'sidebar-tags-section', people: 'sidebar-people-section', filters: 'sidebar-filters-section' };
     const c = document.getElementById(containers[key]);
     if (c) c.classList.remove('hidden');
     const h = document.getElementById(headers[key]);
@@ -616,6 +618,8 @@ function viewArchivedLists() {
     currentFilter = null;
     currentTagIds = [];
     currentFilterId = null;
+    currentPersonId = null;
+    if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     archivedViewListId = null;
     archivedDeleteConfirming = null;
 
@@ -750,7 +754,7 @@ function renderArchivedTaskCard(task) {
                 <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
                     ${timeDisplay ? `<span><i class="fas fa-clock mr-1"></i>${timeDisplay}</span>` : ''}
                     ${listName ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${listName}</span>` : ''}
-                    ${renderTagCapsules(task, 2, 'right')}
+                    ${renderTagCapsules(task, 'auto', 'right')}
                     ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                     ${progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${progress}%</span>` : ''}
                 </div>
@@ -873,6 +877,8 @@ function selectList(listId) {
     // → 高亮仍停在标签上。选清单必须一并清空标签与自定义过滤器。
     currentTagIds = [];
     currentFilterId = null;
+    currentPersonId = null;
+    if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     // per-list 视图偏好：清单有偏好视图时切换到该视图
     const prefView = _getCurrentListViewPrefView();
     if (prefView && currentView !== prefView) {
@@ -916,6 +922,8 @@ function _applySpecialTimeFilter(filter) {
     currentFilter = filter;
     currentTagIds = [];
     currentFilterId = null;
+    currentPersonId = null;
+    if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     // 视图偏好：该项有偏好视图时切换到该视图
     const prefView = _getSpecialViewPrefView(filter);
     if (prefView && currentView !== prefView) {
@@ -956,6 +964,7 @@ const SIDEBAR_ITEM_BTN_IDS = {
 // 「有内容时显示」的内容量：time 项取对应筛选的任务数，标签取标签个数，其余恒为有内容
 function _sidebarItemContentCount(key, counts) {
     if (key === 'tags') return (settings.tags || []).length;
+    if (key === 'people') return (typeof countPeopleWithTasks === 'function') ? countPeopleWithTasks() : 0;
     if (key === 'filters' || key === 'summary') return 1;
     const c = counts || _computeSidebarSpecialCounts();
     if (key === 'trash') return c.trash || 0; // 回收站按已删除任务数判断「有内容」
@@ -981,6 +990,8 @@ function applySidebarItemsConfig(counts) {
     });
     const tagsSection = document.getElementById('sidebar-tags-section');
     if (tagsSection) tagsSection.style.display = _sidebarItemVisible('tags', _sidebarItemContentCount('tags', c)) ? '' : 'none';
+    const peopleSection = document.getElementById('sidebar-people-section');
+    if (peopleSection) peopleSection.style.display = _sidebarItemVisible('people', _sidebarItemContentCount('people', c)) ? '' : 'none';
     const filtersSection = document.getElementById('sidebar-filters-section');
     if (filtersSection) filtersSection.style.display = _sidebarItemVisible('filters', 1) ? '' : 'none';
 }
@@ -1117,11 +1128,18 @@ function updateSidebarHighlight() {
             const listBtn = document.querySelector(`#lists-container button[data-list-id="${currentListId}"]`);
             if (listBtn) listBtn.classList.add('sidebar-active');
         }
+    } else if (currentPersonId) {
+        // 联系人快捷筛选：高亮由 renderPeopleSidebar 重建时设置，这里不再落回「所有任务」
+    } else if (currentWaitingFilter) {
+        // 「我在等谁」快捷筛选：高亮由 _renderWaitingFilterEntry 设置，这里不再落回「所有任务」
     } else if (!currentListId) {
         // "所有任务"：不依赖 currentView，跨视图保持高亮（与"最近7天"逻辑一致）
         const btn = document.getElementById('sidebar-all-tasks-btn');
         if (btn) btn.classList.add('sidebar-active');
     }
+
+    // 「我在等谁」固定入口：计数/显隐/高亮随任务状态即时刷新（上面的清除循环已先去掉旧高亮）
+    _renderWaitingFilterEntry();
 }
 
 // 侧边栏固定项计数：未完成且未归档，落在各时间窗内的任务数（与 filterTasks 的过滤口径一致）
@@ -1338,6 +1356,8 @@ function toggleTagFilter(tagId) {
         currentListId = null;
         currentFilter = null;
         currentFilterId = null;
+        currentPersonId = null;
+        if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     }
     _saveFilterState();
 
@@ -1356,8 +1376,46 @@ function toggleTagFilter(tagId) {
 
 // ==================== 过滤器渲染与筛选 ====================
 
-let editingFilterId = null; // null | filterId | '__new__'
+// 过滤器配置已搬到右侧滑出面板（复用 utils.js 的统一视图配置框架）。
+// filterConfigId: null | filterId | '__new__'；面板开关由 _viewConfigPanels['filter'] 统一管理。
 let filterDeleteConfirming = null;
+let _filterConfigData = { list: [], tag: [], people: [] };
+let _filterConfigPicks = { list: new Set(), tag: new Set(), people: new Set(), waiting: false };
+let _filterConfigCurrentId = null;   // 当前面板正在编辑的目标（null 表示未打开）
+if (typeof _registerViewConfig === 'function') {
+    // 第三参为 CSS 选择器：点外关闭时豁免侧栏的编辑入口（色块 / 名称 / ＋）
+    _registerViewConfig('filter', 'filterConfigPanel', '.filter-config-trigger');
+}
+
+// 「我在等谁」固定快捷入口（过滤器分组顶部，先于自定义过滤器）：
+// 有等待中任务或筛选激活时显示；激活高亮，再点一次退出并返回原界面（toggleWaitingFilter）。
+// 独立成函数供 renderFilters 与 updateSidebarHighlight 复用——任务完成/取消完成等
+// 不经过 renderFilters 的操作也能即时刷新计数、显隐与高亮。
+function _renderWaitingFilterEntry() {
+    const container = document.getElementById('sidebar-filters-container');
+    if (!container) return;
+    const waitingCount = tasks.filter(function (t) {
+        return !t.deletedAt && !t.completed && (t.waitingForIds || []).length;
+    }).length;
+    let btn = document.getElementById('sidebar-waiting-btn');
+    if (!(waitingCount > 0 || currentWaitingFilter)) {
+        if (btn) btn.remove();
+        return;
+    }
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'sidebar-waiting-btn';
+        btn.onclick = function () { toggleWaitingFilter(); };
+        container.insertBefore(btn, container.firstChild);
+    }
+    btn.className = 'w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 sidebar-filter-btn sidebar-waiting-btn' + (currentWaitingFilter ? ' sidebar-active' : '');
+    btn.title = currentWaitingFilter ? '退出「我在等谁」筛选并返回原界面' : '只看未完成且标记了等待对方的任务';
+    btn.innerHTML =
+        '<i class="fas fa-hourglass-half text-xs text-theme-muted w-3 text-center flex-shrink-0"></i>' +
+        '<span class="sidebar-text flex-1 min-w-0 truncate">我在等谁</span>' +
+        '<span class="sidebar-count text-xs text-theme-muted">' + (waitingCount > 0 ? waitingCount : '') + '</span>';
+}
 
 function renderFilters() {
     const section = document.getElementById('sidebar-filters-section');
@@ -1370,6 +1428,9 @@ function renderFilters() {
     section.classList.remove('hidden');
 
     container.innerHTML = '';
+
+    // 固定快捷入口置顶（自定义过滤器的排序落点均在其后，拖拽重排不影响它）
+    _renderWaitingFilterEntry();
 
     filters.forEach((filter, i) => {
         // 排序落点（插入到当前过滤器之前）
@@ -1384,12 +1445,11 @@ function renderFilters() {
         const btn = document.createElement('button');
         btn.id = `sidebar-filter-${filter.id}`;
         btn.className = `w-full text-left px-3 py-1 rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center justify-center gap-2 sidebar-filter-btn ${isActive ? 'sidebar-active' : ''}`;
-        const filterNameHtml = editingFilterId === filter.id
-            ? inlineNameInput('new-filter-name', filter.name || '', 'saveFilterInput()', 'editingFilterId=null; renderFilters();', { blurSave: false, stopClick: true })
-            : `<span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer" ondblclick="event.stopPropagation(); editFilter('${filter.id}')" title="双击编辑名称">${filter.name}</span>`;
+        // 名称保留双击进入配置面板（面板内含名称输入框）；色块单击直接进入配置。
+        // 两个入口都带 filter-config-trigger，供点外关闭逻辑豁免。
         btn.innerHTML = `
-            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')"></span>
-            ${filterNameHtml}
+            <span class="w-3 h-3 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-accent-secondary transition filter-config-trigger" style="background-color: ${filter.color}" onclick="event.stopPropagation(); editFilter('${filter.id}')" title="编辑过滤器配置"></span>
+            <span class="sidebar-text flex-1 min-w-0 truncate cursor-pointer filter-config-trigger" ondblclick="event.stopPropagation(); editFilter('${filter.id}')" title="双击编辑配置">${filter.name}</span>
             ${uncompletedCount > 0 ? `<span class="sidebar-count text-xs text-theme-muted">${uncompletedCount}</span>` : '<span class="sidebar-count"></span>'}
         `;
         btn.onclick = () => applyFilter(filter.id);
@@ -1407,20 +1467,11 @@ function renderFilters() {
             draggingFilterId = null;
         });
         container.appendChild(btn);
-        if (editingFilterId === filter.id) {
-            container.appendChild(createFilterEditForm(filter));
-        }
     });
-
-    // 新建过滤器时，在末尾插入编辑表单（与标签一致，名称原地编辑）
-    if (editingFilterId === '__new__') {
-        container.appendChild(createFilterEditForm(null));
-    }
 
     // 末尾排序落点（插入到所有过滤器之后）
     appendFlatGap(container, filters.length, () => { if (draggingFilterId) doReorderFilters(draggingFilterId, filters.length); draggingFilterId = null; });
     applySectionCollapse();
-    if (editingFilterId) ensureSectionVisible('filters');
     // 过滤器数量变化后重新应用显隐配置
     if (typeof applySidebarItemsConfig === 'function') applySidebarItemsConfig();
 }
@@ -1439,6 +1490,14 @@ function matchFilterConditions(task, filter) {
     if (c.tagIds && c.tagIds.length > 0) {
         const taskTags = task.tags || [];
         if (!taskTags.some(tagId => c.tagIds.includes(tagId))) return false;
+    }
+    if (c.peopleIds && c.peopleIds.length > 0) {
+        const taskPeople = task.peopleIds || [];
+        if (!taskPeople.some(pid => c.peopleIds.includes(pid))) return false;
+    }
+    // FR-08 等待对方：未完成且含等待标记（与「我在等谁」快捷筛选同口径，可与联系人条件 AND 组合）
+    if (c.waitingOnly === true) {
+        if (task.completed || !(task.waitingForIds || []).length) return false;
     }
     if (c.important === true && !task.important) return false;
     if (c.important === false && task.important) return false;
@@ -1504,26 +1563,170 @@ function matchFilterConditions(task, filter) {
     return true;
 }
 
-function createFilterEditForm(existingFilter) {
-    const form = document.createElement('div');
-    form.className = 'mt-1 mb-1 p-3 bg-theme-tertiary rounded-lg border border-theme';
-    form.setAttribute('data-edit-form', 'filter');
+// 过滤器配置面板：三个维度各自「搜索框常驻 + 行区限高滚动」，已选置顶。
+// 搜索只重写行区 DOM，不动搜索框本身，避免中文输入法丢焦点（同模板选择器）。
+const FILTER_CONFIG_KINDS = {
+    list: { label: '清单', getItems: () => lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l)), empty: '暂无清单' },
+    tag: { label: '标签', getItems: () => settings.tags || [], empty: '暂无标签' },
+    people: { label: '联系人', getItems: () => (settings.people || []).filter(p => !p.archived), empty: '暂无联系人' }
+};
 
+function _filterConfigItemColor(kind, item) {
+    return kind === 'people' ? getPersonColor(item) : (item.color || '#6b7280');
+}
+
+function _filterConfigRowsHtml(kind, query) {
+    const q = (query || '').trim().toLowerCase();
+    const picks = _filterConfigPicks[kind];
+    const items = _filterConfigData[kind].filter(it => !q || (it.name || '').toLowerCase().includes(q));
+    // 已选置顶，组内保持原始顺序
+    items.sort((a, b) => (picks.has(b.id) ? 1 : 0) - (picks.has(a.id) ? 1 : 0));
+    if (!items.length) return `<span class="filter-config-hint">${q ? '无匹配项' : FILTER_CONFIG_KINDS[kind].empty}</span>`;
+    return items.map(item => {
+        const on = picks.has(item.id);
+        const color = _filterConfigItemColor(kind, item);
+        return `<button type="button" class="filter-pill ${on ? 'detail-tag-pill-selected' : 'detail-tag-pill'}" data-id="${item.id}" aria-pressed="${on}" style="--tag-color:${color};${getTagSolidStyle(color)}" title="${on ? '已选中，点击取消' : '点击选择'}">${escapeHtml(item.name || '')}</button>`;
+    }).join('');
+}
+
+function _updateFilterConfigCount(kind) {
+    const el = document.getElementById(`filter-config-count-${kind}`);
+    if (!el) return;
+    const n = _filterConfigPicks[kind].size;
+    el.textContent = n > 0 ? `已选 ${n}` : '';
+}
+
+function _renderFilterConfigRows(kind) {
+    const rows = document.getElementById(`filter-config-rows-${kind}`);
+    if (!rows) return;
+    const input = document.getElementById(`filter-config-search-${kind}`);
+    rows.innerHTML = _filterConfigRowsHtml(kind, input ? input.value : '');
+    _updateFilterConfigCount(kind);
+}
+
+// 分区标题右侧放大镜：默认收起，单击呼出；再次单击或「失焦且为空」自动收起。
+// 搜索框与行区都在面板 body 里，展开/收起只切 hidden 与按钮配色，不重建 DOM，中文输入法不丢焦点。
+function toggleFilterConfigSearch(kind, forceHide) {
+    const input = document.getElementById(`filter-config-search-${kind}`);
+    const wrap = document.getElementById(`filter-config-search-wrap-${kind}`);
+    const btn = document.getElementById(`filter-config-search-toggle-${kind}`);
+    if (!input || !wrap || !btn) return;
+    const hide = forceHide === true ? true : wrap.classList.contains('hidden') === false;
+    wrap.classList.toggle('hidden', hide);
+    input.classList.toggle('is-open', !hide);
+    btn.classList.toggle('text-accent', !hide);
+    btn.classList.toggle('border-accent', !hide);
+    btn.classList.toggle('text-theme-muted', hide);
+    btn.classList.toggle('border-theme', hide);
+    btn.title = hide ? `搜索${FILTER_CONFIG_KINDS[kind].label}` : '收起搜索';
+    if (hide) {
+        if (input.value) { input.value = ''; _renderFilterConfigRows(kind); }
+        _syncFilterConfigClearBtn(kind);
+    } else {
+        input.focus();
+    }
+}
+
+// 有文字时显示输入框右侧清除按钮；只切按钮自身，不重建 input（保住中文输入法焦点）
+function _syncFilterConfigClearBtn(kind) {
+    const input = document.getElementById(`filter-config-search-${kind}`);
+    const clear = document.getElementById(`filter-config-clear-${kind}`);
+    if (!input || !clear) return;
+    clear.classList.toggle('hidden', !input.value);
+}
+
+function onFilterConfigSearchInput(kind) {
+    _syncFilterConfigClearBtn(kind);
+    _renderFilterConfigRows(kind);
+}
+
+function clearFilterConfigSearch(kind) {
+    const input = document.getElementById(`filter-config-search-${kind}`);
+    if (!input) return;
+    input.value = '';
+    _syncFilterConfigClearBtn(kind);
+    _renderFilterConfigRows(kind);
+    input.focus();
+}
+
+function _bindFilterConfigRows(kind) {
+    const rows = document.getElementById(`filter-config-rows-${kind}`);
+    if (!rows) return;
+    rows.addEventListener('click', e => {
+        const btn = e.target.closest('.filter-pill');
+        if (!btn || !rows.contains(btn)) return;
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const picks = _filterConfigPicks[kind];
+        const on = !picks.has(id);
+        if (on) picks.add(id); else picks.delete(id);
+        btn.classList.toggle('detail-tag-pill-selected', on);
+        btn.classList.toggle('detail-tag-pill', !on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.title = on ? '已选中，点击取消' : '点击选择';
+        _updateFilterConfigCount(kind);
+    });
+    _renderFilterConfigRows(kind);
+}
+
+function renderFilterConfigPanel(existingFilter) {
+    const body = document.getElementById('filter-config-body');
+    if (!body) return;
     const c = existingFilter ? (existingFilter.conditions || {}) : {};
-    const activeLists = lists.filter(l => !l.archived && !l.isFolder && !shouldHideExternalList(l));
-    const allTags = settings.tags || [];
+    const isNew = !existingFilter;
 
-    form.innerHTML = `
-        <input type="hidden" id="edit-filter-id" value="${existingFilter ? existingFilter.id : ''}">
-        ${existingFilter ? '' : `<div class="flex items-center gap-2 mb-3">
-            <label class="text-xs text-theme-muted flex-shrink-0">名称</label>
-            <input id="new-filter-name" type="text" value="" maxlength="20" placeholder="过滤器名称" class="flex-1 min-w-0 px-2 py-1 rounded border border-accent bg-theme-secondary text-theme-primary text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault(); saveFilterInput()} else if(event.key==='Escape'){event.preventDefault(); hideFilterInput()}">
-        </div>`}
-        <div class="flex gap-2 mb-3">
-            <input type="color" id="new-filter-color" value="${existingFilter ? existingFilter.color : '#8b5cf6'}" class="w-8 h-8 rounded cursor-pointer flex-shrink-0">
-            <div class="flex-1">
-                <label class="text-xs text-theme-muted block mb-1">时间范围</label>
-                <select id="new-filter-timeRange" class="w-full px-2 py-1 border border-theme rounded bg-theme-secondary text-theme-primary text-sm" onchange="toggleCustomDateRange()">
+    _filterConfigData = {
+        list: FILTER_CONFIG_KINDS.list.getItems(),
+        tag: FILTER_CONFIG_KINDS.tag.getItems(),
+        people: FILTER_CONFIG_KINDS.people.getItems()
+    };
+    _filterConfigPicks = {
+        list: new Set(c.listIds || []),
+        tag: new Set(c.tagIds || []),
+        people: new Set(c.peopleIds || []),
+        waiting: c.waitingOnly === true
+    };
+
+    const optionSection = (kind) => {
+        const cfg = FILTER_CONFIG_KINDS[kind];
+        const icon = kind === 'list' ? 'fa-inbox' : kind === 'tag' ? 'fa-tag' : 'fa-user-group';
+        return `
+        <div class="people-cfg-section">
+            <div class="flex items-center justify-between gap-2">
+                <div class="people-cfg-title"><i class="fas ${icon}"></i>${cfg.label}</div>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <span id="filter-config-count-${kind}" class="filter-config-hint"></span>
+                    <button type="button" id="filter-config-search-toggle-${kind}" title="搜索${cfg.label}"
+                            class="w-6 h-6 rounded-full border-2 border-theme text-theme-muted flex items-center justify-center hover:text-accent hover:border-accent transition"
+                            onmousedown="event.preventDefault()" onclick="toggleFilterConfigSearch('${kind}')"><i class="fas fa-search text-xs"></i></button>
+                    <div id="filter-config-search-wrap-${kind}" class="filter-config-search-wrap hidden relative">
+                        <input id="filter-config-search-${kind}" type="text" placeholder="搜索${cfg.label}…" autocomplete="off"
+                               class="filter-config-search-input w-full"
+                               oninput="onFilterConfigSearchInput('${kind}')"
+                               onblur="if(!this.value.trim()) toggleFilterConfigSearch('${kind}', true)">
+                        <button type="button" id="filter-config-clear-${kind}" class="filter-config-clear-btn hidden"
+                                title="清除搜索内容" aria-label="清除搜索内容"
+                                onmousedown="event.preventDefault()" onclick="clearFilterConfigSearch('${kind}')"><i class="fas fa-xmark text-xs"></i></button>
+                    </div>
+                </div>
+            </div>
+            <div id="filter-config-rows-${kind}" class="filter-config-options filter-pill-group flex flex-wrap gap-1.5 mt-2"></div>
+        </div>`;
+    };
+
+    body.innerHTML = `
+        <div class="people-cfg-section">
+            <div class="people-cfg-title"><i class="fas fa-sliders-h"></i>过滤器信息</div>
+            <div class="mt-3 flex items-center gap-2">
+                <label class="text-xs text-theme-muted flex-shrink-0">名称</label>
+                <input id="new-filter-name" type="text" value="${existingFilter ? escapeHtml(existingFilter.name || '') : ''}" maxlength="20" placeholder="过滤器名称"
+                       class="flex-1 min-w-0 px-2 py-1.5 rounded border border-theme bg-theme-primary text-theme-primary text-sm"
+                       onkeydown="if(event.key==='Enter'){event.preventDefault();saveFilterInput()} else if(event.key==='Escape'){event.preventDefault();closeFilterConfig()}">
+            </div>
+            <div class="mt-2 text-xs text-theme-muted">时间范围</div>
+            <div class="flex items-center gap-2 mt-1">
+                <input type="color" id="new-filter-color" value="${existingFilter ? existingFilter.color : '#8b5cf6'}" class="w-8 h-8 rounded cursor-pointer flex-shrink-0" title="过滤器颜色">
+                <select id="new-filter-timeRange" class="flex-1 min-w-0 px-2 py-1.5 border border-theme rounded-lg bg-theme-tertiary text-theme-primary text-sm" onchange="toggleCustomDateRange()">
                     <option value="" ${!c.timeRange ? 'selected' : ''}>不限</option>
                     <option value="today" ${c.timeRange === 'today' ? 'selected' : ''}>今天</option>
                     <option value="yesterday" ${c.timeRange === 'yesterday' ? 'selected' : ''}>昨天</option>
@@ -1537,101 +1740,92 @@ function createFilterEditForm(existingFilter) {
                     <option value="custom" ${c.timeRange === 'custom' ? 'selected' : ''}>自定义</option>
                 </select>
             </div>
-        </div>
-        <div id="custom-date-range-inputs" class="mb-3 ${c.timeRange === 'custom' ? '' : 'hidden'}">
-            <div class="flex gap-2">
-                <div class="flex-1">
+            <div id="custom-date-range-inputs" class="mt-2 ${c.timeRange === 'custom' ? '' : 'hidden'}">
+                <div class="mb-2">
                     <label class="text-xs text-theme-muted block mb-1">开始日期</label>
-                    <input type="date" id="new-filter-customStart" class="w-full px-2 py-1 border border-theme rounded bg-theme-secondary text-theme-primary text-sm" value="${c.customStartDate || ''}">
+                    <input type="date" id="new-filter-customStart" class="w-full min-w-0 px-2 py-1 border border-theme rounded-lg bg-theme-primary text-theme-primary text-sm" value="${c.customStartDate || ''}">
                 </div>
-                <div class="flex-1">
+                <div>
                     <label class="text-xs text-theme-muted block mb-1">结束日期</label>
-                    <input type="date" id="new-filter-customEnd" class="w-full px-2 py-1 border border-theme rounded bg-theme-secondary text-theme-primary text-sm" value="${c.customEndDate || ''}">
+                    <input type="date" id="new-filter-customEnd" class="w-full min-w-0 px-2 py-1 border border-theme rounded-lg bg-theme-primary text-theme-primary text-sm" value="${c.customEndDate || ''}">
                 </div>
             </div>
         </div>
-        <div class="mb-2">
-            <label class="text-xs text-theme-muted block mb-1">清单</label>
-            <div class="flex flex-wrap gap-1.5 filter-pill-group" data-kind="list">
-                ${activeLists.length > 0 ? activeLists.map(list => {
-                    const color = list.color || '#6b7280';
-                    const on = !!(c.listIds && c.listIds.includes(list.id));
-                    return `<button type="button" class="filter-pill ${on ? 'detail-tag-pill-selected' : 'detail-tag-pill'}" data-id="${list.id}" aria-pressed="${on}" style="--tag-color:${color};${getTagSolidStyle(color)}" title="${on ? '已选中，点击取消' : '点击选择'}">${escapeHtml(list.name || '')}</button>`;
-                }).join('') : '<span class="text-xs text-theme-muted">暂无清单</span>'}
+        ${optionSection('list')}
+        ${optionSection('tag')}
+        ${optionSection('people')}
+        <div class="people-cfg-section">
+            <div class="people-cfg-title"><i class="fas fa-flag"></i>优先级</div>
+            <div class="filter-pill-group mt-2">
+                <button type="button" id="filter-config-waiting" class="filter-pill ${_filterConfigPicks.waiting ? 'detail-tag-pill-selected' : 'detail-tag-pill'}" data-id="waitingOnly" aria-pressed="${_filterConfigPicks.waiting}" title="只显示未完成且标记了等待对方的任务" style="--tag-color:#f59e0b;${getTagSolidStyle('#f59e0b')}"><i class="fas fa-hourglass-half mr-1"></i>仅等待中任务</button>
             </div>
-        </div>
-        <div class="mb-2">
-            <label class="text-xs text-theme-muted block mb-1">标签</label>
-            <div class="flex flex-wrap gap-1.5 filter-pill-group" data-kind="tag">
-                ${allTags.length > 0 ? allTags.map(tag => {
-                    const color = tag.color || '#6b7280';
-                    const on = !!(c.tagIds && c.tagIds.includes(tag.id));
-                    return `<button type="button" class="filter-pill ${on ? 'detail-tag-pill-selected' : 'detail-tag-pill'}" data-id="${tag.id}" aria-pressed="${on}" style="--tag-color:${color};${getTagSolidStyle(color)}" title="${on ? '已选中，点击取消' : '点击选择'}">${escapeHtml(tag.name || '')}</button>`;
-                }).join('') : '<span class="text-xs text-theme-muted">暂无标签</span>'}
+            <div class="mt-3">
+                <div class="text-xs text-theme-muted mb-1">重要</div>
+                <div class="flex gap-2">
+                    <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary"><input type="radio" name="filter-important" value="" ${c.important === null || c.important === undefined ? 'checked' : ''}> 不限</label>
+                    <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary"><input type="radio" name="filter-important" value="true" ${c.important === true ? 'checked' : ''}> 重要</label>
+                    <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary"><input type="radio" name="filter-important" value="false" ${c.important === false ? 'checked' : ''}> 不重要</label>
+                </div>
             </div>
-        </div>
-        <div class="mb-3">
-            <label class="text-xs text-theme-muted block mb-1">优先级</label>
-            <div class="flex gap-2">
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary">
-                    <input type="radio" name="filter-important" value="" ${c.important === null || c.important === undefined ? 'checked' : ''}> 不限
-                </label>
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary">
-                    <input type="radio" name="filter-important" value="true" ${c.important === true ? 'checked' : ''}> 重要
-                </label>
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary">
-                    <input type="radio" name="filter-important" value="false" ${c.important === false ? 'checked' : ''}> 不重要
-                </label>
+            <div class="mt-2">
+                <div class="text-xs text-theme-muted mb-1">紧急</div>
+                <div class="flex gap-2">
+                    <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary"><input type="radio" name="filter-urgent" value="" ${c.urgent === null || c.urgent === undefined ? 'checked' : ''}> 不限</label>
+                    <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary"><input type="radio" name="filter-urgent" value="true" ${c.urgent === true ? 'checked' : ''}> 紧急</label>
+                    <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary"><input type="radio" name="filter-urgent" value="false" ${c.urgent === false ? 'checked' : ''}> 不紧急</label>
+                </div>
             </div>
-            <div class="flex gap-2 mt-1">
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary">
-                    <input type="radio" name="filter-urgent" value="" ${c.urgent === null || c.urgent === undefined ? 'checked' : ''}> 不限
-                </label>
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary">
-                    <input type="radio" name="filter-urgent" value="true" ${c.urgent === true ? 'checked' : ''}> 紧急
-                </label>
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer text-theme-secondary">
-                    <input type="radio" name="filter-urgent" value="false" ${c.urgent === false ? 'checked' : ''}> 不紧急
-                </label>
-            </div>
-        </div>
-        <div class="flex items-center gap-2">
-            ${existingFilter ? `
-                <button onclick="deleteFilterInput()" id="filter-delete-inline-btn" class="flex items-center justify-center w-8 h-8 rounded-lg border ${filterDeleteConfirming === existingFilter.id ? 'bg-red-600 text-white border-red-600' : 'border-red-500 text-red-500 hover:bg-red-50'} transition" title="${filterDeleteConfirming === existingFilter.id ? '确认删除' : '删除过滤器'}">
-                    <i class="fas fa-trash text-sm"></i>
-                </button>
-            ` : ''}
-            <div class="flex-1"></div>
-            <button onclick="saveFilterInput()" id="filter-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white hover:bg-accent-hover transition" title="${existingFilter ? '保存' : '添加'}">
-                <i class="fas fa-check text-sm"></i>
-            </button>
-            <button onclick="hideFilterInput()" class="flex items-center justify-center w-8 h-8 rounded-lg border border-theme text-theme-secondary hover:bg-theme-secondary transition" title="取消">
-                <i class="fas fa-times text-sm"></i>
-            </button>
         </div>
     `;
 
-    // 清单 / 标签胶囊：点击只切换本地选中态（可多选、可取消），不写盘、不弹提示；
-    // 整份配置统一由表单底部「保存」按钮调用 saveFilterInput() 提交。
-    // 事件在此直接绑定（form.innerHTML 已生成），避免延时窗口内点击丢失。
-    form.querySelectorAll('.filter-pill').forEach(btn => {
-        btn.addEventListener('click', e => {
+    ['list', 'tag', 'people'].forEach(kind => _bindFilterConfigRows(kind));
+
+    const waitingBtn = document.getElementById('filter-config-waiting');
+    if (waitingBtn) {
+        waitingBtn.addEventListener('click', e => {
             e.stopPropagation();
-            const on = btn.classList.toggle('detail-tag-pill-selected');
-            btn.classList.toggle('detail-tag-pill', !on);
-            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-            btn.title = on ? '已选中，点击取消' : '点击选择';
+            _filterConfigPicks.waiting = !_filterConfigPicks.waiting;
+            const on = _filterConfigPicks.waiting;
+            waitingBtn.classList.toggle('detail-tag-pill-selected', on);
+            waitingBtn.classList.toggle('detail-tag-pill', !on);
+            waitingBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
-    });
+    }
 
-    // 名称输入框需等 form 插入文档后才能聚焦
-    setTimeout(() => {
-        const nameInput = document.getElementById('new-filter-name');
-        if (nameInput) nameInput.focus();
-    }, 50);
+    const delBtn = document.getElementById('filter-delete-inline-btn');
+    if (delBtn) {
+        delBtn.classList.toggle('hidden', isNew);
+        delBtn.classList.remove('bg-red-600', 'border-red-600', 'text-white');
+        delBtn.classList.add('border-red-500', 'text-red-500', 'hover:bg-red-50');
+        delBtn.title = '删除过滤器';
+    }
 
-    return form;
+    // edit-filter-id 常驻 footer（不占 body 的 space-y-4 流式间隔），打开时回填目标 id
+    const idEl = document.getElementById('edit-filter-id');
+    if (idEl) idEl.value = existingFilter ? existingFilter.id : '';
+    _filterConfigCurrentId = existingFilter ? existingFilter.id : '__new__';
+    setTimeout(() => { const n = document.getElementById('new-filter-name'); if (n) n.focus(); }, 50);
 }
+
+function openFilterConfig(filterId) {
+    filterDeleteConfirming = null;
+    // 与任务详情面板互斥：右侧同占一个槽位
+    if (typeof closeTaskDetailPanel === 'function' && typeof currentDetailTaskId !== 'undefined' && currentDetailTaskId) {
+        closeTaskDetailPanel();
+    }
+    const id = filterId || '__new__';
+    const f = id === '__new__' ? null : (settings.filters || []).find(x => x.id === id);
+    if (id !== '__new__' && !f) return;
+    renderFilterConfigPanel(f);
+    if (typeof openViewConfigPanel === 'function') openViewConfigPanel('filter');
+}
+
+function closeFilterConfig() {
+    filterDeleteConfirming = null;
+    _filterConfigCurrentId = null;
+    if (typeof closeViewConfigPanel === 'function') closeViewConfigPanel('filter');
+}
+
 
 function toggleCustomDateRange() {
     const select = document.getElementById('new-filter-timeRange');
@@ -1656,6 +1850,8 @@ function applyFilter(filterId) {
         currentListId = null;
         currentFilter = null;
         currentTagIds = [];
+        currentPersonId = null;
+        if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     }
     _saveFilterState();
 
@@ -1671,23 +1867,10 @@ function applyFilter(filterId) {
     updateSidebarHighlight();
 }
 
-function showAddFilterInput() {
-    editingFilterId = '__new__';
-    filterDeleteConfirming = null;
-    renderFilters();
-}
-
-function editFilter(filterId) {
-    editingFilterId = filterId;
-    filterDeleteConfirming = null;
-    renderFilters();
-}
-
-function hideFilterInput() {
-    editingFilterId = null;
-    filterDeleteConfirming = null;
-    renderFilters();
-}
+// 侧栏 / 双入口兼容包装：统一转为打开右侧配置面板
+function showAddFilterInput() { openFilterConfig('__new__'); }
+function editFilter(filterId) { openFilterConfig(filterId); }
+function hideFilterInput() { closeFilterConfig(); }
 
 function saveFilterInput() {
     const nameEl = document.getElementById('new-filter-name');
@@ -1716,15 +1899,11 @@ function saveFilterInput() {
         }
     }
 
-    // 收集清单 / 标签选择：读取胶囊面板的选中态（支持多选），不再依赖 checkbox
-    const editForm = document.querySelector('[data-edit-form="filter"]');
-    const collectPills = (kind) => {
-        if (!editForm) return [];
-        return Array.from(editForm.querySelectorAll(`.filter-pill-group[data-kind="${kind}"] .detail-tag-pill-selected`))
-            .map(btn => btn.dataset.id);
-    };
-    const listIds = collectPills('list');
-    const tagIds = collectPills('tag');
+    // 清单 / 标签 / 联系人选择态存于 _filterConfigPicks（面板搜索重绘行区也不丢失）
+    const listIds = Array.from(_filterConfigPicks.list);
+    const tagIds = Array.from(_filterConfigPicks.tag);
+    const peopleIds = Array.from(_filterConfigPicks.people);
+    const waitingOnly = _filterConfigPicks.waiting === true;
 
     // 收集优先级
     const importantRadio = document.querySelector('input[name="filter-important"]:checked');
@@ -1735,6 +1914,8 @@ function saveFilterInput() {
     const conditions = {
         listIds: listIds,
         tagIds: tagIds,
+        peopleIds: peopleIds,
+        waitingOnly: waitingOnly,
         important: important,
         urgent: urgent,
         timeRange: timeRange || null,
@@ -1752,7 +1933,7 @@ function saveFilterInput() {
             filter.conditions = conditions;
         }
         saveData();
-        editingFilterId = null;
+        closeFilterConfig();
         renderFilters();
         renderView();
         updateSidebarHighlight();
@@ -1771,7 +1952,7 @@ function saveFilterInput() {
         };
         settings.filters.push(newFilter);
         saveData();
-        editingFilterId = null;
+        closeFilterConfig();
         renderFilters();
         renderView();
         updateSidebarHighlight();
@@ -1789,8 +1970,7 @@ function deleteFilterInput() {
             currentFilterId = null;
         }
         saveData();
-        editingFilterId = null;
-        filterDeleteConfirming = null;
+        closeFilterConfig();
         renderFilters();
         renderView();
         updateSidebarHighlight();

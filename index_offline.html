@@ -1037,8 +1037,19 @@
             max-height: 100%;
             overflow-y: auto;
         }
+        /* 壁纸模式：容器不再整块毛玻璃，改为「卡片级」毛玻璃（与外部日历订阅视图同机制）——
+           容器完全透明直接透出壁纸（跟随背景透明度），卡片间隙/分区留白均为真实透明；
+           毛玻璃下沉到各个卡片：卡片池卡片、固定槽、编辑卡、添加卡各自带半透明底 + 模糊，
+           强度跟随全局「毛玻璃强度」设置（--bg-blur）。 */
         body.has-bg-image .countdown-container {
             background-color: transparent !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        body.has-bg-image .countdown-container .holiday-countdown-box,
+        body.has-bg-image .countdown-container .cd-edit-card,
+        body.has-bg-image .countdown-container .cd-add-card {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.45) !important;
             backdrop-filter: blur(var(--bg-blur, 12px)) !important;
             -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
         }
@@ -2811,6 +2822,18 @@
         /* ============ 子任务时间与提醒 ============ */
         /* 子任务行外层容器：垂直堆叠「内层操作行 + 内联提醒面板」 */
         .subtask-item { display: block; }
+
+        /* ============ 子任务行内 Markdown（方案A：失焦渲染/聚焦编辑）============ */
+        /* 渲染态覆盖层：盖在 textarea 正上方显示行内 Markdown 结果；pointer-events:none
+           让点击穿透到下层 textarea（原生聚焦进入编辑态），不挡长按拖拽的手势判定 */
+        .subtask-md-overlay {
+            position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+            pointer-events: none;
+            white-space: pre-wrap; word-break: break-word; overflow: hidden;
+        }
+        /* 渲染态时 textarea 源码转透明（聚焦即移除该类），仅覆盖层可见；
+           带 textarea 元素选择器压过 text-theme-* 工具类，无需 !important */
+        textarea.subtask-md-source { color: transparent; caret-color: transparent; }
 
         /* —— 右侧「共用位置」.subtask-slot ——
            有时间文本：常显；悬浮到该文本上只变蓝提示可点击，**不换显铃铛**
@@ -5142,7 +5165,162 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
         body.detail-write-mode #detail-notes-md-editor .md-quote-row { min-height: 1.8em; }
         body.detail-write-mode #detail-notes-md-editor .md-blank { height: 1.8em; }
         body.detail-write-mode #detail-notes-md-editor .md-block-input { min-height: 1.8em; }
-</style>
+        /* ==================== 标签胶囊：自适应折叠 + 「+N」悬浮气泡 ====================
+           纯 CSS 实值（离线版 JIT 不生成任意值变体，也不依赖 --tw-shadow）；
+           显隐只动 opacity / transform，visibility 仅作可命中开关。 */
+        .tag-capsules-container { position: relative; flex-wrap: nowrap; white-space: nowrap; }
+        /* 胶囊不允许被 flex 挤窄：否则窄列（看板）里文字会折成上下两行 */
+        .tag-capsule { white-space: nowrap; flex-shrink: 0; }
+        .tag-capsule[hidden], .tag-more[hidden], .tag-more-pill[hidden] { display: none !important; }
+        /* 常态恒单行；仅用户主动点开的展开态允许换行 */
+        .tag-capsules-container.is-expanded { flex-wrap: wrap; row-gap: 4px; }
+
+        .tag-more {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 18px;
+            height: 16px;
+            padding: 0 4px;
+            border-radius: 9999px;
+            font-size: 10px;
+            line-height: 1;
+            color: var(--text-muted);
+            cursor: pointer;
+            outline: none;
+            white-space: nowrap;
+        }
+        .tag-more:hover, .tag-more:focus-visible { color: var(--text-primary); background-color: rgba(127,127,127,.14); }
+        .tag-more-label { pointer-events: none; }
+
+        .tag-more-bubble {
+            position: absolute;
+            /* 默认向下展开，不遮挡上方信息；下方空间不足时由 JS 加 .flip-up 改为向上 */
+            top: calc(100% + 8px);
+            bottom: auto;
+            /* 以 +N 为中心向两侧展开，避免整块向左伸出卡片 / 看板列边界被裁切 */
+            left: 50%;
+            z-index: 60;
+            /* 表面色分三档：常态实色 / 背景图毛玻璃 / blur=0 时的高不透明实色。
+               浅色主题保持浅色面板 + 深字；深色主题沿用 slate-700(#374151) + 浅字。
+               --tag-bubble-surface 同时供气泡本体与三角箭头取色，避免两者不同色。 */
+            --tag-bubble-bg: #ffffff;
+            --tag-bubble-bg-glass: rgba(255, 255, 255, .68);
+            --tag-bubble-bg-solid: rgba(255, 255, 255, .94);
+            --tag-bubble-border: rgba(15, 23, 42, .14);
+            /* 用项目既有的「不随主题切换」墨色常量，避免自定义调色板 / 背景图亮度改写文字色 */
+            --tag-bubble-fg: var(--tag-ink-on-light, #111827);
+            --tag-bubble-shadow: 0 10px 28px rgba(15, 23, 42, .18);
+            --tag-bubble-surface: var(--tag-bubble-bg);
+            /* 气泡内只有标签，宽度贴合内容；不再固定 140px，避免单个标签时留白 */
+            width: max-content;
+            max-width: 260px;
+            padding: 10px 12px;
+            background: var(--tag-bubble-surface);
+            border: 1px solid var(--tag-bubble-border);
+            border-radius: 8px;
+            box-shadow: var(--tag-bubble-shadow);
+            white-space: normal;
+            opacity: 0;
+            visibility: hidden;
+            --tag-bubble-dy: -4px;
+            transform: translate(-50%, var(--tag-bubble-dy));
+            pointer-events: none;
+            transition: opacity .14s ease, transform .14s ease;
+        }
+        [data-theme="dark"] .tag-more-bubble {
+            --tag-bubble-bg: #374151;
+            --tag-bubble-bg-glass: rgba(55, 65, 81, .72);
+            --tag-bubble-bg-solid: rgba(55, 65, 81, .94);
+            --tag-bubble-border: rgba(255, 255, 255, .14);
+            --tag-bubble-fg: var(--tag-ink-on-dark, #f9fafb);
+            --tag-bubble-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+        }
+        /* 背景图片模式：毛玻璃强度跟随设置（--bg-blur 由 data.js/applyBackgroundImage 写入），
+           非背景图模式不启用 backdrop-filter，保持实色面板。 */
+        body.has-bg-image .tag-more-bubble {
+            --tag-bubble-surface: var(--tag-bubble-bg-glass);
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        /* blur=0（<html data-blur="off">）：关闭采样并提高底色不透明度，保证文字可读 */
+        html[data-blur="off"] body.has-bg-image .tag-more-bubble {
+            --tag-bubble-surface: var(--tag-bubble-bg-solid);
+            -webkit-backdrop-filter: none !important;
+            backdrop-filter: none !important;
+        }
+        /* 胶囊文字跟随气泡表面：浅色面板用深字、深色面板用浅字 */
+        .tag-more-bubble .tag-capsule { color: var(--tag-bubble-fg) !important; }
+        .tag-more-bubble.flip-up { top: auto; bottom: calc(100% + 8px); --tag-bubble-dy: 4px; }
+        /* 三角始终指向 +N：默认在气泡顶部朝上，翻转后在气泡底部朝下 */
+        .tag-more-bubble::before {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            margin-left: -6px;
+            margin-bottom: -1px;
+            border: 6px solid transparent;
+            border-bottom-color: var(--tag-bubble-surface);
+        }
+        .tag-more-bubble.flip-up::before {
+            bottom: auto;
+            top: 100%;
+            margin-bottom: 0;
+            margin-top: -1px;
+            border-bottom-color: transparent;
+            border-top-color: var(--tag-bubble-surface);
+        }
+        /* 透明桥覆盖气泡与 +N 之间的 8px 间隙，鼠标移入途中不丢 hover */
+        .tag-more-bubble::after {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            right: 0;
+            height: 9px;
+        }
+        .tag-more-bubble.flip-up::after { bottom: auto; top: 100%; }
+        .tag-more:hover .tag-more-bubble,
+        .tag-more:focus-visible .tag-more-bubble,
+        .tag-more:focus-within .tag-more-bubble {
+            opacity: 1;
+            visibility: visible;
+            transform: translate(-50%, 0);
+            pointer-events: auto;
+        }
+        .tag-capsules-container[data-expanded="1"] .tag-more-bubble { display: none !important; }
+        /* 悬停/聚焦 +N 时抬高所在行或卡片：这些行普遍带 hover:opacity-80/85，
+           opacity<1 会创建层叠上下文，把 z-index:60 的气泡困在行内，
+           向下展开时会被后面同级卡片整块盖住（看板里表现为「气泡完全看不见」）。
+           只在命中的这一行上抬层级，不影响其它浮层；:has 覆盖鼠标与键盘两条路径。 */
+        :is(.task-row, .kanban-card, .schedule-task-card, .cmd-search-item, .recurring-ghost-row, .quadrant-card, .archived-task-item, .tpl-manage-row):has(.tag-more:hover),
+        :is(.task-row, .kanban-card, .schedule-task-card, .cmd-search-item, .recurring-ghost-row, .quadrant-card, .archived-task-item, .tpl-manage-row):has(.tag-more:focus-within) {
+            position: relative;
+            z-index: 70;
+            /* 归一 hover:opacity-*：否则整张行连同气泡只有 80% 不透明度，
+               底层文字会透出来，与 Toast 的实色面板不一致 */
+            opacity: 1 !important;
+        }
+        .tag-more-bubble-pills { display: flex; flex-wrap: wrap; gap: 4px; }
+        .tag-more-pill { cursor: default; pointer-events: none; }
+        /* 气泡内行为说明：hover 展示气泡与点击原位展开是两条路径，写明避免误解（UX 审查 M5） */
+        .tag-more-bubble-hint {
+            display: block;
+            margin-top: 6px;
+            font-size: 10px;
+            line-height: 1.2;
+            text-align: center;
+            white-space: nowrap;
+            color: var(--tag-bubble-fg);
+            opacity: .55;
+        }
+        /* 触摸设备无 hover：侧栏「进入联系人界面」箭头常显（UX 审查 L5） */
+        @media (hover: none), (pointer: coarse) {
+            #sidebar-people-section .sidebar-group-header > button[title="进入联系人界面"] { opacity: 1 !important; }
+        }
+    </style>
 </head>
 <body class="min-h-screen" data-page-node-id="Khpy1QduUTCqoTqs7npBZF">
     <div id="background-image" class="hidden" data-page-node-id="YBQfkztWGpzGct1LxwFBnE"></div>
@@ -5247,6 +5425,22 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                     </div>
                 </div>
 
+                <!-- 联系人分组（与清单/标签平行：单击筛选该联系人的相关任务） -->
+                <div id="sidebar-people-section" class="mt-4">
+                    <div class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('people')">
+                        <span class="flex items-center gap-1 text-xs text-theme-secondary font-medium uppercase tracking-wider sidebar-text">
+                            <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition"></i>
+                            <span>联系人</span>
+                        </span>
+                        <button onclick="event.stopPropagation(); switchToPeoplePage('sidebar')" class="text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm w-5 text-center flex items-center justify-center" title="进入联系人界面">
+                            <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                    <div id="sidebar-people-container" class="space-y-1">
+                        <!-- 联系人列表（仅有相关任务者） -->
+                    </div>
+                </div>
+
                 <!-- 过滤器分组 -->
                 <div id="sidebar-filters-section" class="mt-4" data-page-node-id="pxGPCMOgzco6uePryb1zL1">
                     <div class="group flex items-center justify-between mb-2 cursor-pointer sidebar-group-header" onclick="toggleSectionCollapse('filters')" data-page-node-id="tcJUEdAgjcaBe2Sis2iciq">
@@ -5254,7 +5448,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                             <i class="section-chevron fas fa-chevron-down w-3 text-xs text-theme-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition" data-page-node-id="YKV8cNMqGSChYeLOCtDSU3"></i>
                             <span data-page-node-id="kbRz8V1oHaBFyyDs2FVw9U">过滤器</span>
                         </span>
-                        <button onclick="event.stopPropagation(); showAddFilterInput()" class="w-5 text-center flex items-center justify-center text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm" title="新建过滤器" data-page-node-id="DVKT22nv63vTvAheSeGQbq">
+                        <button onclick="event.stopPropagation(); showAddFilterInput()" class="filter-config-trigger w-5 text-center flex items-center justify-center text-theme-secondary hover:text-theme-primary opacity-0 group-hover:opacity-100 transition text-sm" title="新建过滤器" data-page-node-id="DVKT22nv63vTvAheSeGQbq">
                             <i class="fas fa-plus" data-page-node-id="pD1GubskwGldAfF1N5e8mp"></i>
                         </button>
                     </div>
@@ -5372,6 +5566,8 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
 
             <!-- 视图容器 + 底部导航栏（导航栏悬浮覆盖在内容上方，内容延伸至导航栏下方，仅最底部抬高避免遮挡） -->
             <div class="flex-1 min-h-0 relative" data-page-node-id="z6jYoz7StGIeviPWbfPApl">
+                <!-- 人员快捷筛选提示条（悬浮于内容顶部，不占布局） -->
+                <div id="person-filter-bar" class="hidden absolute top-2 left-1/2 transform -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-theme-secondary border border-theme shadow-lg" data-page-node-id="personFilterBar"></div>
                 <div id="view-container" class="h-full" data-page-node-id="gDhnJZD6BTa18YcugE8tTR">
                 </div>
                 <div id="view-nav-bar" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20" data-page-node-id="ElXvHjRM8fj4V6O4wg8f8s"></div>
@@ -5985,9 +6181,10 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
             <div id="pomodoro-task-search-wrap" class="px-3 pt-3 pb-2 border-b border-theme flex-shrink-0 hidden" data-page-node-id="nDNjfUsUwfW4CiO3CeZuL0">
                 <div class="relative" data-page-node-id="rssay0pOTBcv0cq4ew8W2L">
                     <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-theme-muted text-sm pointer-events-none" data-page-node-id="jtS3FfV1let4dKj9MXR1Y7"></i>
-                    <input id="pomodoro-task-search" type="text" placeholder="搜索任务" oninput="onPomodoroTaskSearchInput()"
-                           class="w-full pl-9 pr-3 py-2 border border-theme rounded-lg text-sm bg-theme-primary text-theme-primary placeholder:text-theme-muted focus:outline-none" data-page-node-id="Xg2HONrO4RGuiJFJVQugSH">
-                </div>
+                    <input id="pomodoro-task-search" type="text" placeholder="搜索任务" oninput="onPomodoroTaskSearchInput();_syncSearchClearBtn(this)"
+                           class="w-full pl-9 pr-9 py-2 border border-theme rounded-lg text-sm bg-theme-primary text-theme-primary placeholder:text-theme-muted focus:outline-none" data-page-node-id="Xg2HONrO4RGuiJFJVQugSH">
+                <button type="button" id="search-clear-pomodoro-task-search" class="search-clear-btn hidden" title="清除搜索内容" aria-label="清除搜索内容" onmousedown="event.preventDefault()" onclick="clearSearchInput('pomodoro-task-search')"><i class="fas fa-xmark text-xs"></i></button>
+                    </div>
             </div>
             <div class="p-3 overflow-y-auto flex-1 min-h-0" data-page-node-id="0kvkVqo2NM4GWpsqc9ACtt">
                 <div id="pomodoro-task-list" class="space-y-1" data-page-node-id="19eqtG2jc1pdW3EN4KCxPa">
@@ -6270,6 +6467,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                 <li data-page-node-id="Me46wV8B6cik0IMpZGAN6M"><a data-target="settings-section-sidebar-items" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="yDhvmcrzJJGh85XHs9tBI2">侧边栏配置</a></li>
                                 <li data-page-node-id="H14aOZGbDt0PYc4kBB5PHa"><a data-target="settings-section-command" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="j1sdrn7sRnl2Ep1eABaStw">命令面板</a></li>
                                 <li data-page-node-id="tplNavItem"><a data-target="settings-section-templates" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="tplNavLink">任务模板</a></li>
+                                <li data-page-node-id="peopleNavItem"><a data-target="settings-section-people" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="peopleNavLink">联系人</a></li>
                                 <li data-page-node-id="eb3LLPVMneX6cCbfrKnW2Y"><a data-target="settings-section-shortcuts" class="settings-nav-item block px-3 py-1.5 rounded-lg text-sm text-theme-secondary hover:bg-theme-tertiary transition cursor-pointer" data-page-node-id="dNoAthxEmJR6k1Ed8H2rFj">快捷键</a></li>
                             </ul>
                         </div>
@@ -6695,6 +6893,10 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="6E784Hrd6ni5i52kOyoQBo">标签</label>
                                     <input type="hidden" id="settings-sidebar-tags" value="show" data-page-node-id="rt2UZQQ6TcwPH5eh0zbLxX"><div class="seg" data-seg-for="settings-sidebar-tags"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
                                 </div>
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm font-medium text-theme-primary">联系人</label>
+                                    <input type="hidden" id="settings-sidebar-people" value="auto"><div class="seg" data-seg-for="settings-sidebar-people"><button type="button" data-value="show">显示</button><button type="button" data-value="auto">有内容时显示</button><button type="button" data-value="hide">隐藏</button></div>
+                                </div>
                                 <div class="flex items-center justify-between" data-page-node-id="MuZWRxP7uxTW3LZG90BNpa">
                                     <label class="text-sm font-medium text-theme-primary" data-page-node-id="Xx8lxiujfCxzUv4uJTUmDR">过滤器</label>
                                     <input type="hidden" id="settings-sidebar-filters" value="show" data-page-node-id="eZjp1NnTMosmcL5DLhl3xc"><div class="seg" data-seg-for="settings-sidebar-filters"><button type="button" data-value="show">显示</button><button type="button" data-value="hide">隐藏</button></div>
@@ -6792,6 +6994,16 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                         <div class="space-y-3" data-page-node-id="tplSectionBody">
                             <button type="button" onclick="switchToTaskTemplatesPage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
                                 <i class="fas fa-layer-group"></i>设置任务模板
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 联系人（一期，原「人员」） -->
+                    <div id="settings-section-people" data-page-node-id="peopleSection">
+                        <h3 class="text-lg font-semibold text-theme-primary mb-4" data-page-node-id="peopleSectionTitle">联系人</h3>
+                        <div class="space-y-3" data-page-node-id="peopleSectionBody">
+                            <button type="button" onclick="switchToPeoplePage('settings')" class="px-4 py-2.5 border-2 border-theme rounded-lg hover:bg-theme-tertiary transition text-theme-primary flex items-center gap-2 text-sm">
+                                <i class="fas fa-user-group"></i>管理联系人
                             </button>
                         </div>
                     </div>
@@ -7099,7 +7311,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
                             <div class="flex items-center gap-3 p-4 border border-theme rounded-lg bg-theme-tertiary">
                                 <i class="fas fa-calendar-check text-accent text-3xl"></i>
                                 <div>
-                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.3</p>
+                                    <p class="text-base font-semibold text-theme-primary">TackList   v11.8.4</p>
                                     <p class="text-sm text-theme-secondary">日程管理</p>
                                 </div>
                             </div>
@@ -7254,6 +7466,7 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
     <script src="utils.js"></script>
     <script src="dayRollover.js"></script>
     <script src="data.js"></script>
+    <script src="groups.js"></script>
     <script src="sidebarViews.js"></script>
     <script src="calendarViews.js"></script>
     <script src="quadrantView.js"></script>
@@ -7275,6 +7488,368 @@ body.detail-write-mode #detail-notes-md-editor .md-h3 { font-size: 1.25em; }
     <script src="easterEgg.js"></script>
     <script src="countdown.js"></script>
     <script src="holiday.js"></script>
+
+    <!-- 人员功能（一期）：渲染态提及样式 + @ 候选面板 + 成员浮层卡片 -->
+    <style>
+        .md-mention { color: var(--accent-color); cursor: pointer; }
+        .md-mention:hover { text-decoration: underline; }
+        .md-mention-archived { color: #9ca3af; }
+        /* z-45：高于详情面板（z-40），低于 modal（z-50）与 toast（z-60） */
+        #people-mention-picker { position: fixed; z-index: 45; width: 260px; max-height: 280px; overflow-y: auto; }
+        .people-picker-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+        .people-picker-item:hover, .people-picker-item.people-picker-active { background: var(--accent-bg, rgba(59, 130, 246, .12)); }
+        #person-card { position: fixed; z-index: 45; width: 300px; max-width: calc(100vw - 16px); max-height: 70vh; overflow-y: auto; }
+        /* 人员管理页：与倒计时管理同款的虚线卡片网格（参照 .cd-grid / .holiday-countdown-box） */
+        .people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; align-items: stretch; }
+        .person-grid-span { grid-column: 1 / -1; }
+        /* 编辑/新增表单卡「原地悬浮」：包裹层占据原卡片的网格单元（min-height 由 JS 按原卡高度
+           内联设定，网格布局不塌陷、同排卡片不被拉伸）；表单本体绝对定位浮起到更高层级
+           （z-index + 投影 + 实底），宽度 = 1 个卡片列，高度向下自由展开，超长时表单内部滚动 */
+        .person-form-wrap { position: relative; min-height: 64px; }
+        .person-card-item.person-form-item {
+            position: absolute; top: 0; left: 0; width: 100%; z-index: 30;
+            background: var(--bg-secondary);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, .22), 0 3px 10px rgba(0, 0, 0, .14);
+            max-height: 72vh; overflow-y: auto;
+            animation: person-form-reveal .22s ease-out;
+        }
+        /* 从上到下显现编辑框：clip-path 擦除只重绘表单自身区域、不触发布局，开销极低；
+           负 inset 预留投影范围，避免显现过程中投影被裁切 */
+        @keyframes person-form-reveal {
+            from { clip-path: inset(-48px -48px 100% -48px); }
+            to { clip-path: inset(-48px -48px -48px -48px); }
+        }
+        /* 取消/确认编辑后回到卡片：从下到上擦除显现（与 person-form-reveal 对等的退场动画）。
+           仅 clip-path 变化、不触发布局；JS 在 renderPeopleList 后给归位卡片挂 .person-card-return */
+        @keyframes person-card-reveal {
+            from { clip-path: inset(100% -48px -48px -48px); }
+            to { clip-path: inset(-48px -48px -48px -48px); }
+        }
+        /* 退出编辑：编辑卡「从下到上擦除消失」（person-form-reveal 的逆向擦除）。
+           JS 在 cancel/save 时给表单挂 .person-form-exit，动画结束（或兜底）后才重建列表；
+           forwards 保持终态避免收尾瞬间闪回。只动 clip-path，不触发布局。 */
+        @keyframes person-form-exit {
+            from { clip-path: inset(-48px -48px -48px -48px); }
+            to { clip-path: inset(-48px -48px 100% -48px); }
+        }
+        .person-card-item.person-form-item.person-form-exit { animation: person-form-exit .2s ease-in forwards; pointer-events: none; }
+        @media (prefers-reduced-motion: reduce) { .person-card-item.person-form-item, .person-card-item.person-card-return, .person-card-item.person-form-item.person-form-exit { animation: none; } }
+        /* 自动分组依据下的新建表单：列表顶部独立卡（流内、占一列宽、不悬浮覆盖卡片）。
+           复用 .person-form-item 的进场/退场动画，仅把定位从 absolute 改回流内 static。 */
+        .people-top-form-wrap { margin: .5rem 0 .25rem; }
+        .people-top-form-wrap .person-form-wrap { min-height: 0; }
+        .people-top-form-wrap .person-card-item.person-form-item {
+            position: static; width: 100%; max-width: 420px; z-index: auto;
+            max-height: none; overflow: visible; box-shadow: 0 3px 12px rgba(0, 0, 0, .12);
+        }
+        .person-card-item { position: relative; -webkit-touch-callout: none; border: 1.5px dashed var(--border-color); border-radius: 0.75rem; padding: 0.75rem; background: transparent; }
+        /* 联系人卡片右上角悬浮编辑按钮（仿倒计时 .cd-icon-btn）：hover 卡片显现；触屏无 hover 时常显 */
+        .person-card-edit-btn {
+            position: absolute; top: .4rem; right: .4rem; z-index: 2;
+            width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+            border: 0; background: transparent; border-radius: 9999px;
+            color: var(--text-secondary); cursor: pointer; font-size: .85rem;
+            opacity: 0; transition: opacity .15s, background .15s;
+        }
+        .person-card-view:hover .person-card-edit-btn { opacity: 1; }
+        .person-card-edit-btn:hover { background: var(--bg-tertiary); }
+        @media (hover: none) { .person-card-view .person-card-edit-btn { opacity: 1; } }
+        /* 联系人卡片信息区与底部操作行分隔：虚线 + 低对比主题色（辅助层级，比原实线 border-theme/40 更退后；color-mix 随深浅主题自适应） */
+        .person-card-foot { border-top: 1px dashed color-mix(in srgb, var(--border-color) 25%, transparent); }
+        /* 行内等高：卡片纵向 flex，操作行 margin-top:auto 沉底，保证同排底边与按钮水平对齐 */
+        .person-card-item:not(.person-form-item) { display: flex; flex-direction: column; row-gap: 0.625rem; }
+        .person-card-item:not(.person-form-item) .person-info-grid { margin-top: 0; }
+        .person-card-item.person-card-filtered { border-color: var(--accent-color); box-shadow: 0 0 0 1px var(--accent-color); }
+        /* 卡片长按拖拽换组（同子任务 / 分组配置指针事件范式）：默认普通光标、短按可点击；
+           长按 300ms 出进度引导线（复用 subtask-hold-fill），激活后拿起态 + 全局 grabbing。 */
+        .person-card-item.person-holding::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            height: 2px;
+            border-radius: 2px;
+            background: var(--accent-color, #3b82f6);
+            transform-origin: left center;
+            transform: scaleX(0);
+            pointer-events: none;
+            animation: subtask-hold-fill var(--people-hold-anim-ms, 150ms) linear forwards;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .person-card-item.person-holding::after { animation: none; transform: scaleX(0.35); }
+        }
+        .person-card-item.person-holding { user-select: none; -webkit-user-select: none; }
+        .person-card-item.person-drag-ready { cursor: grabbing; opacity: .5; user-select: none; -webkit-user-select: none; }
+        body.people-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; touch-action: none; }
+        /* 壁纸模式：联系人「卡片级」毛玻璃（与倒计时界面同机制，强度跟随 --bg-blur）——
+           联系人卡 / 批量多选卡 / 编辑表单卡 / 新增占位卡 / 页底使用说明卡各自带半透明底 + 模糊，
+           页面其余区域（头部、分组标题、卡片间隙）保持透明直接透出壁纸 */
+        body.has-bg-image .person-card-item,
+        body.has-bg-image .person-add-card,
+        body.has-bg-image .person-help-card {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.45) !important;
+            backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px)) !important;
+        }
+        /* 壁纸模式下基础 !important 规则会盖掉 hover:bg-theme-tertiary，此处补回悬停反馈 */
+        body.has-bg-image .person-card-item:hover,
+        body.has-bg-image .person-add-card:hover {
+            background-color: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5) !important;
+        }
+        /* 悬浮编辑卡浮在其他卡片之上：壁纸模式下提高不透明度，避免底下卡片透出来干扰阅读 */
+        body.has-bg-image .person-card-item.person-form-item {
+            background-color: rgba(var(--bg-secondary-rgb, 255,255,255), 0.92) !important;
+        }
+        .people-group-section { border-radius: 12px; }
+        .people-group-section.people-drop-over { background: color-mix(in srgb, var(--accent-color) 7%, transparent); outline: 2px dashed var(--accent-color); outline-offset: -2px; }
+        /* 分组配置行：长按 300ms 拖拽排序（同看板 .kg-cfg-row 范式，进度线复用 subtask-hold-fill） */
+        .group-cfg-row.group-cfg-holding::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            height: 2px;
+            border-radius: 2px;
+            background: var(--accent-color, #3b82f6);
+            transform-origin: left center;
+            transform: scaleX(0);
+            pointer-events: none;
+            animation: subtask-hold-fill var(--group-cfg-hold-anim-ms, 150ms) linear forwards;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .group-cfg-row.group-cfg-holding::after { animation: none; transform: scaleX(0.35); }
+        }
+        .group-cfg-row.group-cfg-drag-ready { cursor: grabbing; opacity: 0.5; }
+        .group-cfg-row.group-cfg-drag-ready,
+        .group-cfg-row.group-cfg-drag-ready input { user-select: none; -webkit-user-select: none; }
+        body.group-cfg-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; }
+        .person-add-card { min-height: 64px; }
+        /* 联系人配置：两个独立分区卡片（列表分组 / 表单预置），强标题 + 作用域副标题，边界清晰 */
+        .people-cfg-section { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 0.875rem; }
+        .people-cfg-title { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+        .people-cfg-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+        /* 过滤器配置面板：选项区限高滚动，搜索框常驻只重写行区（中文输入法不丢焦点） */
+        .filter-config-options { max-height: 132px; overflow-y: auto; padding-right: 2px; }
+        .filter-config-options::-webkit-scrollbar { width: 5px; }
+        .filter-config-options::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+        .filter-config-hint { font-size: 11px; color: var(--text-muted); }
+        .filter-config-search-input { width: 116px; padding: 0.125rem 0.375rem; font-size: 12px; border: 1px solid var(--border-color); border-radius: 0.375rem; background: var(--bg-primary); color: var(--text-primary); }
+        .filter-config-search-input.is-open { border-color: var(--accent-color); }
+        .filter-config-search-input { padding-right: 1.5rem; }
+        .filter-config-clear-btn {
+            position: absolute; right: 0.25rem; top: 50%; transform: translateY(-50%);
+            width: 1.125rem; height: 1.125rem; border-radius: 9999px;
+            display: inline-flex; align-items: center; justify-content: center;
+            color: var(--text-muted); transition: color 0.15s, background-color 0.15s;
+        }
+        .filter-config-clear-btn:hover { color: var(--text-primary); background-color: var(--bg-tertiary); }
+        /* 通用搜索框清除按钮（番茄/联系人/联系人合并/模板选择器/模板管理/回收站）：有字才显示 */
+        .search-clear-btn {
+            position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%);
+            width: 1.125rem; height: 1.125rem; border-radius: 9999px;
+            display: inline-flex; align-items: center; justify-content: center;
+            color: var(--text-muted); transition: color 0.15s, background-color 0.15s;
+        }
+        .search-clear-btn:hover { color: var(--text-primary); background-color: var(--bg-tertiary); }
+        /* 背景图片模式：分区卡片改用毛玻璃区分（半透明底 + 模糊，强度跟随 --bg-blur），不再用实底色；
+           纯色模式保持上面的 var(--bg-tertiary)。blur=0（data-blur="off"）时禁模糊并提高不透明度保证可读性。 */
+        body.has-bg-image .people-cfg-section {
+            background: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.5);
+            backdrop-filter: blur(var(--bg-blur, 12px));
+            -webkit-backdrop-filter: blur(var(--bg-blur, 12px));
+        }
+        html[data-blur="off"] body.has-bg-image .people-cfg-section {
+            background: rgba(var(--bg-tertiary-rgb, 243,244,246), 0.92);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        .person-card-avatar-btn { padding: 0; border: 0; background: transparent; cursor: pointer; line-height: 0; border-radius: 9999px; flex-shrink: 0; }
+        .person-card-avatar-btn:hover { opacity: .85; }
+        /* 联系人卡片：@ 可提及名行（姓名正下方）+ 表格式「项目 / 内容」信息行 */
+        .person-mention-line { display: flex; flex-wrap: wrap; gap: 0 6px; margin-top: 2px; font-size: 11px; line-height: 1.45; color: var(--text-secondary); }
+        .person-mention-line span { white-space: nowrap; }
+        .person-info-grid { display: grid; grid-template-columns: max-content 1fr; column-gap: 10px; row-gap: 3px; align-items: baseline; margin-top: 8px; }
+        .person-info-grid-popover { margin-top: 10px; }
+        .person-info-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+        /* 卡片信息行全量显示：值过长自动换行，不再截断省略 */
+        .person-info-value { font-size: 12px; color: var(--text-secondary); min-width: 0; overflow-wrap: anywhere; }
+        .person-info-grid-popover .person-info-value { font-size: 13px; color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+        .person-info-note { white-space: normal; }
+        /* 生日行：值 + 蛋糕图标按钮同行（占据信息行网格的值单元格） */
+        .person-info-value-wrap { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+        .person-info-value-wrap .person-info-value { flex: 1; }
+        .person-info-cake-btn { border: 0; background: transparent; padding: 0 2px; color: var(--text-muted); font-size: 11px; cursor: pointer; flex-shrink: 0; transition: color .15s; }
+        .person-info-cake-btn:hover { color: var(--accent-color); }
+        .person-info-link { color: var(--accent-color); text-decoration: none; }
+        .person-info-link:hover { text-decoration: underline; }
+        /* 编辑表单：与卡片同宽（占一个网格单元），视觉上原地编辑 */
+        .person-form-item { border-style: solid; border-color: var(--accent-color); }
+        .person-avatar-btn { position: relative; display: inline-block; padding: 0; border: 0; background: transparent; cursor: pointer; line-height: 0; }
+        .person-avatar-cam { position: absolute; right: -1px; bottom: -1px; width: 20px; height: 20px; border-radius: 9999px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; font-size: 9px; }
+        .person-color-input { width: 26px; height: 26px; padding: 0; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; cursor: pointer; }
+        .person-avatar-wrap { position: relative; display: inline-block; line-height: 0; }
+        .person-avatar-del { position: absolute; top: -5px; right: -5px; width: 20px; height: 20px; padding: 0; border-radius: 9999px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-secondary); display: none; align-items: center; justify-content: center; font-size: 9px; line-height: 1; cursor: pointer; z-index: 2; }
+        .person-avatar-wrap:hover .person-avatar-del { display: flex; }
+        .person-avatar-del.is-empty { display: none !important; }
+        .person-avatar-del:hover { color: #ef4444; border-color: #ef4444; }
+        .person-avatar-del.is-confirm, .person-avatar-del.is-confirm:hover { background: #ef4444; border-color: #ef4444; color: #fff; }
+        @media (hover: none) { .person-avatar-wrap .person-avatar-del:not(.is-empty) { display: flex; } }
+        .people-form-phones { display: flex; flex-direction: column; gap: 6px; }
+        /* 电话行输入框右侧「+」：追加一行（与「×」同规格，hover 用主题强调色） */
+        .person-row-add { width: 26px; height: 26px; border-radius: 6px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; flex-shrink: 0; }
+        .person-row-add:hover { background: color-mix(in srgb, var(--accent-color) 12%, transparent); color: var(--accent-color); }
+        .person-form-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+        .person-form-row { display: flex; align-items: center; gap: 8px; }
+        .person-form-row-note { align-items: flex-start; }
+        .person-form-label { width: 4.5rem; flex-shrink: 0; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .person-form-value-input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; outline: none; }
+        .person-form-value-input:focus, .person-form-label-input:focus { border-color: var(--accent-color); }
+        .person-form-label-input { width: 4.5rem; flex-shrink: 0; padding: 5px 0; border: 1px solid transparent; border-bottom: 1px dashed var(--border-color); border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 11px; outline: none; }
+        .person-form-label-input:hover { border-color: var(--border-color); background: var(--bg-primary); }
+        .person-form-label-input:focus { border-color: var(--accent-color); background: var(--bg-primary); }
+        .person-row-spacer { width: 26px; flex-shrink: 0; }
+        /* 生日行右侧 i 图标：填写规则说明（hover 提示） */
+        .person-form-info-icon { color: var(--text-muted); font-size: 12px; cursor: help; flex-shrink: 0; }
+        .person-form-name-input { width: 100%; }
+        .person-form-textarea { resize: vertical; min-height: 42px; line-height: 1.5; font-family: inherit; }
+        .person-row-del { width: 26px; height: 26px; border-radius: 6px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; flex-shrink: 0; }
+        .person-row-del:hover { background: rgba(239, 68, 68, .12); color: #ef4444; }
+        .person-row-del.is-confirm, .person-row-del.is-confirm:hover { background: #dc2626; color: #fff; }
+        .people-form-phone-group { align-items: flex-start; }
+        .people-form-phone-group > .person-form-label { padding-top: 6px; }
+        .people-form-phone-group .people-form-phones { flex: 1; min-width: 0; }
+        .person-add-field { margin-top: 8px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 8px; border: 1px dashed var(--border-color); background: transparent; color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+        .person-add-field:hover { border-color: var(--accent-color); color: var(--accent-color); }
+        .person-avatar-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+        /* 浮层内：项目名本身即复制入口（无独立复制按钮） */
+        .person-info-label-btn { padding: 0; border: 0; background: transparent; cursor: pointer; font-family: inherit; line-height: inherit; text-align: left; }
+        .person-info-label-btn:hover { color: var(--accent-color); text-decoration: underline; text-underline-offset: 2px; }
+        /* 「相关任务 N」即筛选入口 */
+        .person-related-label { display: inline-flex; align-items: center; padding: 2px 6px; margin-left: -6px; border: 0; border-radius: 6px; background: transparent; font-size: 11px; color: var(--text-muted); cursor: pointer; }
+        .person-related-label:hover { color: var(--accent-color); background: var(--bg-tertiary); }
+        .person-related-empty, .person-related-empty:hover { color: var(--text-muted); background: transparent; cursor: default; }
+        /* 字段配置面板行：与「列表分组」自定义分组行（group-cfg-row）完全对齐——
+           透明底 + 行 hover、py/px 8px、gap 8px；操作钮 w-8 h-8 rounded-lg + tone-outline-* 描边。
+           注意不可在此写 border:0 —— 会按源码顺序覆盖 tone-outline 的彩色描边 */
+        .people-field-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; transition: background .15s; }
+        .people-field-row:hover { background: var(--bg-tertiary); }
+        .people-field-row-label { flex: 1; min-width: 0; padding: 2px 4px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-primary); font-size: 14px; outline: none; }
+        .people-field-row-label:hover { border-color: var(--border-color); }
+        .people-field-row-label:focus { border-color: var(--accent-color); }
+        .people-field-row-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: transparent; cursor: pointer; flex-shrink: 0; transition: all .15s; }
+        .people-field-row-btn:disabled { opacity: .3; pointer-events: none; }
+        .people-field-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 9999px; border: 1.5px solid var(--border-color); background: transparent; color: var(--text-secondary); font-size: 12px; line-height: 1.2; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+        .people-field-chip.is-on { border-color: var(--accent-color); color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 12%, transparent); }
+        .people-field-row-fixed { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 2px 4px; font-size: 14px; color: var(--text-primary); }
+        .people-field-row-tag { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: var(--bg-secondary); color: var(--text-muted); font-size: 10px; line-height: 1.7; }
+        /* 页底「联系人使用说明」折叠面板（结构同 ICS 订阅帮助面板） */
+        /* 页底固定说明（默认收起，点击标题展开） */
+        .person-help-footer { flex-shrink: 0; padding: 0 16px 12px; }
+        .person-help-card { position: relative; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px; max-height: 26vh; overflow-y: auto; }
+        .person-help-head { display: flex; align-items: center; gap: 2px; }
+        .person-help-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-family: inherit; text-align: left; }
+        /* 「不再显示」与展开/收起箭头：同处头部一行右端、同一款按钮样式（均无 hover 变化） */
+        .person-help-hide { padding: 2px 7px; border: 0; border-radius: 6px; background: transparent; font-size: 11px; line-height: 1.4; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+        .person-help-chevron-btn { flex: 0 0 auto; padding: 2px 7px; }
+        .person-help-title { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+        .person-help-toggle:hover .person-help-title { color: var(--text-secondary); }
+        .person-help-chevron { font-size: 10px; color: var(--text-muted); transition: transform .2s ease; }
+        .person-help-card.is-open .person-help-chevron { transform: rotate(180deg); }
+        .person-help-card.is-open .person-help-list { margin-top: 6px; }
+        @media (max-width: 768px) { .person-help-footer { padding-bottom: calc(66px + env(safe-area-inset-bottom)); } }
+        .person-help-list { margin: 0; padding-left: 1.1em; list-style: disc; font-size: 11px; line-height: 1.7; color: var(--text-secondary); }
+        .person-help-list li { margin-bottom: 4px; }
+        .person-help-list li:last-child { margin-bottom: 0; }
+        /* 「按首字母」分组：右侧竖向 A-Z# 字母索引条（仿手机通讯录）；
+           仅"按首字母"模式且非搜索态显示，无内容的字母置灰不可点，单击跳转到对应分组头 */
+        #people-initial-index {
+            position: absolute;
+            right: 2px;
+            top: 55%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            z-index: 30;
+            user-select: none;
+            -webkit-user-select: none;
+            pointer-events: none; /* 条体自身穿透，仅字母可点 */
+        }
+        .people-index-letter {
+            font-size: 9px;
+            line-height: 2.2; /* 上下间隔放大约 1.5 倍（1.45 → 2.2），更贴近手机通讯录的手感 */
+            text-align: center;
+            padding: 0 5px;
+            font-weight: 500;
+            color: var(--text-muted);
+            pointer-events: auto;
+            cursor: default;
+        }
+        .people-index-letter.has {
+            color: var(--accent-color);
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .people-index-letter.has:active { transform: scale(1.35); }
+    </style>
+    <div id="people-mention-picker" class="hidden bg-theme-secondary border border-theme rounded-xl shadow-xl py-1.5 px-1.5" data-page-node-id="peopleMentionPicker"></div>
+    <div id="person-card" class="hidden bg-theme-secondary border border-theme rounded-xl shadow-xl p-4" data-page-node-id="personCard"></div>
+
+    <!-- 过滤器配置：右侧滑出面板（复用统一视图配置框架 _registerViewConfig） -->
+    <aside id="filterConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">过滤器配置</h3>
+            <button type="button" onclick="closeFilterConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition" title="关闭"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div id="filter-config-body" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
+        <div class="flex items-center gap-2 p-4 border-t border-theme flex-shrink-0">
+            <input type="hidden" id="edit-filter-id" value="">
+            <button type="button" id="filter-delete-inline-btn" onclick="deleteFilterInput()" class="hidden flex items-center justify-center w-8 h-8 rounded-lg border border-red-500 text-red-500 hover:bg-red-50 transition" title="删除过滤器"><i class="fas fa-trash text-sm"></i></button>
+            <div class="flex-1"></div>
+            <button type="button" onclick="closeFilterConfig()" class="flex items-center justify-center w-8 h-8 rounded-lg border border-theme text-theme-secondary hover:bg-theme-secondary transition" title="取消"><i class="fas fa-times text-sm"></i></button>
+            <button type="button" onclick="saveFilterInput()" id="filter-save-btn" class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent text-white hover:bg-accent-hover transition" title="保存"><i class="fas fa-check text-sm"></i></button>
+        </div>
+    </aside>
+
+    <aside id="peopleFieldConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;">
+        <div class="flex items-center justify-between p-4 border-b border-theme flex-shrink-0">
+            <h3 class="text-lg font-semibold text-theme-primary">联系人配置</h3>
+            <button onclick="closePeopleFieldConfig()" class="p-2 hover:bg-theme-tertiary rounded-lg transition"><i class="fas fa-times text-theme-muted"></i></button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div class="people-cfg-section">
+                <div class="flex items-center justify-between">
+                    <div class="people-cfg-title">列表分组</div>
+                    <select id="people-group-mode-select" onchange="onPeopleGroupModeChange()" class="w-40 px-3 py-2 border border-theme rounded-lg bg-theme-tertiary text-theme-primary">
+                        <option value="custom">自定义分组</option>
+                        <option value="initial">按首字母</option>
+                        <option value="created">按添加时间</option>
+                        <option value="lastUsed">按最近使用时间</option>
+                    </select>
+                </div>
+                <div id="people-group-config-inline" class="mt-2"></div>
+            </div>
+            <div class="people-cfg-section">
+                <div class="people-cfg-title">联系人信息项</div>
+                <div class="flex flex-wrap gap-2 mt-3">
+                    <button type="button" id="people-field-chip-email" onclick="togglePeopleFieldBuiltin('email')" class="people-field-chip" aria-pressed="false"><i class="fas fa-envelope"></i>邮箱</button>
+                    <button type="button" id="people-field-chip-phone" onclick="togglePeopleFieldBuiltin('phone')" class="people-field-chip" aria-pressed="false"><i class="fas fa-phone"></i>电话号码</button>
+                    <button type="button" id="people-field-chip-title" onclick="togglePeopleFieldBuiltin('title')" class="people-field-chip" aria-pressed="false"><i class="fas fa-id-badge"></i>职位</button>
+                    <button type="button" id="people-field-chip-company" onclick="togglePeopleFieldBuiltin('company')" class="people-field-chip" aria-pressed="false"><i class="fas fa-building"></i>所属公司</button>
+                    <button type="button" id="people-field-chip-staffNo" onclick="togglePeopleFieldBuiltin('staffNo')" class="people-field-chip" aria-pressed="false"><i class="fas fa-id-card"></i>工号</button>
+                    <button type="button" id="people-field-chip-birthday" onclick="togglePeopleFieldBuiltin('birthday')" class="people-field-chip" aria-pressed="false"><i class="fas fa-cake-candles"></i>生日</button>
+                </div>
+                <div id="people-field-template-list" class="space-y-1 mt-2"></div>
+                <button type="button" onclick="addPeopleFieldTemplate()" class="w-full mt-2 px-3 py-2 rounded-lg border-2 border-dashed border-accent text-accent hover:bg-theme-tertiary transition text-sm"><i class="fas fa-plus mr-1"></i>新建项目</button>
+            </div>
+            <div class="people-cfg-section">
+                <button type="button" onclick="showPeopleHelpFromConfig()" title="重新显示页面底部的「联系人使用说明」提示条" class="w-full px-3 py-2 rounded-lg border border-theme text-theme-secondary hover:bg-theme-tertiary transition text-sm"><i class="fas fa-circle-question mr-1.5"></i>使用说明</button>
+            </div>
+        </div>
+    </aside>
+    <script src="people.js"></script>
 
     <!-- 看板视图配置：右侧滑出面板 -->
     <aside id="kanbanConfigPanel" class="fixed top-0 right-0 h-screen w-96 max-w-[92vw] bg-theme-secondary border-l border-theme shadow-none z-40 flex flex-col translate-x-full" style="transition: transform 0.3s ease;" data-page-node-id="SvuPQq2gBaHwlhMTW3kzCg">

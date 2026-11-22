@@ -150,6 +150,8 @@ function openTrashView() {
     currentFilter = null;
     currentTagIds = [];
     currentFilterId = null;
+    currentPersonId = null;
+    if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     if (currentView === 'trash') {
         renderView();
     } else {
@@ -227,7 +229,7 @@ function _renderTrashList() {
         // ⚠️ 回收站不渲染完成勾选框：完成态在此不可修改，只看不改（还原后才回到清单继续操作）。
         const progress = task.progress || 0;
         const focusMinutes = (typeof getTaskFocusMinutes === 'function') ? getTaskFocusMinutes(task.id) : 0;
-        const tagCapsules = (typeof renderTagCapsules === 'function') ? renderTagCapsules(task, 2, 'right') : '';
+        const tagCapsules = (typeof renderTagCapsules === 'function') ? renderTagCapsules(task, 'auto', 'right') : '';
         const timeDisplay = (typeof formatTaskListTime === 'function') ? formatTaskListTime(task, { withAllDayTag: false }) : '';
         const timeTextClass = ((typeof isTaskOverdue === 'function') && isTaskOverdue(task)) ? 'text-red-500' : 'text-theme-primary';
         // 详情行：与任务视图完全同源（utils.js renderTaskDetailsBlock，方案 C）
@@ -320,14 +322,16 @@ function renderTrashView(container) {
             header +
             '<div class="flex-1 overflow-y-auto min-h-0 px-4 pb-6">' +
                 (_trashSearchVisible
-                    ? '<div class="my-3">' +
-                        '<input id="trash-search-input" type="text" value="' + escapeHtml(_trashSearchQuery) + '" placeholder="搜索回收站中的任务…" oninput="_trashSearchQuery=this.value;_renderTrashList()" ' +
-                            'class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                    ? '<div class="my-3 relative">' +
+                        '<input id="trash-search-input" type="text" value="' + escapeHtml(_trashSearchQuery) + '" placeholder="搜索回收站中的任务…" oninput="_trashSearchQuery=this.value;_renderTrashList();_syncSearchClearBtn(this)" ' +
+                            'class="w-full px-3 py-2 pr-9 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                        '<button type="button" id="search-clear-trash-search-input" class="search-clear-btn hidden" title="清除搜索内容" aria-label="清除搜索内容" onmousedown="event.preventDefault()" onclick="clearSearchInput(\'trash-search-input\')"><i class="fas fa-xmark text-xs"></i></button>' +
                       '</div>'
                     : '') +
                 '<div id="trash-list-container" class="space-y-1"></div>' +
             '</div>' +
         '</div>';
+    _syncSearchClearBtn(document.getElementById('trash-search-input'));
     _renderTrashList();
 }
 

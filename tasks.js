@@ -160,10 +160,16 @@ function confirmDeleteTask(taskId) {
 
 
 let draggedTaskId = null;
+// 拖拽起点的日历格日期（月/周视图）：跨天全天任务会在多格各渲染一条，
+// 以「抓住的那一天」而非 startTime 为平移基准，抓的那天才能落在投放日
+let _dragSourceCellDate = null;
 let _lastDragOver = null; // 当前高亮的拖拽落点（仅其显示虚线，移出/换列即清除，避免划过的列残留选定样式）
 
 function handleTaskDragStart(e, taskId) {
     draggedTaskId = taskId;
+    // 记录拖拽起点所在日历格（任务列表/象限/看板里 closest 命不中日历格，自然为 null）
+    const _cell = e.target && e.target.closest ? e.target.closest('.calendar-day') : null;
+    _dragSourceCellDate = _cell ? _cell.getAttribute('data-date') : null;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', taskId);
     e.target.classList.add('dragging');
@@ -185,6 +191,7 @@ function handleTaskDragEnd(e) {
     });
     _lastDragOver = null;
     draggedTaskId = null;
+    _dragSourceCellDate = null;
 }
 
 function handleTaskDrop(e, targetId, targetQuadrant = null) {
@@ -365,7 +372,17 @@ function handleMonthDrop(e, dateStr) {
         task.isAllDay = true;
         delete task.endTime;
     } else if (task.isAllDay) {
-        task.startTime = new Date(dateStr + 'T00:00:00').toISOString();
+        // 跨天全天任务：结束日随开始日同步平移，保持原有跨度。
+        // 平移基准取「抓取格」而非 startTime：跨天任务会在起始/结束两格各渲染一条，
+        // 用户抓住哪一天拖，直觉就是哪一天落到投放日——若以 startTime 为基准，
+        // 抓住周二那条拖到周五，结束日会被推到周六（M3）。
+        // 抓取格未知（如从非日历容器拖入）时回退为起始日，行为与旧实现一致。
+        const _grabStr = _dragSourceCellDate || (task.startTime ? formatDate(task.startTime) : dateStr);
+        const _grabDiff = Math.round((new Date(dateStr + 'T00:00:00') - new Date(_grabStr + 'T00:00:00')) / 86400000);
+        const _newStart = new Date(oldDate);
+        _newStart.setDate(_newStart.getDate() + _grabDiff);
+        task.startTime = _newStart.toISOString();
+        if (task.endTime && oldDate) shiftEndTimeByDays(task, oldDate);
     } else {
         const time = `${oldDate.getHours().toString().padStart(2, '0')}:${oldDate.getMinutes().toString().padStart(2, '0')}`;
         task.startTime = new Date(`${dateStr}T${time}`).toISOString();
@@ -538,6 +555,8 @@ function openAddTaskModal(presetDate = null) {
         createdAt: new Date().toISOString(),
         mode: 'text',
         description: '',
+        peopleIds: [],
+        waitingForIds: [],
         subtasks: [createSubtask('', 0)],
         progress: 0
     };
@@ -968,6 +987,10 @@ function pruneLeftoverEmptyTasks() {
 }
 
 function openTaskDetailPanel(taskId, readOnly = false, fromClick = false) {
+    // 过滤器配置面板与详情共用右侧槽位：先收起配置面板（不会重置其草稿以外的状态）
+    if (typeof _viewConfigPanels !== 'undefined' && _viewConfigPanels.filter && _viewConfigPanels.filter.open) {
+        closeViewConfigPanel('filter');
+    }
     // 模板选择器与详情共用同一个右栏槽：选择器立即收起，主区宽度由详情面板无缝接替
     if (typeof dismissTaskTemplatePickerForDetail === 'function' && dismissTaskTemplatePickerForDetail()) {
         requestAnimationFrame(function () {
@@ -1999,6 +2022,39 @@ function updateDetailDescriptionPlaceholder() {
     if (typeof mdSyncDescriptionPlaceholder === 'function') mdSyncDescriptionPlaceholder(placeholder);
 }
 
+// ==================== 子任务行内 Markdown（方案A：失焦渲染/聚焦编辑）====================
+// 子任务行采用「覆盖层渲染」：textarea 常驻 DOM（Tab/方向键导航、saveSubtasksToTask
+// 等按 textarea[data-subtask-id] 查询的链路完全不动），失焦时其上层覆盖层显示
+// mdInlineSubtask 行内渲染结果、textarea 源码转透明；点击任意位置即原生聚焦 textarea，
+// 聚焦时隐藏覆盖层、显出源码继续编辑。行内子集：行内代码/链接/@提及/粗体/斜体/删除线；
+// 图片不渲染、块级语法不适用（子任务本身就是列表项，Enter 拆行成新子任务）。
+function _subtaskMarkdownOn() {
+    return (typeof _mdIsMarkdownOn === 'function') ? _mdIsMarkdownOn() : false;
+}
+
+// 切换某行子任务的渲染/编辑态。focused=true 进入编辑态；false 进入渲染态
+// （Markdown 关闭、或文本为空时退化为普通 textarea，覆盖层保持隐藏）。
+function _updateSubtaskMdState(input, focused) {
+    const wrap = input.parentElement;
+    const overlay = wrap && wrap.querySelector('.subtask-md-overlay');
+    if (!overlay) return;
+    const text = input.value || '';
+    if (focused || !_subtaskMarkdownOn() || !text.trim()) {
+        overlay.classList.add('hidden');
+        input.classList.remove('subtask-md-source');
+        return;
+    }
+    overlay.innerHTML = (typeof mdInlineSubtask === 'function')
+        ? mdInlineSubtask(text)
+        : escapeHtml(text);
+    const completed = input.closest('.subtask-item');
+    const isCompleted = !!(completed && completed.dataset.completed === 'true');
+    overlay.classList.toggle('text-theme-muted', isCompleted);
+    overlay.classList.toggle('text-theme-primary', !isCompleted);
+    overlay.classList.remove('hidden');
+    input.classList.add('subtask-md-source');
+}
+
 function renderSubtasks() {
     const container = document.getElementById('subtasks-container');
     if (!container) return;
@@ -2057,10 +2113,15 @@ function renderSubtasks() {
         }
         checkbox.onclick = () => toggleSubtaskComplete(subtask.id, !subtask.completed, null, checkbox);
         
+        // 文本域包一层 relative 容器：失焦渲染态时覆盖层（subtask-md-overlay）盖在
+        // textarea 正上方；textarea 永远在 DOM 里，键盘导航与保存链路不受影响
+        const mdWrap = document.createElement('div');
+        mdWrap.className = 'flex-1 relative min-w-0 subtask-md-wrap';
+
         const input = document.createElement('textarea');
         input.value = subtask.text;
         input.dataset.subtaskId = subtask.id;
-        input.className = 'flex-1 bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden';
+        input.className = 'w-full block bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden';
         input.rows = 1;
         if (subtask.completed) {
             input.classList.add('text-theme-muted');
@@ -2068,6 +2129,13 @@ function renderSubtasks() {
         input.placeholder = '输入子任务...';
         input.onkeydown = (e) => handleSubtaskKeydown(e, subtask.id);
         input.oninput = () => { autoResizeSubtaskInput(input); saveSubtasksToTask(); updateDetailDescriptionPlaceholder(); };
+        input.onfocus = () => _updateSubtaskMdState(input, true);
+        input.onblur = () => _updateSubtaskMdState(input, false);
+
+        const mdOverlay = document.createElement('div');
+        mdOverlay.className = 'subtask-md-overlay hidden';
+        mdWrap.appendChild(input);
+        mdWrap.appendChild(mdOverlay);
         
         // 长按行任意位置 300ms 激活拖拽（Pointer Events 驱动，见上方模块说明）；
         // 判定期内移动超过容差或提前松开则静默取消，不影响点击聚焦、双击选词、拖选文本
@@ -2125,7 +2193,7 @@ function renderSubtasks() {
         deleteBtn.onclick = () => requestSubtaskDelete(subtask.id, deleteBtn);
 
         row.appendChild(checkbox);
-        row.appendChild(input);
+        row.appendChild(mdWrap);
         row.appendChild(slot);
         row.appendChild(deleteBtn);
         wrapper.appendChild(row);
@@ -2139,6 +2207,8 @@ function renderSubtasks() {
 
         // 初始化子任务文本域高度（不设上限，完整显示）
         autoResizeSubtaskInput(input);
+        // 初始渲染态：面板打开时各行默认未聚焦 → 显示行内 Markdown 渲染结果
+        _updateSubtaskMdState(input, false);
     });
 }
 
@@ -3481,6 +3551,8 @@ function applyDetailInputsToTask(task, options = {}) {
     }
     _setIf((task.mode || 'text') !== mode, () => { task.mode = mode; });
     if (description !== undefined) _setIf((task.description || '') !== description, () => { task.description = description; });
+    // 人员功能：peopleIds 是派生缓存，正文（notes/description 按模式）写入后统一重算
+    if (typeof recomputeTaskPeopleIds === 'function' && recomputeTaskPeopleIds(task) && _cf) _cf.changed = true;
     _setIf((task.listId || 'default') !== listId, () => { task.listId = listId; });
     // FR-01：改清单入撤销栈（kind='moveList'，只还原 listId）
     if (!_isExtTask && _prevListId !== task.listId && typeof pushUndoEntry === 'function') {
@@ -4887,6 +4959,13 @@ function setupDetailPanelCloseHandler() {
             return;
         }
 
+        // 联系人浮层卡片（点正文 @提及 弹出的那张）浮在详情面板之上：
+        // 在卡片里点编辑、复制字段、切换筛选都属于「继续与当前任务交互」，不算点击外部，
+        // 否则详情面板会被顺带收起，编辑联系人回来就丢了上下文。
+        if (e.target.closest('#person-card')) {
+            return;
+        }
+
         // 点击落在已打开的全屏浮层（设置/新增任务/番茄专注/命令面板等）内部时，不算「点击外部」：
         // 浮层内的普通元素（如设置面板左侧导航 <a>）此前会误关详情面板，并连带触发四象限展开态的
         // View Transition（伪元素树位于 top layer）把整页快照动画盖到浮层之上，出现层级倒挂
@@ -5817,6 +5896,8 @@ function filterAllTasks() {
     currentFilter = null;
     currentTagIds = [];
     currentFilterId = null;
+    currentPersonId = null;
+    if (typeof _clearWaitingFilterSilent === 'function') _clearWaitingFilterSilent();
     // 视图偏好：「全部任务」有偏好视图时切换到该视图
     const prefView = _getSpecialViewPrefView('allTasks');
     if (prefView && currentView !== prefView) {
@@ -6244,6 +6325,12 @@ function setupWriteModeAutoSave() {
     const onEdit = function () { scheduleWriteModeAutoSave(); };
     title.addEventListener('input', onEdit);
     notes.addEventListener('input', onEdit);
+    // 人员功能：Markdown 关闭时描述/备注为原始 textarea，绑定同一套 @ 候选钩子
+    // （Markdown 开启时走行级编辑器钩子，此处隐藏 textarea 不会被用户输入触发）
+    if (typeof bindPeopleRawTextarea === 'function') {
+        bindPeopleRawTextarea(notes);
+        bindPeopleRawTextarea(document.getElementById('detail-task-description'));
+    }
     // 时间类属性变化后同样触发防抖保存
     ['detail-task-date', 'detail-task-time', 'detail-task-end-date', 'detail-task-end-time'].forEach(function (id) {
         const el = document.getElementById(id);

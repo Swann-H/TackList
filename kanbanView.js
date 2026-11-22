@@ -339,7 +339,8 @@ function renderKanbanCard(task, showDetails, showFocusButton) {
     if (showDetails) {
         details = renderTaskDetailsBlock(task, { maxLines: 2 });
     }
-    const tagHtml = renderTagCapsules(task, 3, 'left');
+    // 列宽有限且随窗口变化，改走容器实测：放得下的标签恒单行显示，放不下的自动收进 +N
+    const tagHtml = renderTagCapsules(task, 'auto', 'left');
     const colors = getQuadrantColorClass(task);
     const meta = `
         ${typeof renderRecurringTaskBadge === 'function' ? renderRecurringTaskBadge(task) : ''}
@@ -1010,6 +1011,8 @@ function kanbanQuickAdd(colKey) {
         completed: false,
         createdAt: now.toISOString(),
         mode: 'text',
+        peopleIds: [],
+        waitingForIds: [],
         subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0, startTime: null, reminders: [] }],
         progress: 0,
         groupId: groupId

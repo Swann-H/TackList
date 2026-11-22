@@ -12,7 +12,7 @@
 function _playViewSwitchTransition(fxCtx, prevView, newView) {
     const order = (typeof getViewOrder === 'function'
         ? getViewOrder().map(v => v.id)
-        : VIEW_ORDER_DEFAULT.slice()).concat(['summary', 'countdown', 'holiday', 'templates']);
+        : VIEW_ORDER_DEFAULT.slice()).concat(['summary', 'countdown', 'holiday', 'templates', 'people']);
     const fromIdx = order.indexOf(prevView);
     const toIdx = order.indexOf(newView);
     if (fromIdx === -1 || toIdx === -1) return;
@@ -82,7 +82,7 @@ function switchView(view) {
     currentView = view;
     const mainHeader = document.querySelector('#main-content > header');
     if (mainHeader) {
-        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync' || view === 'trash' || view === 'templates') {
+        if (view === 'summary' || view === 'countdown' || view === 'holiday' || view === 'calendarsync' || view === 'trash' || view === 'templates' || view === 'people') {
             mainHeader.classList.add('hidden');
         } else {
             mainHeader.classList.remove('hidden');
@@ -360,10 +360,23 @@ function renderView() {
                 renderTaskListView(container);
             }
             break;
+        case 'people':
+            if (typeof renderPeopleView === 'function') {
+                renderPeopleView(container);
+            } else {
+                renderTaskListView(container);
+            }
+            break;
         default:
             renderTaskListView(container);
             break;
     }
 
     updatePostponeButton();
+    // 人员快捷筛选提示条随任何重绘同步（筛选上下文可能经侧边栏/命令面板等路径变化）
+    if (typeof updatePersonFilterBar === 'function') updatePersonFilterBar();
+    // 侧边栏「联系人」分组随重绘同步（相关任务数/筛选态可能变化）
+    if (typeof renderPeopleSidebar === 'function') renderPeopleSidebar();
+    // 标签胶囊按容器实测折叠：任何路径触发的重绘都在下一帧统一重算
+    if (typeof scheduleAutoTagsSync === 'function') scheduleAutoTagsSync();
 }

@@ -405,7 +405,7 @@ function quadrantCompactTaskHtml(task, key, cfg) {
     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
     const focusMinutes = getTaskFocusMinutes(task.id);
     const progress = task.progress || 0;
-    const tagCapsules = renderTagCapsules(task, 2, 'right');
+    const tagCapsules = renderTagCapsules(task, 'auto', 'right');
     // 第二象限逾期档位徽章（保留并融合进任务视图卡片样式）
     const stagnationDays = getQuadrantStagnationDays(task);
     const stagLevel = getQuadrantStagnationLevel(task);
@@ -610,7 +610,7 @@ function renderQuadrantView(container) {
                                     <div class="flex items-center gap-2 text-sm mb-1 text-theme-secondary">
                                         ${timeDisplay ? `<span class="${timeTextClass}">${timeDisplay}</span>` : ''}
                                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${listColor}"></span>${list.name}</span>` : ''}
-                                        ${renderTagCapsules(task, 2, 'right')}
+                                        ${renderTagCapsules(task, 'auto', 'right')}
                                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
                                         ${stagLevel > 0 && key === 'important-not-urgent' ? `<span class="flex items-center gap-1 ${QUADRANT_STAGNATION_COLORS[stagLevel]}"><i class="fas fa-hourglass-half"></i>逾期${stagnationDays}天</span>` : ''}

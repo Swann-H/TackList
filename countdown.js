@@ -990,7 +990,8 @@ function reorderWithinPool(fromKey, toKey) {
 // 为适配窄编辑卡做的必要调整：
 //   1) radio name 用 cd-repeat，避免与任务面板的 detail-repeat 串台；
 //   2) 选中即收起面板，否则浮层会盖住编辑卡的保存按钮；
-//   3) 自定义输入行放在面板外，并用 visibility 切换以固定占位高度；
+//   3) 自定义输入行放在弹层面板内部：面板为 fixed 浮层（打开时移到 body），不占卡片
+//      布局空间 —— 编辑卡高度恒定且不再为该行预留空行；visibility 切换仅影响面板内部；
 //   4) 不做「重复方式」（倒计时无完成态）；
 //   5) 面板打开时移到 body 下并用 fixed + 视口坐标定位。留在 .cd-grid 卡片内的
 //      absolute 面板会把展开高度计入 .countdown-container 的滚动区域，引发滚动条
@@ -1020,9 +1021,9 @@ function cdRepeatGroupHtml(label, values, splitAfter, dateVal, repeatVal) {
     return html + '</div></div>';
 }
 
-// 自定义间隔行（面板外；样式沿用任务面板 #detail-custom-repeat-container 的控件类名）
-// ⚠️ 用 visibility 而非 display:none 切换：始终占位，编辑卡高度恒定，
-//    否则选中/取消「自定义」会改变卡片高度，带动整个 cd-grid 重新排布。
+// 自定义间隔行（弹层面板内部；样式沿用任务面板 #detail-custom-repeat-container 的控件类名）
+// ⚠️ 行本身用 visibility 切换显隐；由于位于 fixed 浮层面板内，不占编辑卡布局空间，
+//    卡片高度恒定，选中/取消「自定义」不会带动 cd-grid 重排。
 function cdCustomRowHtml(c, repeatVal) {
     const intervalVal = (c && c.interval) ? c.interval : '';
     const unitVal = (c && c.unit) || 'weeks';
@@ -1031,7 +1032,7 @@ function cdCustomRowHtml(c, repeatVal) {
     units.forEach(function (u) {
         opts += '<option value="' + u[0] + '"' + (unitVal === u[0] ? ' selected' : '') + '>' + u[1] + '</option>';
     });
-    return '<div id="cd-edit-custom-row" class="flex items-center gap-2 pl-5" ' +
+    return '<div id="cd-edit-custom-row" class="flex items-center gap-2 pl-5 pt-1 border-t border-theme mt-1" ' +
         'style="visibility:' + (repeatVal === 'custom' ? 'visible' : 'hidden') + '">' +
         '<input type="number" id="cd-edit-custom-interval" min="1" step="1" inputmode="numeric" value="' + intervalVal + '" placeholder="间隔" oninput="cdUpdateRepeatTrigger()" ' +
             'class="flex-1 min-w-0 px-2 py-1 text-sm border border-theme rounded bg-theme-secondary text-theme-primary">' +
@@ -1063,11 +1064,12 @@ function cdRepeatPickerHtml(c, repeatVal, dateVal) {
                 '<span id="cd-repeat-trigger-text" class="truncate">' + escapeHtml(cdInitialRepeatLabel(c, repeatVal, dateVal)) + '</span></span>' +
             '<i class="fas fa-chevron-down text-xs flex-shrink-0"></i>' +
         '</button>' +
-        // 视觉类与任务面板一致；定位改由 JS 以 fixed + 视口坐标设置（打开时移到 body）
+        // 视觉类与任务面板一致；定位改由 JS 以 fixed + 视口坐标设置（打开时移到 body）。
+        // 自定义间隔行放在面板内部：面板不占卡片布局空间，编辑卡高度因此缩小且恒定
         '<div id="cd-repeat-picker" class="hidden p-2 bg-theme-tertiary rounded-lg border border-theme shadow-lg" ' +
-            'style="position:fixed;z-index:60;max-height:320px;overflow-y:auto;min-width:240px;box-sizing:border-box;">' + panel + '</div>' +
+            'style="position:fixed;z-index:60;max-height:320px;overflow-y:auto;min-width:240px;box-sizing:border-box;">' + panel + cdCustomRowHtml(c, repeatVal) + '</div>' +
         '<input type="hidden" id="cd-edit-repeat" value="' + repeatVal + '">' +
-    '</div>' + cdCustomRowHtml(c, repeatVal);
+    '</div>';
 }
 
 function cdEditFormHtml(c) {
@@ -1091,7 +1093,14 @@ function cdEditFormHtml(c) {
                             ? 'bg-red-600 text-white border-red-600'
                             : 'tone-outline-red';
                         const icon = confirming ? 'fa-check' : 'fa-trash';
-                        const title = confirming ? '再次点击确认删除' : '删除';
+                        // 确认态写明牵连范围：删除会同时解除关联联系人的生日徽标
+                        let title = '删除';
+                        if (confirming) {
+                            const _rel = cdRelatedPeopleOf(c.id);
+                            title = _rel.length
+                                ? '删除（将同时解除 ' + _rel.length + ' 位联系人的生日关联）'
+                                : '再次点击确认删除';
+                        }
                         return '<button type="button" onclick="deleteCountdown(\'' + c.id + '\')" class="flex items-center justify-center w-8 h-8 rounded-lg border transition ' + cls + '" title="' + title + '"><i class="fas ' + icon + ' text-sm"></i></button>';
                     })() : '') +
                     '<button type="button" onclick="saveCountdown(' + isAdd + ', \'' + (c ? c.id : '') + '\')" class="flex items-center justify-center w-8 h-8 rounded-lg border border-green-500 text-green-500 hover:bg-green-500 hover:text-white transition" title="保存"><i class="fas fa-check text-sm"></i></button>' +
@@ -1129,7 +1138,11 @@ function cdEnsureRepeatOutsideClick() {
     if (typeof window !== 'undefined' && window.addEventListener) {
         window.addEventListener('resize', function () {
             const picker = document.getElementById('cd-repeat-picker');
-            if (picker) picker.classList.add('hidden');
+            if (!picker || picker.classList.contains('hidden')) return;
+            // 移动端软键盘弹出/收起都会触发 resize：焦点在面板内（如刚选「自定义」后聚焦的
+            // 间隔输入框）时只重定位不关闭，否则键盘一弹面板就连同焦点一起消失（S1）
+            if (picker.contains(document.activeElement)) { cdPositionRepeatPicker(picker); return; }
+            picker.classList.add('hidden');
         });
     }
 }
@@ -1198,6 +1211,9 @@ function cdToggleRepeatSubmenu(el) {
     if (!sub) return;
     sub.classList.toggle('hidden');
     if (arrow) arrow.style.transform = sub.classList.contains('hidden') ? '' : 'rotate(90deg)';
+    // 展开子分组会改变面板高度：靠下打开时顶部可能超出视口，重算一次定位（L1）
+    const picker = document.getElementById('cd-repeat-picker');
+    if (picker && !picker.classList.contains('hidden')) cdPositionRepeatPicker(picker);
 }
 
 // 触发按钮文案：与卡片规则标签同源（自定义读实时输入的间隔）
@@ -1227,7 +1243,14 @@ function cdSelectRepeat(value) {
     if (row) row.style.visibility = (value === 'custom') ? 'visible' : 'hidden';
     cdUpdateRepeatTrigger();
     const picker = document.getElementById('cd-repeat-picker');
-    if (picker) picker.classList.add('hidden');
+    if (value === 'custom') {
+        // 选中「自定义」保持面板展开：间隔输入框就在面板内，收起会让人当场没法填
+        // （其它选项无后续输入，保持选中即收起的原行为）
+        const iv = document.getElementById('cd-edit-custom-interval');
+        if (iv) iv.focus();
+    } else if (picker) {
+        picker.classList.add('hidden');
+    }
 }
 
 // 改目标日期后刷新动态选项文案（每周X / 每月X日 / 农历月日）与触发按钮
@@ -1329,6 +1352,12 @@ function saveCountdown(isAdd, id) {
     showToast(isAdd ? '已添加倒计时' : '已保存倒计时', 'success');
 }
 
+// 与某倒计时关联的联系人（生日徽标来源）：删除前用于提示牵连范围（FR-11 读取侧）
+function cdRelatedPeopleOf(id) {
+    if (!Array.isArray(settings.people)) return [];
+    return settings.people.filter(p => p && p.countdownId === id && !p.archived);
+}
+
 function deleteCountdown(id) {
     if (countdownDeleteConfirming !== id) {
         // 第一次点击：进入确认状态（点击变红，3 秒内再次点击确认）
@@ -1342,13 +1371,25 @@ function deleteCountdown(id) {
         return;
     }
     // 第二次点击：确认删除
+    // 先取关联联系人名单再清引用：删除会同时解除这些联系人的生日徽标，
+    // 静默清理曾让用户找不到徽标消失的原因，toast 必须点名
+    const relatedPeople = cdRelatedPeopleOf(id);
     settings.countdowns = (settings.countdowns || []).filter(c => c.id !== id);
     settings.pinnedCountdowns = (settings.pinnedCountdowns || []).filter(k => k !== id);
+    // FR-11：清理联系人对该倒计时的引用（纯数据遍历，不依赖 people 模块；读取侧另有惰性降级）
+    if (Array.isArray(settings.people)) {
+        settings.people.forEach(p => { if (p && p.countdownId === id) p.countdownId = ''; });
+    }
     countdownDeleteConfirming = null;
     countdownEditing = null;
     if (countdownDeleteTimer) { clearTimeout(countdownDeleteTimer); countdownDeleteTimer = null; }
     saveData();
     renderCountdownView(document.getElementById('view-container'));
     renderSidebarCountdown();
-    showToast('已删除倒计时', 'success');
+    if (relatedPeople.length) {
+        const names = relatedPeople.map(p => p.name || '未命名').join('、');
+        showToast('已删除倒计时，已解除 ' + names + ' 的生日关联', 'success');
+    } else {
+        showToast('已删除倒计时', 'success');
+    }
 }

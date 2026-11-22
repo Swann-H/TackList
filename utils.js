@@ -90,6 +90,7 @@ const SIDEBAR_ITEM_DEFAULTS = {
     recent7days: 'show',
     summary: 'show',
     tags: 'show',
+    people: 'auto',
     filters: 'show',
     trash: 'show'
 };
@@ -240,6 +241,11 @@ function _buildSubtaskRows(task, colorMode = 'theme', highlightId = null, maxSho
         ? { completed: 'text-slate-500', uncompleted: 'text-slate-300', muted: 'text-slate-500' }
         : { completed: 'text-theme-secondary', uncompleted: 'text-theme-muted', muted: 'text-theme-muted' };
 
+    // Markdown 开启时子任务文本做纯文本投影（去 **/#/链接标记，换行折叠空格），
+    // 与同卡描述预览（mdToPlainText）同一口径：卡片是紧凑只读面，不渲染可点击 HTML
+    // （<a> 会与任务卡整体点击打开详情冲突），详情面板内才是渲染态（方案A 覆盖层）。
+    const mdOn = (typeof _mdIsMarkdownOn === 'function') ? _mdIsMarkdownOn() : false;
+
     let html = '';
     showItems.forEach(st => {
         const icon = st.completed ? 'fa-check-circle' : 'fa-circle';
@@ -252,7 +258,8 @@ function _buildSubtaskRows(task, colorMode = 'theme', highlightId = null, maxSho
             : 'text-accent font-medium';
         const cls = isActive ? activeCls : (st.completed ? colors.completed : colors.uncompleted);
         const caret = isActive ? '<i class="fas fa-caret-right mt-0.5 flex-shrink-0"></i>' : '';
-        html += `<div class="${cls} flex items-start gap-1">${caret}<i class="far ${icon} mt-0.5 flex-shrink-0"></i><span>${escapeHtml(st.text)}</span></div>`;
+        const rowText = (mdOn && typeof mdInlineToPlain === 'function') ? mdInlineToPlain(st.text) : st.text;
+        html += `<div class="${cls} flex items-start gap-1">${caret}<i class="far ${icon} mt-0.5 flex-shrink-0"></i><span>${escapeHtml(rowText)}</span></div>`;
     });
 
     if (total > maxShow) {
@@ -859,6 +866,7 @@ function showCompactToast(message, opts = {}) {
 // 确认卡：常驻直到用户选择；30s 未响应走 onExpire（默认 = onCancel）
 // 第 4 参 opts 可选：
 //   confirmLabel / cancelLabel —— 覆盖默认 YES / NO 文案；
+//   html —— 正文按原始 HTML 渲染（调用方须自行 escapeHtml 动态内容），用于多行文案（<br>）；
 //   onExpire —— 覆盖超时动作。⚠️ 用 hasOwnProperty 判存，传 **null 表示「超时什么都不做」**
 //     （只收起卡片）；当 onCancel 具有破坏性（如丢弃未保存的修改）时必须传 null，
 //     否则「用户只是走神了」会被判定成「用户选了取消」。不传则沿用 onCancel（旧行为）。
@@ -874,6 +882,7 @@ function showConfirmToast(message, onConfirm, onCancel, opts) {
         icon: 'fa-question-circle',
         title: TOAST_TITLES.confirm,
         body: message,
+        html: opts.html === true,
         layout: 'col',
         life: 30000,
         progress: false,
@@ -1628,6 +1637,10 @@ function filterTasks(taskList, opts) {
     }
     const hasTagFilter = currentTagIds && currentTagIds.length > 0;
     const tagSet = hasTagFilter ? new Set(currentTagIds) : null;
+    // 人员快捷筛选（FR-05）：任务提及派生字段 peopleIds 包含该成员
+    const hasPersonFilter = !!currentPersonId;
+    // 「我在等谁」快捷筛选（FR-08）：未完成且含等待标记
+    const hasWaitingFilter = !!currentWaitingFilter;
 
     // 侧边栏特殊时间筛选（今天/明天/最近3天/最近7天）的时间边界
     const specialRange = getSpecialTimeFilterRange();
@@ -1641,6 +1654,8 @@ function filterTasks(taskList, opts) {
             cf = {};
             if (c.listIds && c.listIds.length > 0) cf.listSet = new Set(c.listIds);
             if (c.tagIds && c.tagIds.length > 0) cf.tagSet = new Set(c.tagIds);
+            if (c.peopleIds && c.peopleIds.length > 0) cf.peopleSet = new Set(c.peopleIds);
+            if (c.waitingOnly === true) cf.waitingOnly = true;
             if (c.important === true) cf.important = true;
             else if (c.important === false) cf.important = false;
             if (c.urgent === true) cf.urgent = true;
@@ -1743,6 +1758,12 @@ function filterTasks(taskList, opts) {
             if (!pass) continue;
         }
 
+        // 人员快捷筛选（FR-05）
+        if (hasPersonFilter && !(task.peopleIds || []).includes(currentPersonId)) continue;
+
+        // 「我在等谁」快捷筛选（FR-08）
+        if (hasWaitingFilter && (task.completed || !(task.waitingForIds || []).length)) continue;
+
         // 侧边栏特殊时间筛选（今天/明天/最近3天/最近7天）
         if (specialRange) {
             if (!task.startTime) continue;
@@ -1761,10 +1782,19 @@ function filterTasks(taskList, opts) {
                 }
                 if (!pass) continue;
             }
+            if (cf.peopleSet) {
+                const taskPeople = task.peopleIds || [];
+                let pass = false;
+                for (let j = 0; j < taskPeople.length; j++) {
+                    if (cf.peopleSet.has(taskPeople[j])) { pass = true; break; }
+                }
+                if (!pass) continue;
+            }
             if (cf.important === true && !task.important) continue;
             if (cf.important === false && task.important) continue;
             if (cf.urgent === true && !task.urgent) continue;
             if (cf.urgent === false && task.urgent) continue;
+            if (cf.waitingOnly && (task.completed || !(task.waitingForIds || []).length)) continue;
             if (cf.timeCheck && !cf.timeCheck(task)) continue;
         }
 
@@ -1779,9 +1809,7 @@ function filterTasks(taskList, opts) {
     return filtered;
 }
 
-// 生成标签胶囊HTML（用于各视图中的任务项）
-// maxDisplay: 最多显示几个标签胶囊，超出显示+N
-// position: 'left' 或 'right'，决定胶囊在任务标题的哪一侧
+// 标签索引与徽章文字色工具（供下方 renderTagCapsules 及各处标签选择器复用）
 // 使用 _getTagsByIdMap() 预构建索引，消除每任务 allTags.find 的 O(N×M) 线性查找
 let _tagsByIdMapCache = null;
 let _tagsByIdMapSig = null;
@@ -1878,46 +1906,310 @@ function getTagSolidStyle(color) {
         '--tag-solid-ink-dark:' + info.dark.ink + ';';
 }
 
+// ==================== 标签胶囊：自适应折叠 + 「+N」悬浮气泡 ====================
+// maxDisplay:
+//   number  → 固定阈值（月单天浮层 / 模板预览等窄容器）
+//   'auto'  → 按容器实测可用宽度决定能放几个（主列表类视图 + 看板卡片）
+// position：兼容旧调用点保留；标签在标题左侧还是右侧由调用点的模板结构决定，不参与渲染
+// 结构约定：容器内恒渲染全部胶囊，多余者由 syncAutoTags 加 hidden 属性；
+//   「+N」内嵌气泡，气泡内只列被折叠的标签（无标题文案），胶囊与行内完全同款
+//   （同一套 class / 配色 / 字号），仅按 data-tag-index 一一对应；
+//   气泡胶囊不带 detail-tag-pill，避免描边与尺寸不一致。
+//   常态严格单行（胶囊 nowrap + flex-shrink:0，放不下自动收进 +N）；
+//   仅用户主动点开的展开态允许换行（is-expanded）。
+//   不再生成 .tag-capsules-full 双份 DOM，展开态只是把 hidden 全部撤销，故不会丢 gap。
+const TAG_FIT_TITLE_MIN = 180;   // inline 模式下给标题保留的最小可读宽度（px）
+const TAG_FIT_SAFETY = 8;        // 测量余量（px）
+const TAG_FIT_MORE_WIDTH = 24;   // 「+N」触发点预留宽度（px）
+const TAG_FIT_GAP = 4;           // 胶囊 gap-1（px）
+const _tagCapsulesExpanded = new Set();   // taskId → 原位展开态（重渲染不复位）
+const _tagCapsuleWidthCache = new Map();  // tagId → 胶囊实测宽度
+let _autoTagsScheduled = false;
+let _tagFitFontSig = '';                  // 字体签名：设置面板改字体后宽度缓存须整体失效
+
+function _estimateTagWidth(text) {
+    let units = 0;
+    const s = String(text || '');
+    for (let i = 0; i < s.length; i++) units += /[\u4e00-\u9fff]/.test(s[i]) ? 10 : 6;
+    return 12 + units + 2;
+}
+
 function renderTagCapsules(task, maxDisplay = 2, position = 'left') {
     const taskTags = task.tags || [];
     if (taskTags.length === 0) return '';
 
     const tagMap = _getTagsByIdMap();
-    const displayTags = taskTags.slice(0, maxDisplay);
-    const remaining = taskTags.length - maxDisplay;
+    const auto = (maxDisplay === 'auto');
+    // auto 模式首帧全部可见，供 syncAutoTags 在同一次 rAF 内量到真实宽度后再回收
+    const limit = auto ? taskTags.length : Math.max(0, Number(maxDisplay) || 0);
+    const expanded = _tagCapsulesExpanded.has(task.id);
+    const idAttr = escapeHtml(String(task.id == null ? '' : task.id));
 
-    const capsules = displayTags.map(tagId => {
+    const capsules = [];
+    const bubblePills = [];
+    for (let idx = 0; idx < taskTags.length; idx++) {
+        const tagId = taskTags[idx];
         const tag = tagMap.get(tagId);
-        if (!tag) return '';
-        const displayName = tag.name.length > 8 ? tag.name.substring(0, 8) + '…' : tag.name;
-        return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: var(--text-primary)">${displayName}</span>`;
-    }).filter(Boolean).join('');
+        if (!tag) continue;
+        const name = String(tag.name || '');
+        const displayName = name.length > 8 ? name.substring(0, 8) + '…' : name;
+        const safeName = escapeHtml(displayName);
+        const color = escapeHtml(tag.color || '#6b7280');
+        const hidden = (!expanded && idx >= limit) ? ' hidden' : '';
+        // 行内胶囊与气泡内胶囊共用同一份 class / 内联配色，保证视觉完全一致
+        const capsuleClass = 'tag-capsule inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight';
+        const capsuleStyle = 'background-color:' + color + '33;color:var(--text-primary)';
+        capsules.push('<span class="' + capsuleClass + '" data-tag-id="' + escapeHtml(String(tagId)) + '" data-tag-index="' + capsules.length + '"' + hidden + ' style="' + capsuleStyle + '">' + safeName + '</span>');
+        // 气泡只列被折叠的标签；初始按 limit 分配，syncAutoTags 会按实测结果校正
+        bubblePills.push('<span class="' + capsuleClass + ' tag-more-pill" data-tag-index="' + bubblePills.length + '"' + (hidden ? '' : ' hidden') + ' style="' + capsuleStyle + '">' + safeName + '</span>');
+    }
+    if (!capsules.length) return '';
 
-    const moreHtml = remaining > 0 ? `<span class="text-[10px] text-theme-muted cursor-pointer hover:text-theme-primary transition" onclick="event.stopPropagation(); expandTagCapsules(this, '${task.id}')" title="点击展开全部标签">+${remaining}</span>` : '';
+    const total = capsules.length;
+    const hiddenCount = Math.max(0, total - limit);
+    const moreHidden = (!expanded && hiddenCount === 0) ? ' hidden' : '';
+    const moreLabel = expanded ? '−' : '+' + hiddenCount;
+    // +N 已改为悬浮气泡展示被折叠标签，不再挂原生 title（避免与气泡叠出两层提示）。
+    // 仅保留 aria-label 供读屏器说明按钮作用。
+    const moreAria = expanded ? '收起标签' : '展开全部标签';
 
-    // 隐藏的完整标签列表
-    const allCapsules = taskTags.map(tagId => {
-        const tag = tagMap.get(tagId);
-        if (!tag) return '';
-        const displayName = tag.name.length > 8 ? tag.name.substring(0, 8) + '…' : tag.name;
-        return `<span class="inline-flex items-center px-1.5 py-0 rounded-full text-[10px] leading-tight" style="background-color: ${tag.color}33; color: var(--text-primary)">${displayName}</span>`;
-    }).filter(Boolean).join('');
+    const moreHtml = '<span class="tag-more" tabindex="0" role="button" aria-label="' + moreAria + '"' + moreHidden +
+        ' onclick="event.stopPropagation(); toggleTagCapsules(this)"' +
+        ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();toggleTagCapsules(this)}">' +
+        '<span class="tag-more-label">' + moreLabel + '</span>' +
+        '<span class="tag-more-bubble" onclick="event.stopPropagation()">' +
+        '<span class="tag-more-bubble-pills">' + bubblePills.join('') + '</span>' +
+        // 注明点击行为：气泡 hover 展示与点击原位展开是两条路径，不写明会被理解为「点了就该看气泡」（M5）
+        '<span class="tag-more-bubble-hint">点击展开到标题内</span>' +
+        '</span></span>';
 
-    const hiddenFull = taskTags.length > maxDisplay ? `<span class="hidden tag-capsules-full">${allCapsules}</span>` : '';
-
-    return `<span class="inline-flex items-center gap-1 flex-shrink-0 tag-capsules-container" data-task-id="${task.id}">${capsules}${moreHtml}${hiddenFull}</span>`;
+    return '<span class="tag-capsules-container inline-flex items-center gap-1 flex-shrink-0' + (auto ? ' tag-capsules-auto' : '') + '"' +
+        ' data-task-id="' + idAttr + '" data-limit="' + limit + '" data-expanded="' + (expanded ? '1' : '0') + '">' +
+        capsules.join('') + moreHtml + '</span>';
 }
 
-function expandTagCapsules(el, taskId) {
-    const container = el.closest('.tag-capsules-container');
+// 旧入口名保留为别名，避免历史模板里的 expandTagCapsules 失效
+function expandTagCapsules(el) { toggleTagCapsules(el); }
+
+function toggleTagCapsules(el) {
+    const container = el && el.closest ? el.closest('.tag-capsules-container') : null;
     if (!container) return;
-    const full = container.querySelector('.tag-capsules-full');
-    if (full) {
-        full.classList.remove('hidden');
-        // 隐藏前面的部分胶囊和+N
-        const capsules = container.querySelectorAll(':scope > span:not(.tag-capsules-full)');
-        capsules.forEach(s => s.classList.add('hidden'));
+    const id = container.getAttribute('data-task-id');
+    if (!id) return;
+    if (_tagCapsulesExpanded.has(id)) _tagCapsulesExpanded.delete(id);
+    else _tagCapsulesExpanded.add(id);
+    scheduleAutoTagsSync();
+}
+
+// ---------- 容器实测：先批量读、再统一写，避免逐行读写触发 layout thrashing ----------
+function _tagFitGapOf(el) {
+    const s = getComputedStyle(el);
+    return parseFloat(s.columnGap || s.gap || '0') || 0;
+}
+
+function _tagFitCount(widths, budget) {
+    let used = 0, n = 0;
+    for (let i = 0; i < widths.length; i++) {
+        const w = widths[i] + TAG_FIT_GAP;
+        if (used + w > budget) break;
+        used += w; n++;
     }
+    return n;
+}
+
+function syncAutoTags(root) {
+    const scope = root || document;
+    const containers = Array.prototype.slice.call(scope.querySelectorAll('.tag-capsules-container'));
+    if (!containers.length) return;
+    const bodyStyle = getComputedStyle(document.body);
+    const fontSig = bodyStyle.fontFamily + '|' + bodyStyle.fontSize;
+    if (fontSig !== _tagFitFontSig) {
+        _tagCapsuleWidthCache.clear();
+        _tagFitFontSig = fontSig;
+    }
+    const plans = [];
+
+    // ---- 读阶段：只测量，不写 DOM ----
+    for (let ci = 0; ci < containers.length; ci++) {
+        const container = containers[ci];
+        const capsules = Array.prototype.slice.call(container.querySelectorAll(':scope > .tag-capsule'));
+        if (!capsules.length) continue;
+        const more = container.querySelector(':scope > .tag-more');
+        if (!more) continue;
+        const bubblePills = Array.prototype.slice.call(container.querySelectorAll('.tag-more-pill'));
+        const total = capsules.length;
+        const expanded = _tagCapsulesExpanded.has(container.getAttribute('data-task-id'));
+        const limit = parseInt(container.getAttribute('data-limit') || '2', 10) || 0;
+        const isAuto = container.classList.contains('tag-capsules-auto');
+
+        const widths = isAuto ? capsules.map(c => {
+            const key = c.getAttribute('data-tag-id') || c.textContent || '';
+            let w = _tagCapsuleWidthCache.get(key);
+            if (w == null) {
+                const r = c.getBoundingClientRect();
+                w = r.width > 0 ? r.width : _estimateTagWidth(c.textContent);
+                if (r.width > 0) _tagCapsuleWidthCache.set(key, w);
+            }
+            return w;
+        }) : [];
+
+        let count = limit;
+        let available = 0;
+        if (isAuto) {
+            const metaRow = container.parentElement;
+            const row = container.closest('.task-row') || metaRow;
+            if (metaRow && row) {
+                // meta 行是 task-row 的直接子元素 → 标题与标签同行，按「标题保底」口径；
+                // 否则是卡片内独立 meta 行（标题在下一行），整行剩余都给标签。
+                const inlineMode = (metaRow.parentElement === row);
+                const metaGap = _tagFitGapOf(metaRow);
+                let otherMetaWidth = 0, metaSiblings = 0;
+                Array.prototype.forEach.call(metaRow.children, ch => {
+                    if (ch === container) return;
+                    const r = ch.getBoundingClientRect();
+                    if (r.width > 0) { otherMetaWidth += r.width; metaSiblings++; }
+                });
+                otherMetaWidth += metaGap * metaSiblings;
+                if (inlineMode) {
+                    const rowGap = _tagFitGapOf(row);
+                    let fixedWidth = 0, fixedSiblings = 0, titleSeen = false;
+                    Array.prototype.forEach.call(row.children, ch => {
+                        if (ch === metaRow) return;
+                        if (!titleSeen && ch.classList && ch.classList.contains('flex-1')) { titleSeen = true; return; }
+                        const r = ch.getBoundingClientRect();
+                        if (r.width > 0) { fixedWidth += r.width; fixedSiblings++; }
+                    });
+                    available = row.getBoundingClientRect().width
+                        - TAG_FIT_TITLE_MIN - fixedWidth - rowGap * (fixedSiblings + 1)
+                        - otherMetaWidth - TAG_FIT_SAFETY;
+                } else {
+                    available = metaRow.getBoundingClientRect().width - otherMetaWidth - TAG_FIT_SAFETY;
+                }
+                available = Math.max(0, available);
+                // 先按满预算试排；放不下才为「+N」预留位置再排一次
+                count = _tagFitCount(widths, available);
+                if (count < total) count = _tagFitCount(widths, Math.max(0, available - TAG_FIT_MORE_WIDTH));
+                if (count === 0 && total > 0) count = 1;
+            } else {
+                count = total;
+            }
+        }
+        plans.push({ container, capsules, bubblePills, more, total, count, available, expanded });
+    }
+
+    // ---- 写阶段 ----
+    for (let pi = 0; pi < plans.length; pi++) {
+        const p = plans[pi];
+        const showCount = p.expanded ? p.total : p.count;
+        const hiddenCount = Math.max(0, p.total - p.count);
+        for (let i = 0; i < p.capsules.length; i++) p.capsules[i].hidden = (i >= showCount);
+        for (let i = 0; i < p.bubblePills.length; i++) p.bubblePills[i].hidden = (i < showCount);
+        const labelEl = p.container.querySelector('.tag-more-label');
+        if (labelEl) labelEl.textContent = p.expanded ? '−' : '+' + hiddenCount;
+        p.more.hidden = p.expanded ? false : (hiddenCount <= 0);
+        // 与 renderTagCapsules 保持一致：+N 不挂原生 title 提示
+        p.more.removeAttribute('title');
+        p.more.setAttribute('aria-label', p.expanded ? '收起标签' : '展开全部标签');
+        p.container.classList.toggle('is-expanded', p.expanded);
+        p.container.setAttribute('data-expanded', p.expanded ? '1' : '0');
+        p.container.style.maxWidth = (p.expanded && p.available > 0) ? Math.max(120, Math.round(p.available)) + 'px' : '';
+    }
+    _syncTagBubbleFlips();
+}
+
+// ---------- 气泡方向：默认向下展开，下方空间不足才向上翻转 ----------
+// 找真正会裁剪气泡的滚动祖先；跳过行内 overflow-hidden 的小容器（高度 < 80px），
+// 否则一个 12px 高的 meta 行会被当成边界，误判成「下方没有空间」。
+function _tagBubbleClipRect(el) {
+    let p = el.parentElement;
+    while (p && p !== document.body) {
+        const s = getComputedStyle(p);
+        if (s.overflowX !== 'visible' || s.overflowY !== 'visible') {
+            const r = p.getBoundingClientRect();
+            if (r.height >= 80) return r;
+        }
+        p = p.parentElement;
+    }
+    return { top: 0, bottom: window.innerHeight || 800, left: 0, right: window.innerWidth || 1200 };
+}
+
+let _tagBubbleFlipScheduled = false;
+function _syncTagBubbleFlips() {
+    const bubbles = Array.prototype.slice.call(document.querySelectorAll('.tag-more-bubble'));
+    if (!bubbles.length) return;
+    const plans = [];
+    // 读阶段：只测量，不写 class
+    for (let i = 0; i < bubbles.length; i++) {
+        const bubble = bubbles[i];
+        const more = bubble.parentElement;
+        if (!more || more.hidden || getComputedStyle(bubble).display === 'none') continue;
+        const bh = bubble.getBoundingClientRect().height;
+        if (!bh) continue;
+        const mr = more.getBoundingClientRect();
+        const clip = _tagBubbleClipRect(bubble);
+        const gap = 8, pad = 6;
+        const below = clip.bottom - mr.bottom - gap - pad;
+        const above = mr.top - clip.top - gap - pad;
+        // 下方放不下、且上方空间更大时才向上；上下都不够时留在空间较大的一侧
+        plans.push({ bubble, flip: below < bh && above > below });
+    }
+    // 写阶段：仅状态变化时改 class，避免无谓的 DOM 写入
+    for (let i = 0; i < plans.length; i++) {
+        const p = plans[i];
+        if (p.bubble.classList.contains('flip-up') !== p.flip) p.bubble.classList.toggle('flip-up', p.flip);
+    }
+}
+
+function scheduleTagBubbleFlips() {
+    if (_tagBubbleFlipScheduled) return;
+    _tagBubbleFlipScheduled = true;
+    requestAnimationFrame(() => {
+        _tagBubbleFlipScheduled = false;
+        try { _syncTagBubbleFlips(); } catch (e) { /* 测量失败不影响主流程 */ }
+    });
+}
+
+function scheduleAutoTagsSync() {
+    if (_autoTagsScheduled) return;
+    _autoTagsScheduled = true;
+    requestAnimationFrame(() => {
+        _autoTagsScheduled = false;
+        try { syncAutoTags(document); } catch (e) { /* 单次测量失败不影响主流程 */ }
+    });
+}
+
+function _initAutoTags() {
+    if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => scheduleAutoTagsSync());
+        ['main-content', 'view-container'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) ro.observe(el);
+        });
+    }
+    if (typeof MutationObserver !== 'undefined') {
+        // 懒加载追加行、命令面板分批结果、浮层插入都由这里兜底；
+        // 只认 Element 新增，忽略 syncAutoTags 自己写入的文本节点，避免自触发循环。
+        const mo = new MutationObserver(list => {
+            for (let i = 0; i < list.length; i++) {
+                const nodes = list[i].addedNodes;
+                for (let j = 0; j < nodes.length; j++) {
+                    const n = nodes[j];
+                    if (!n || n.nodeType !== 1) continue;
+                    if ((n.matches && n.matches('.tag-capsules-container')) ||
+                        (n.querySelector && n.querySelector('.tag-capsules-container'))) {
+                        scheduleAutoTagsSync();
+                        return;
+                    }
+                }
+            }
+        });
+        mo.observe(document.body, { childList: true, subtree: true });
+    }
+    window.addEventListener('resize', scheduleAutoTagsSync);
+    // 滚动会改变「下方可用空间」，capture 覆盖看板列 / 主内容区等所有滚动容器；
+    // 只重算气泡方向，不做全量 sync，避免滚动时反复测量全部标签容器。
+    document.addEventListener('scroll', scheduleTagBubbleFlips, true);
+    scheduleAutoTagsSync();
 }
 
 function sortTasksByCompletion(taskList) {
@@ -2147,7 +2439,9 @@ function _saveFilterState() {
             currentListId: currentListId,
             currentFilter: currentFilter,
             currentTagIds: currentTagIds,
-            currentFilterId: currentFilterId
+            currentFilterId: currentFilterId,
+            currentPersonId: currentPersonId,
+            currentWaitingFilter: currentWaitingFilter
         }));
     } catch (e) { /* 忽略 quota 错误 */ }
 }
@@ -2245,7 +2539,11 @@ function onViewConfigPanelOutside(e) {
     if (!top) return;
     const panel = document.getElementById(top.panelId);
     if (panel && panel.contains(e.target)) return;
-    if (top.btnId && e.target.closest && e.target.closest('#' + top.btnId)) return;
+    // btnId 可为 id（无前缀，兼容既有注册）、id 选择器或 class 选择器（过滤器面板入口是一组按钮）
+    if (top.btnId && e.target.closest) {
+        const sel = /^[.#[]/.test(top.btnId) ? top.btnId : '#' + top.btnId;
+        if (e.target.closest(sel)) return;
+    }
     closeViewConfigPanel(top.key);
 }
 
@@ -3508,4 +3806,429 @@ function normalizePositiveIntInput(el) {
     }
     if (raw !== '') el.value = '';
     return 0;
+}
+
+// ==================== 人员功能（一期）：提及解析 / 拼音首字母 / 复制 / 索引 ====================
+// 设计口径见《需求文档_人员功能.md》：正文即事实，task.peopleIds 是派生缓存。
+// 解析、渲染（markdown.js mdInline）、改名/合并改写三处共用同一套定位规则。
+
+// 人员快捷筛选（单选，与清单/标签/过滤器互斥）
+let currentPersonId = null;
+// 「我在等谁」快捷筛选（FR-08）：未完成且 waitingForIds 非空；与联系人快捷筛选互斥
+let currentWaitingFilter = false;
+
+function normalizePersonName(name) {
+    return String(name == null ? '' : name).trim().replace(/\s+/g, '').toLowerCase();
+}
+
+// 人员索引缓存：签名覆盖 id/name/aliases/pinyinAlias/archived，改名/改别名/改全拼/归档即时失效
+let _peopleMapSig = null;
+let _peopleByIdCache = null;
+let _peopleByNameCache = null;
+function _getPeopleMaps() {
+    const arr = (typeof settings !== 'undefined' && Array.isArray(settings.people)) ? settings.people : [];
+    let sig = String(arr.length);
+    for (let i = 0; i < arr.length; i++) {
+        const p = arr[i];
+        sig += '|' + p.id + ':' + p.name + ':' + (Array.isArray(p.aliases) ? p.aliases.join(',') : '') + ':' + (p.archived ? 1 : 0) + ':' + String(p.pinyinAlias || '');
+    }
+    if (sig !== _peopleMapSig) {
+        _peopleMapSig = sig;
+        _peopleByIdCache = new Map();
+        _peopleByNameCache = new Map();
+        arr.forEach(function (p) {
+            _peopleByIdCache.set(p.id, p);
+            _peopleByNameCache.set(normalizePersonName(p.name), p);
+            // 系统托管全拼与正名/别名同口径登记：@全拼 命中后才能在 byName 回查到人
+            const pk = normalizePersonName(p.pinyinAlias);
+            if (pk && !_peopleByNameCache.has(pk)) _peopleByNameCache.set(pk, p);
+            (Array.isArray(p.aliases) ? p.aliases : []).forEach(function (a) {
+                const key = normalizePersonName(a);
+                if (key && !_peopleByNameCache.has(key)) _peopleByNameCache.set(key, p);
+            });
+        });
+    }
+    return { byId: _peopleByIdCache, byName: _peopleByNameCache };
+}
+// 人员的全部可提及名（正名 + 别名 + 系统托管全拼，去空白、按归一化键去重）
+// 全拼别名（person.pinyinAlias）默认可用，与正名/别名一样参与提及解析、改名/合并改写与搜索。
+function getPersonAllNames(person) {
+    if (!person) return [];
+    const out = [];
+    const seen = {};
+    const push = function (n) {
+        const v = String(n == null ? '' : n).trim();
+        const k = normalizePersonName(v);
+        if (v && !seen[k]) { seen[k] = true; out.push(v); }
+    };
+    push(person.name);
+    (Array.isArray(person.aliases) ? person.aliases : []).forEach(push);
+    push(person.pinyinAlias);
+    return out;
+}
+function getPersonById(id) {
+    return _getPeopleMaps().byId.get(id) || null;
+}
+
+function _escapeRegExp(str) {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 代码区遮罩：围栏代码块与行内代码内的 @ 不解析；用空格替换保留偏移与换行
+function _maskMentionCodeRegions(text) {
+    let s = String(text).replace(/```[\s\S]*?(?:```|$)/g, function (m) { return m.replace(/[^\n]/g, ' '); });
+    s = s.replace(/`[^`\n]+`/g, function (m) { return m.replace(/[^\n]/g, ' '); });
+    return s;
+}
+
+// 提及定位正则：@ 前为行首/空白（排除邮箱）；名字最长匹配优先；后随字符不得是字母/数字/汉字
+// （等价于「空白、中英文标点或行尾」）。含归档成员与全部别名；忽略大小写。
+// onlyName 可为字符串或字符串数组（改名时传入旧正名+旧别名）。
+function buildPeopleMentionRegex(onlyName) {
+    let names;
+    if (onlyName != null) {
+        names = (Array.isArray(onlyName) ? onlyName : [onlyName]).map(function (n) { return String(n).trim(); }).filter(Boolean);
+    } else {
+        const arr = (typeof settings !== 'undefined' && Array.isArray(settings.people)) ? settings.people : [];
+        names = [];
+        arr.forEach(function (p) { getPersonAllNames(p).forEach(function (n) { names.push(n); }); });
+    }
+    names = Array.from(new Set(names)).sort(function (a, b) { return b.length - a.length; });
+    if (!names.length) return null;
+    return new RegExp('(^|\\s)@(' + names.map(_escapeRegExp).join('|') + ')(?![\\w\\u4e00-\\u9fff])', 'gi');
+}
+
+// 解析正文提及 → [{ id, name, start, end }]（start/end 为含 @ 的原文偏移）
+function parsePeopleMentions(text) {
+    const src = String(text == null ? '' : text);
+    const re = buildPeopleMentionRegex();
+    if (!re || !src) return [];
+    const masked = _maskMentionCodeRegions(src);
+    const byName = _getPeopleMaps().byName;
+    const out = [];
+    let m;
+    while ((m = re.exec(masked)) !== null) {
+        const p = byName.get(normalizePersonName(m[2]));
+        if (!p) continue;
+        const start = m.index + m[1].length;
+        out.push({ id: p.id, name: p.name, start: start, end: start + 1 + m[2].length });
+    }
+    return out;
+}
+
+// 任务的「正文」口径与详情面板一致：text 模式在 notes，subtasks 模式在 description
+function getTaskMentionSource(task) {
+    if (!task) return '';
+    return task.mode === 'subtasks' ? (task.description || '') : (task.notes || '');
+}
+
+// 重算派生缓存；返回是否有变化（供调用方决定 touchTask）
+// FR-08：waitingForIds 恒为 peopleIds 子集——所有重算入口（详情保存/改名/合并/迁移/建任务）
+// 统一在此裁剪，提及被删除时等待标记同步失效，无需各调用方自行维护。
+function recomputeTaskPeopleIds(task) {
+    if (!task) return false;
+    const ms = parsePeopleMentions(getTaskMentionSource(task));
+    const ids = [];
+    ms.forEach(function (m) { if (ids.indexOf(m.id) === -1) ids.push(m.id); });
+    const prev = Array.isArray(task.peopleIds) ? task.peopleIds : [];
+    let changed = prev.length !== ids.length || prev.some(function (id, i) { return id !== ids[i]; });
+    task.peopleIds = ids;
+    if (Array.isArray(task.waitingForIds) && task.waitingForIds.length) {
+        const kept = task.waitingForIds.filter(function (id) { return ids.indexOf(id) !== -1; });
+        if (kept.length !== task.waitingForIds.length) {
+            task.waitingForIds = kept;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+// 改名/合并：把全部任务正文中的 @旧名（可为数组：旧正名+旧别名）改写为 @新名（跳过代码区），重算 peopleIds。
+// 返回受影响任务数。低频操作，线性遍历全部任务。
+function rewritePersonMentionsInTasks(oldName, newName) {
+    const re = buildPeopleMentionRegex(oldName);
+    if (!re || typeof tasks === 'undefined' || !Array.isArray(tasks)) return 0;
+    let affected = 0;
+    tasks.forEach(function (task) {
+        const field = task.mode === 'subtasks' ? 'description' : 'notes';
+        const src = String(task[field] || '');
+        if (!src) return;
+        const masked = _maskMentionCodeRegions(src);
+        re.lastIndex = 0;
+        if (!re.test(masked)) return;
+        re.lastIndex = 0;
+        // 遮罩区还原：仅替换非代码区命中，代码区内容保持原样
+        let out = '';
+        let cursor = 0;
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(masked)) !== null) {
+            const at = m.index + m[1].length;
+            out += src.slice(cursor, at) + '@' + newName;
+            cursor = at + 1 + m[2].length;
+        }
+        out += src.slice(cursor);
+        if (out === src) return;
+        task[field] = out;
+        recomputeTaskPeopleIds(task);
+        if (typeof touchTask === 'function') touchTask(task);
+        affected++;
+    });
+    return affected;
+}
+
+// ---------- 拼音（全拼词典 + 姓氏特殊读音；首字母兜底用边界字比较法） ----------
+// 全拼采用自带常用字词典（约 6000 字），在线/离线结果一致，不依赖浏览器 ICU collation。
+// 词典按「音节:汉字」紧凑编码，加载时展开为 字→音节 映射；未收录的罕见字回退到首字母边界法。
+const _PINYIN_DICT_RAW = 'a:阿啊腌 ai:哀挨癌矮艾碍爱隘暧霭 an:安氨庵俺暗岸按案黯 ang:肮昂盎 ao:凹熬傲奥澳懊袄翱敖 ba:八巴扒吧疤芭笆捌跋把靶坝霸罢爸鲅 bai:白百佰摆败拜稗柏 ban:班般搬斑扳颁板版办半伴扮瓣绊 bang:帮邦梆榜膀绑棒磅谤蚌 bao:包胞炮剥褒雹宝饱保堡报抱暴爆豹刨鲍 bei:杯卑悲碑贝狈备背倍辈被蓓焙悖碚鹎邶 ben:奔苯本笨坌贲 beng:崩绷甭泵迸蹦甏 bi:逼鼻比彼笔鄙币必毕闭毙碧蔽壁避臂匕璧婢敝蓖痹裨筚箅薜荸芘萆哔狴庳愎滗濞弼妣髀畀苾 bian:边编鞭扁便变遍辨辩辫匾贬卞弁苄汴蝙碥窆笾 biao:标彪膘表婊裱骠飙飚镖鳔 bie:别憋瘪鳖蹩 bin:宾滨彬斌缤濒殡摈膑髌鬓 bing:兵冰丙柄饼秉炳病并摒邴 bo:玻波播拨钵勃博搏脖膊舶薄跛簸礴铂箔帛渤亳鹁踣伯 bu:捕补卜布步部不簿哺怖埠卟逋瓿晡钚醭 ca:擦嚓礤 cai:猜才材财裁采彩菜蔡踩 can:餐参蚕残惭惨灿粲璨骖黪 cang:仓苍舱藏沧伧 cao:操曹槽糙草嘈漕螬艚 ce:册侧测策厕恻 cen:岑涔 ceng:层曾蹭噌 cha:插查茶察差岔叉茬碴搽杈楂槎檫钗诧姹衩汊 chai:拆柴豺侪 chan:搀掺蝉馋谗缠铲产阐颤忏潺蟾廛澶骣觇蒇谄冁 chang:昌猖长场尝常偿肠厂敞畅唱倡怅徜嫦氅菖鲳 chao:超抄吵潮巢朝嘲炒钞剿晁焯 che:车扯撤彻澈掣坼砗 chen:尘臣沉辰陈晨衬趁称忱郴宸谌碜嗔抻榇龀 cheng:撑城成承乘程惩澄诚骋逞铛丞枨柽蛏酲裎塍瞠铖 chi:吃痴迟持池驰尺齿耻斥赤翅匙炽敕啻嗤侈褫彳笞篪茌蚩螭魑饬 chong:充冲虫崇宠憧忡铳舂艟 chou:抽仇愁筹酬丑瞅臭惆畴踌稠绸俦帱雠 chu:初出除厨楚础储处触畜矗锄橱躇雏搐怵绌杵楮樗蜍黜 chuai:揣搋啜嘬膪 chuan:川穿传船喘串椽舛遄氚钏 chuang:创窗床闯幢怆 chui:吹垂锤炊捶陲棰槌 chun:春纯唇醇蠢椿鹑蝽莼淳 chuo:戳绰辍龊淖踔 ci:词此次刺赐慈瓷辞磁雌茨祠疵茈泚跐 cong:聪从丛葱匆淙琮璁枞苁骢 cou:凑楱辏腠 cu:粗促醋簇卒猝蹴徂殂酢蹙 cuan:窜蹿攒篡汆撺镩爨 cui:催崔摧脆翠萃粹淬悴瘁璀啐榱毳 cun:村存寸忖皴 cuo:错措搓挫撮磋嵯痤矬瘥鹾脞 da:搭达答打大瘩耷哒嗒怛妲疸褡笪靼鞑 dai:呆待代带戴袋贷逮歹傣岱甙黛迨绐玳殆 dan:丹单担胆旦但诞弹淡蛋氮惮郸殚箪瘅赕眈聃萏啖澹 dang:当挡党荡档裆宕砀菪谠 dao:刀导岛倒蹈盗道稻悼捣叨祷焘纛氘 de:德得锝 den:扽 deng:灯登等瞪凳邓蹬噔嶝戥磴镫簦 di:低提滴迪敌笛底地弟帝递缔堤涤嘀狄邸蒂谛碲睇镝籴诋坻柢棣砥菂觌骶 dia:嗲 dian:颠典点电店殿淀甸掂滇癫巅佃钿靛癜簟踮坫阽 diao:刁雕调掉吊钓叼凋碉貂鲷铫铞 die:爹跌叠蝶碟迭谍牒喋堞揲耋蹀鳎鲽瓞 ding:丁顶定订钉盯叮鼎锭啶腚碇疔仃酊玎耵 diu:丢铥 dong:东冬动洞懂冻董栋咚岽鸫硐胨胴氡 dou:都兜斗抖豆逗陡痘蚪窦蔸篼 du:读独毒度渡肚杜督睹赌堵镀笃牍蠹椟犊黩髑顿芏 duan:端短断段锻缎椴煅簖 dui:堆对队兑碓憝怼镦 dun:吨盾蹲敦墩钝遁沌炖盹趸礅 duo:多夺朵躲踱堕舵剁惰垛跺掇裰铎哚缍沲柁 e:蛾额俄恶饿鹅扼遏愕噩鄂娥峨轭锇腭苊莪萼谔垩婀屙颚鹗鳄 ei:诶 en:恩蒽摁 eng:鞥 er:儿而二耳尔饵洱贰珥铒鸸鲕佴迩 fa:发法罚乏伐阀筏砝珐垡 fan:翻反返犯饭泛凡烦繁贩范帆藩幡梵樊燔蘩钒蹯 fang:方放房防访纺仿芳妨坊肪舫鲂邡枋钫 fei:飞非肥费废肺匪沸菲诽啡扉斐翡霏妃蜚腓痱芾淝悱狒榧篚鲱 fen:分份粉奋芬愤粪纷酚汾玢棼偾焚忿鼢 feng:风封丰峰锋蜂逢缝冯奉凤讽枫烽俸葑沣砜唪酆 fo:佛 fou:否缶 fu:夫福父甫府腐辅抚斧釜脯腑俯赴副富赋傅缚咐凫芙扶氟伏俘浮符袱辐蝠匐涪苻茯郛莩菔桴赙蚨蜉蝮鳆敷肤孵弗拂怫艴绋绂祓黻黼罘稃馥虍岪孚郙鄜麩 ga:嘎噶伽尬轧钆尕尜旮 gai:该改盖概溉丐钙芥赅垓陔戤 gan:干甘赶感敢杆肝竿柑秆尴赣橄擀泔苷矸疳酐澉淦绀旰 gang:刚钢岗港纲缸杠冈肛罡戆筻 gao:高告稿搞糕膏皋篙睾槁藁缟槔郜锆杲 ge:哥歌格革隔阁葛割鸽搁戈胳疙铬骼蛤舸嗝膈镉袼颌仡圪纥搿鬲硌哿 gei:给 gen:根跟亘艮茛哏 geng:更耕庚梗耿颈羹埂哽赓绠鲠 gong:工公共功供宫弓巩贡恭龚躬拱汞珙肱蚣觥 gou:沟够购构狗勾钩苟垢篝枸诟岣遘媾觏彀缑笱 gu:姑古故顾固股鼓骨谷估孤咕箍辜沽雇菇轱鸪瓜呱鹘蛊鹄臌瞽罟钴蛄菰蓇汩崮梏牯牿胍痼觚酤馉毂 gua:刮挂寡卦褂剐诖鸹 guai:乖怪拐掴 guan:关观管官馆贯惯冠灌罐棺莞倌纶鳏盥鹳矜涫掼祼 guang:光广逛桄胱犷 gui:归贵规桂鬼柜跪龟瑰轨圭闺硅傀癸刽炔刿匦匮晷簋鳜妫桧炅皈鲑宄庋 gun:棍滚衮绲磙辊鲧 guo:锅国过果郭裹涡椁帼聒虢馘崞埚呙猓蜾蝈 ha:哈铪 hai:孩海还害嗨亥骇氦胲醢 han:含寒韩喊汉汗旱罕憾撼翰涵函捍悍焊酣憨晗焓颔蚶邯邗菡撖瀚阚犴鼾 hang:航杭行巷夯沆绗珩颃吭 hao:好号毫豪浩耗郝壕嚎蒿蚝皓颢灏昊貉薅嚆濠 he:喝和河何合荷核贺盒赫鹤褐壑禾涸阖诃劾曷盍菏蚵翮阂 hei:黑嘿 hen:痕很狠恨 heng:恒横衡亨哼桁蘅 hong:轰红洪宏虹鸿哄烘弘泓訇蕻薨闳荭黉 hou:侯候后厚猴吼喉逅糇骺堠瘊篌鲎 hu:呼胡湖户护虎互糊忽狐壶沪蝴瑚葫弧唬惚琥扈瓠煳鹕醐觳冱怙岵猢淴滹烀轷戽祜笏 hua:花化华话画划哗桦猾骅铧砉滑 huai:怀坏淮徊槐踝 huan:欢环换唤患幻焕缓宦涣痪鬟桓寰洹奂浣鲩圜缳擐獾漶逭豢锾郇萑 huang:荒黄皇慌晃煌惶簧恍凰幌徨潢璜癀蟥遑隍肓磺篁鳇 hui:灰回会汇挥辉惠慧毁悔绘徽讳贿晦秽诲诙卉蕙烩彗缋珲晖茴蛔喙虺蟪麾隳洄浍哕恚 hun:昏婚魂浑混荤馄溷阍诨 huo:活火或获货伙惑霍豁夥藿嚯镬蠖钬锪耠劐攉 ji:击机鸡积基极及级即急集几己计记技际季纪济继寄寂迹绩吉脊棘籍辑嫉汲畸稽冀祭剂悸妓蓟伎暨霁骥玑矶羁笄箕髻麂戟戢殛赍犄嵇稷瘠虮跽跻唧屐剞偈芨芰苙蒺蕺掎叽咭哜喈嗟嵴洎彐畿楫齑忌姬 jia:家加佳嘉甲贾假价架驾嫁稼枷珈笳袈跏葭镓岬胛钾瘕郏荚颊蛱铗颉浃痂 jian:尖间件建坚减简见剑健监鉴键渐践艰肩兼检碱剪拣俭柬茧捡荐贱舰涧僭谏谮戋戬搛湔缣蒹鹣鲣鞯笕翦趼踺睑锏 jiang:江将讲奖降姜疆浆僵匠蒋桨酱缰犟豇礓耩糨洚绛 jiao:交教叫觉校脚较角焦娇骄搅缴绞饺矫蕉礁椒胶郊跤窖酵侥佼狡皎蛟鲛鹪僬艽茭峤徼湫敫皦姣纟 jie:街结节解姐接界借届杰洁捷截戒介竭劫桔睫疥诫楷秸孑讦诘疖婕碣鲒羯蚧骱 jin:今金进近尽紧斤劲晋禁津筋锦仅谨巾靳瑾烬缙馑廑妗卺荩衿觐赆 jing:京经精惊景静境警净竞敬镜睛晶荆兢茎鲸靖痉泾阱刭儆菁獍憬婧肼胫腈旌箐粳井 jiong:炯窘迥扃 jiu:究九久酒旧救就纠舅韭臼玖灸咎赳鸠阄柩桕僦厩啾鬏 ju:居局举句具据巨距聚剧拒菊惧矩鞠驹锯踞俱疽拘狙琚趄椐犋裾雎榉龃倨讵苣莒菹遽屦掬榘窭醵 juan:捐卷倦眷绢鹃娟圈鄄狷涓桊蠲锩镌 jue:决绝爵掘倔诀厥抉攫嚼矍崛獗蕨橛噱桷觖劂爝镢蹶孓珏 jun:军均君俊菌峻钧竣骏郡浚捃皲筠隽麇 ka:喀卡咖咔咯佧胩 kai:开凯慨揩铠恺蒈锎剀垲忾 kan:刊看堪砍坎勘嵌侃瞰龛戡莰 kang:康抗扛慷炕亢糠伉钪闶 kao:考靠烤拷铐栲尻犒 ke:科可克客刻课棵颗渴壳咳柯坷苛磕蝌轲疴瞌溘骒缂珂钶锞稞窠颏髁 kei:剋 ken:肯恳垦啃龈裉 keng:坑铿 kong:空控孔恐倥崆箜 kou:口扣寇叩抠蔻芤眍筘 ku:苦哭库裤酷枯窟骷刳堀喾绔 kua:夸跨垮挎胯侉 kuai:快块筷侩脍蒉郐哙狯蒯 kuan:宽款髋 kuang:狂况矿框旷眶筐匡哐诓邝圹夼纩贶 kui:亏愧溃葵魁馈窥盔奎逵夔喹愦揆暌睽聩篑跬悝岿馗隗 kun:昆困捆坤悃阃琨锟醌鲲髡 kuo:阔扩括廓蛞栝 la:垃拉啦腊辣蜡喇剌旯瘌邋砬 lai:来赖莱睐癞籁徕涞赉铼崃濑 lan:兰蓝篮栏拦览懒烂滥岚澜阑褴婪揽缆榄斓漤罱谰镧 lang:狼浪郎朗廊琅螂榔莨蒗啷锒稂阆 lao:老劳牢捞佬姥酪涝烙唠崂栳铑痨醪潦獠 le:乐了勒肋仂叻泐鳓 lei:雷累泪类蕾磊垒擂儡镭羸耒诔嫘缧檑酹 leng:冷愣楞棱塄 li:李里理礼丽力立利例历厉励砾隶粒沥荔俐痢莉莅笠雳溧漓璃黎篱狸离骊鹂鲡鳢锂俪郦坜苈藜蓠呖唳喱猁澧逦娌嫠缡枥栎轹戾砺詈罹疠疬蛎蜊蠡篥粝醴跞黧 lia:俩 lian:连联练炼恋怜莲帘廉镰敛涟琏殓裢濂臁奁蠊鲢 liang:良两量亮凉梁粮谅粱晾墚魉椋踉靓 liao:聊料辽疗瞭廖僚撩燎镣蓼尥钌鹩撂缭 lie:列烈裂劣猎冽咧趔洌捩埒躐鬣 lin:林临邻琳淋麟霖鳞凛吝赁蔺遴檩膦粼躏嶙廪懔潾辚瞵 ling:玲领令另灵岭铃龄凌陵菱伶苓聆翎泠蛉绫柃棂瓴酃鲮 liu:留流刘六柳溜硫瘤榴馏琉浏旒骝绺镏鹨鎏 long:龙隆笼拢聋陇垄珑窿茏泷栊胧砻癃 lou:楼漏搂陋篓娄喽蝼髅嵝蒌耧瘘镂 lu:露卢路陆鲁录鹿炉芦庐颅泸掳虏卤赂麓戮璐橹潞辘漉逯渌簏胪鸬舻鲈栌轳氇镥禄 luan:乱卵峦挛孪滦鸾銮脔娈栾 lun:论轮伦沦仑抡囵 luo:罗落洛骆络螺锣箩裸骡摞泺漯珞椤脶镙瘰倮猡荦萝逻雒 lv:吕旅绿律虑率铝侣屡缕氯滤驴榈闾褛稆膂 lve:略掠锊 m:呣 ma:妈马吗麻码骂玛摩蚂蟆抹犸杩嬷 mai:买卖麦迈埋脉霾劢荬 man:蛮满慢漫曼瞒馒蔓幔谩鳗墁螨镘颟鞔 mang:忙盲芒茫氓莽蟒邙硭漭 mao:毛冒帽猫貌茅茂贸锚髦卯矛铆袤茆峁泖昴牦旄耄瑁瞀蟊蝥懋 me:么 mei:眉没美每妹梅媒煤霉枚玫酶昧寐媚袂嵋湄猸镅鹛楣莓浼镁 men:门们闷焖扪钔懑 meng:蒙梦猛盟孟萌锰檬懵朦甍礞虻蜢蠓艋艨瞢 mi:迷米密蜜秘弥觅眯谜靡糜醚猕汨宓幂祢脒敉糸縻蘼麋咪嘧 mian:面棉免勉眠绵缅冕娩腼湎眄沔渑勔 miao:苗秒妙庙描瞄喵渺淼藐缈邈鹋杪眇 mie:灭蔑篾蠛乜 min:民敏闽悯皿抿岷泯缗玟珉愍黾鳘闵 ming:明名命鸣铭冥瞑螟茗溟暝 miu:谬缪 mo:摸模磨末莫默墨漠魔膜陌寞蓦馍摹茉殁秣镆瘼貊貘麽嫫 mou:谋某牟眸侔蛑鍪 mu:母木目幕牧墓慕暮募穆姆牡亩拇睦沐苜仫钼毪坶 n:嗯 na:拿那哪纳娜呐捺钠镎衲肭 nai:耐奶乃奈鼐萘柰氖艿 nan:男南难楠喃囡赧腩蝻 nang:囊囔馕攮曩 nao:脑闹恼挠瑙孬垴硇蛲猱 ne:呢讷 nei:内馁 nen:嫩恁 neng:能 ni:泥你尼逆拟腻倪匿溺霓昵坭铌猊怩伲旎睨鲵薿嶷妮 nian:年念粘黏捻撵碾蔫拈鲶埝辇 niang:娘酿嬢 niao:鸟尿袅脲茑嬲 nie:捏聂孽涅镊镍啮嗫臬蹑颞蘖陧 nin:您 ning:宁凝拧柠泞佞咛聍甯 niu:牛纽扭妞钮拗忸狃 nong:农弄浓侬脓哝秾 nou:耨 nu:奴努怒弩胬孥驽 nuan:暖 nuo:挪诺懦糯傩搦喏锘 nv:女钕恧衄 nve:虐疟 o:哦噢 ou:欧偶呕鸥殴藕沤讴瓯耦怄 pa:趴怕爬帕琶葩耙杷钯筢 pai:拍排牌派徘湃俳蒎哌 pan:潘盘判盼叛攀畔磐蹒蟠襻爿泮拚畚袢 pang:旁庞胖乓螃耪逄彷滂 pao:抛跑泡袍咆庖狍匏脬疱 pei:陪培配赔佩裴沛胚辔帔旆锫醅霈 pen:喷盆湓 peng:朋碰棚蓬膨捧烹彭澎鹏篷抨硼嘭堋怦蟛 pi:批皮疲披匹劈僻屁脾琵霹痞癖媲枇毗纰丕邳圮吡蚍蜱貔罴鼙铍庀淠甓疋 pian:片偏篇骗翩犏谝蹁骈缏胼 piao:飘票漂瓢朴嫖瞟螵缥殍嘌剽 pie:撇瞥苤氕 pin:拼贫品频聘姘嫔榀牝颦 ping:平评凭瓶屏萍乒坪苹娉枰鲆俜冖 po:坡破迫泼婆泊魄粕珀叵钋陂鄱皤笸 pou:剖裒掊 pu:扑铺普谱葡蒲仆浦濮璞莆匍噗溥埔圃氆镨蹼曝瀑 qi:期七起气奇齐器企旗骑棋欺妻凄漆祈歧琪琦麒祁岐芪荠萁葺蕲嘁屺岂汔淇骐绮桤杞欹憩碛颀蛴蜞綦鳍亓俟圻耆脐旂埼萋 qia:恰洽掐髂袷葜 qian:千前钱签浅牵欠谦潜迁遣歉倩钳乾黔虔堑纤蒨芊芡茜荨掮岍悭骞搴褰缱椠肷愆钎钤犍箝 qiang:枪强墙抢腔羌呛锵跄蜣襁戕戗樯嫱羟镪 qiao:敲桥巧瞧乔侨悄翘俏窍锹撬憔荞鞘诮谯鞒橇缲硗跷愀 qie:切且怯窃妾茄锲挈惬箧 qin:亲琴勤侵秦钦禽擒芹沁芩嗪噙溱檎锓揿吣螓衾 qing:青清情请轻晴庆倾氢卿擎氰蜻鲭圊苘檠黥磬綮謦 qiong:穷琼穹茕邛蛩筇跫銎 qiu:秋求球邱丘裘囚酋泅虬蚯鳅遒楸赇犰逑俅巯鞧 qu:区去取曲趣驱屈渠躯娶蛆瞿岖祛衢癯蛐蠼麴阒觑劬朐鸲磲蕖蘧氍黢璩 quan:全权劝泉拳券痊诠荃铨醛辁畎绻犬颧蜷筌鬈 que:缺确却雀鹊阙榷阕悫 qun:群裙逡 ran:然染燃冉苒蚺髯 rang:让嚷壤攘瓤禳穰 rao:饶绕扰娆桡荛 re:热惹 ren:人认任仁忍韧刃纫妊轫衽葚稔荏 reng:仍扔 ri:日 rong:容荣融绒溶蓉榕戎茸嵘狨肜蝾 rou:柔肉揉蹂糅鞣 ru:如入乳儒辱汝褥茹孺蠕嚅濡缛铷薷蓐溽洳襦颥 rua:挼 ruan:软阮朊 rui:锐瑞蕊睿芮蚋枘蕤 run:润闰 ruo:弱若偌箬篛 sa:撒洒萨仨飒卅挲脎 sai:赛塞腮鳃噻 san:三散伞叁糁馓毵 sang:桑丧嗓搡磉颡 sao:扫嫂骚梢臊搔缫瘙埽鳋 se:色涩瑟啬铯穑 sen:森 seng:僧 sha:杀沙纱傻刹砂莎煞鲨霎裟歃铩痧 shai:筛晒酾 shan:山善闪衫扇陕珊擅膳删煽姗汕赡缮蟮鳝鄯禅掸骟杉苫钐疝舢芟潸嬗剡讪 shang:商上伤尚赏晌裳殇觞熵绱垧 shao:烧少绍召稍勺哨邵韶捎芍苕筲艄蛸劭潲 she:奢舍社设射涉摄舌蛇赦折慑畲麝佘猞赊厍滠歙 shei:谁 shen:深身神什审甚伸申沈慎肾渗绅呻婶娠砷蜃莘哂矧椹胂谂渖诜 sheng:升生声省胜圣盛剩牲绳笙甥眚嵊晟 shi:诗时十使事是市实室始试示士世识食史视式势适释饰逝誓氏狮施湿蚀拾驶矢屎柿拭恃侍嗜噬仕轼贳炻谥埘莳蓍弑铈螫舐筮豕鲥鲺鳀鸤石师 shou:收手受首售授守寿瘦兽狩绶艏 shu:书树数术属输述熟束叔舒疏署鼠蜀薯竖殊梳枢淑赎孰塾墅恕漱黍秫纾毹腧澍姝菽摅沭倏儵殳曙 shua:刷耍唰 shuai:衰帅摔甩蟀 shuan:拴栓涮闩 shuang:双霜爽孀 shui:水税睡 shun:顺舜瞬吮 shuo:说硕烁朔铄搠蒴槊妁 si:思四死似司丝私寺斯撕嘶肆嗣饲巳厮兕厶咝汜泗澌姒驷缌祀锶鸶耜蛳笥 song:松送宋颂诵耸讼嵩淞悚怂竦菘崧 sou:搜艘嗖嗽擞馊薮嗾叟溲飕螋锼瞍 su:苏素速诉宿俗肃塑酥粟溯夙谡蔌嗉愫涑觫稣簌僳傃 suan:酸算蒜狻 sui:虽随岁碎遂髓隋绥祟睢濉燧邃谇荽眭 sun:孙损笋荪狲飧榫隼 suo:所索缩锁梭琐嗦唆羧桫睃嗍唢蓑 ta:塌他她它塔踏蹋沓挞榻獭趿铊溻闼 tai:台太态泰抬胎苔汰钛酞薹骀炱跆鲐邰 tan:摊谈探叹坦贪滩坛谭痰毯瘫檀昙袒碳覃郯钽锬镡 tang:汤堂唐糖躺趟塘烫棠膛淌倘搪溏螗醣樘羰铴镗耥螳 tao:涛掏逃桃陶套讨淘滔韬饕洮绦啕鼗 te:特忑忒铽慝 teng:疼腾藤誊滕 ti:题体替梯踢啼蹄剃涕惕屉醍缇鹈倜悌逖裼锑 tian:天田甜填添舔恬腆畋阗殄忝掭 tiao:挑条跳迢眺笤佻祧窕蜩髫鲦龆 tie:贴铁帖餮萜 ting:听停庭挺厅亭艇廷蜓汀霆莛葶梃铤烃町婷 tong:通同痛统童桶筒铜桐佟彤瞳潼恸砼仝茼嗵酮 tou:偷头投透骰钭 tu:突图土途徒屠涂吐兔凸荼菟酴钍堍 tuan:团湍抟彖疃 tui:推退腿颓蜕褪煺 tun:吞屯豚臀饨暾氽 tuo:拖托脱妥拓陀驼椭砣鸵唾佗坨庹沱柝橐跎酡鼍箨萚 wa:挖瓦娃哇蛙洼袜佤娲腽 wai:外歪崴 wan:弯万完晚玩碗湾婉挽顽腕宛惋蜿纨绾畹豌脘菀琬丸烷芄 wang:汪王往望忘网亡旺妄枉惘罔辋魍 wei:危为位未味卫围微威伟维违尾委慰魏唯惟帷蔚渭尉畏猬喂巍薇娓圩苇萎痿煨玮桅逶隈葳嵬闱沩洧涠艉鲔韦 wen:温文问闻稳吻纹蚊瘟刎璺雯紊阌汶 weng:翁嗡瓮蕹 wo:窝我握卧沃斡蜗幄渥肟硪莴 wu:乌无五物武务误午屋吴吾悟伍污巫呜雾舞勿戊梧捂鹉侮诬芜妩兀仵阢邬圬芴杌牾焐痦婺骛蜈迕庑怃忤浯寤毋 xi:昔西希息吸喜系细习席戏洗惜稀溪夕牺膝袭熙嘻禧晰蟋犀曦羲熹嬉樨栖汐硒矽菥葸蓰奚唏徙饩阋浠淅屣觋欷醯鼷锡郤 xia:虾下夏吓峡侠狭霞暇辖瞎匣遐瑕黠狎柙硖罅 xian:先现线显鲜险限县献闲贤宪陷仙掀弦咸衔嫌涎娴舷痫蚬筅跹酰铣冼藓燹鹇岘猃暹祆 xiang:香想向相像象项乡响享箱详祥翔襄镶湘橡骧庠缃蟓鲞飨 xiao:消小笑晓肖效销削萧孝潇宵啸嚣淆逍硝霄哮枭骁箫筱魈哓枵绡 xie:些写谢协鞋斜泄泻械屑挟懈蟹邪歇蝎楔偕亵勰燮薤撷獬廨绁缬榭榍瀣躞卨 xin:新心信欣辛薪鑫锌馨忻芯昕歆衅囟 xing:星形性型醒兴姓幸杏刑邢腥惺猩硎荇擤悻陉荥 xiong:兄雄胸凶熊匈汹芎 xiu:休修秀袖羞绣嗅锈岫溴馐庥鸺貅髹 xu:需许续须序徐虚绪旭叙蓄婿恤絮酗墟栩煦蓿盱胥糈醑顼勖洫溆诩 xuan:宣选旋玄悬轩喧眩炫绚渲漩璇暄煊萱揎泫铉癣碹楦镟儇谖 xue:靴学雪血穴薛谑踅泶鳕 xun:勋寻巡训迅询循旬熏汛逊驯殉荀洵浔曛醺窨獯薰峋徇巽 ya:压牙呀雅亚芽鸭押崖哑鸦涯衙讶蚜垭砑睚娅琊桠氩痖迓 yan:烟眼言严演研盐颜燕延沿炎艳掩宴验雁咽阎焰堰砚彦谚蜒衍奄俨兖厣鄢菸崦恹闫阏洇湮滟焱琰檐赝魇餍鼹郾酽妍岩晏 yang:央样阳养洋扬杨氧仰痒漾殃鸯佯疡徉炀烊恙蛘鞅羊 yao:腰要摇药咬耀遥瑶姚窑谣邀尧肴夭爻吆幺徭杳窈舀鹞繇鳐珧轺曜 ye:耶业也夜叶野页液爷冶椰掖曳谒烨晔邺揶铘 yi:一以已意义易亿艺衣医依移宜议忆异益翼译役疫抑椅怡夷姨胰遗疑仪谊蚁倚乙邑绎奕弈贻羿轶翌屹沂诒圯荑薏猗漪旖熠殪翊呓咦咿噫峄怿悒揖迤驿缢懿肄痍瘗癔镒翳舣酏黟毅裔伊 yin:因音引印银阴饮隐殷姻吟寅淫瘾荫尹茵蚓胤鄞喑狺夤氤铟霪 ying:英应影营迎映硬盈赢鹰婴樱莹荧莺萤颖瑛璎鹦楹滢潆嬴蓥撄嘤媵瘿茔颍瀛郢 yo:哟唷 yong:拥用永勇涌泳咏庸佣雍踊蛹恿甬俑壅镛臃鳙墉喁 you:优有又由友游右油邮幼尤犹忧悠幽诱佑酉釉柚疣鱿莸猷祐蚰蝣麀黝鼬宥侑铕 yu:于与玉语鱼雨余遇育域欲预愈誉宇羽豫郁寓裕渔娱榆愚舆逾禹芋隅浴喻峪御愉瑜虞禺毓伛俣谀谕萸蓣揄圄圉嵛狳饫馀庾阈鬻妪妤纡竽俞聿钰鹆鹬瘐瘀窬窳蜮蝓煜 yuan:元原远院员圆园源愿怨缘援袁猿渊冤鸳垣苑媛掾橼沅瑗螈箢鼋芫 yue:月越约跃阅悦岳粤钥刖玥樾龠瀹 yun:云运允匀韵孕蕴酝芸陨殒晕郧恽愠氲狁昀韫 za:匝杂扎砸咂拶 zai:灾再在载栽宰崽哉甾 zan:赞暂咱簪糌瓒昝錾 zang:脏葬赃臧奘驵 zao:遭早造枣灶躁燥皂凿澡噪藻蚤唣 ze:则责择泽仄啧赜昃迮笮箦舴 zei:贼 zen:怎 zeng:增赠憎缯甑罾锃 zha:炸渣眨榨札乍诈栅铡喳砟揸吒哳蚱齄 zhai:摘宅窄债斋寨翟砦瘵 zhan:沾站战展占斩盏崭辗湛詹瞻栈毡绽蘸谵旃 zhang:张章掌涨帐仗杖障账胀彰漳樟蟑璋嶂幛獐鄣嫜仉 zhao:招找照赵着罩兆昭沼肇钊笊棹 zhe:遮这者哲浙蔗辙褶锗蛰蜇赭鹧谪柘辄磔 zhen:真阵镇振震珍针侦枕诊贞甄疹圳斟榛箴缜胗轸稹赈鸩 zheng:争正整政证征挣睁蒸郑症拯铮峥狰诤钲筝 zhi:之只知直制指志治至致质值支职植纸止址织智置殖执芝枝侄秩旨挚掷帜峙痔窒滞蜘脂汁芷枳栀桎轵贽胝祉祗黹酯跖踯豸彘骘鸷痣蛭絷 zhong:中种重众终钟忠肿仲衷盅螽舯锺冢 zhou:周州洲舟皱宙昼骤轴咒粥肘帚纣荮啁妯碡酎 zhu:朱主住注助著筑竹猪珠诸柱祝驻铸蛛瞩嘱煮拄伫侏邾茱洙潴槠橥炷铢疰瘃褚竺杼翥箸 zhua:抓爪挝 zhuai:拽 zhuan:专转砖赚撰篆馔啭颛 zhuang:庄装状壮撞桩妆 zhui:追坠缀锥赘惴骓缒隹 zhun:准谆肫窀 zhuo:捉桌卓拙浊灼茁酌啄琢镯斫擢浞涿倬禚诼 zi:资子自字紫仔姿滋兹籽孜梓淄渍眦秭笫粢觜訾赀锱鲻髭孳嵫辎龇 zong:宗总纵踪棕综鬃偬腙粽 zou:走奏邹揍驺诹陬鄹鲰 zu:租组足族祖阻诅俎镞 zuan:钻纂攥缵躜 zui:最罪嘴醉蕞 zun:尊遵樽鳟撙 zuo:作做坐座左昨佐柞阼唑怍胙祚';
+const _PINYIN_CHAR_MAP = (function () {
+    const m = new Map();
+    _PINYIN_DICT_RAW.split(' ').forEach(function (g) {
+        const i = g.indexOf(':');
+        if (i < 1) return;
+        const syl = g.slice(0, i);
+        const chars = g.slice(i + 1);
+        for (let j = 0; j < chars.length; j++) m.set(chars[j], syl);
+    });
+    return m;
+})();
+// 姓氏特殊读音（仅名字开头生效）：曾 zeng / 单 shan / 解 xie / 仇 qiu / 区 ou / 查 zha …
+const _SURNAME_PINYIN = { '曾': 'zeng', '单': 'shan', '解': 'xie', '仇': 'qiu', '区': 'ou', '查': 'zha', '盖': 'ge', '乐': 'yue', '朴': 'piao', '覃': 'qin', '折': 'she', '翟': 'zhai', '能': 'nai', '繁': 'po', '乜': 'nie', '句': 'gou', '都': 'du', '缪': 'miao', '重': 'chong', '种': 'chong', '秘': 'bi', '贲': 'ben', '佴': 'nai', '莘': 'shen', '纪': 'ji', '任': 'ren', '燕': 'yan', '尉': 'wei', '车': 'che', '过': 'guo', '宁': 'ning', '干': 'gan', '於': 'yu', '黑': 'hei', '冼': 'xian', '邝': 'kuang', '雒': 'luo', '逯': 'lu', '郗': 'xi', '昝': 'zan', '睢': 'sui', '庹': 'tuo', '仉': 'zhang', '谌': 'chen', '亓': 'qi', '笪': 'da', '佘': 'she', '佟': 'tong', '郜': 'gao', '殳': 'shu', '厍': 'she', '蒯': 'kuai', '相': 'xiang', '后': 'hou', '游': 'you', '竺': 'zhu', '权': 'quan', '逄': 'pang', '桑': 'sang', '眭': 'sui', '华': 'hua' };
+// 复姓（仅名字开头，整体匹配）：万俟 moqi / 尉迟 yuchi / 长孙 zhangsun / 澹台 tantai …
+const _COMPOUND_SURNAME_PINYIN = { '万俟': 'moqi', '尉迟': 'yuchi', '长孙': 'zhangsun', '澹台': 'tantai', '单于': 'chanyu', '乐正': 'yuezheng', '令狐': 'linghu', '亓官': 'qiguan', '司寇': 'sikou', '子车': 'ziju', '颛孙': 'zhuansun', '端木': 'duanmu', '巫马': 'wuma', '公西': 'gongxi', '漆雕': 'qidiao', '壤驷': 'rangsi', '公良': 'gongliang', '拓跋': 'tuoba', '夹谷': 'jiagu', '宰父': 'zaifu', '谷梁': 'guliang', '段干': 'duangan', '百里': 'baili', '东郭': 'dongguo', '南门': 'nanmen', '呼延': 'huyan', '羊舌': 'yangshe', '微生': 'weisheng', '梁丘': 'liangqiu', '左丘': 'zuoqiu', '东门': 'dongmen', '西门': 'ximen', '南宫': 'nangong', '第五': 'diwu', '欧阳': 'ouyang', '司马': 'sima', '上官': 'shangguan', '诸葛': 'zhuge', '夏侯': 'xiahou', '皇甫': 'huangfu', '公孙': 'gongsun', '慕容': 'murong', '宇文': 'yuwen', '司徒': 'situ', '司空': 'sikong', '鲜于': 'xianyu', '闾丘': 'lvqiu', '轩辕': 'xuanyuan', '赫连': 'helian', '钟离': 'zhongli', '宗政': 'zongzheng', '濮阳': 'puyang', '淳于': 'chunyu', '太叔': 'taishu', '申屠': 'shentu', '公羊': 'gongyang', '公冶': 'gongye', '公仪': 'gongyi', '仲孙': 'zhongsun', '子书': 'zishu' };
+
+// 首字母兜底（边界字比较法）：仅用于词典未收录的罕见字，保证拼音首字母搜索/分组仍有结果
+const _PINYIN_INITIAL_BOUNDS = [
+    ['z', '匝'], ['y', '压'], ['x', '昔'], ['w', '挖'], ['t', '塌'], ['s', '撒'],
+    ['r', '然'], ['q', '期'], ['p', '啪'], ['o', '哦'], ['n', '拿'], ['m', '妈'],
+    ['l', '垃'], ['k', '喀'], ['j', '击'], ['h', '哈'], ['g', '噶'], ['f', '发'],
+    ['e', '蛾'], ['d', '搭'], ['c', '擦'], ['b', '芭'], ['a', '阿']
+];
+const _pinyinCharCache = new Map();
+function _charPinyinInitial(ch) {
+    if (/[a-zA-Z0-9]/.test(ch)) return ch.toLowerCase();
+    const code = ch.charCodeAt(0);
+    if (code < 0x4e00 || code > 0x9fff) return '';
+    if (_pinyinCharCache.has(ch)) return _pinyinCharCache.get(ch);
+    let initial = '';
+    for (let i = 0; i < _PINYIN_INITIAL_BOUNDS.length; i++) {
+        if (ch.localeCompare(_PINYIN_INITIAL_BOUNDS[i][1], 'zh-CN-u-co-pinyin') >= 0) {
+            initial = _PINYIN_INITIAL_BOUNDS[i][0];
+            break;
+        }
+    }
+    _pinyinCharCache.set(ch, initial);
+    return initial;
+}
+
+// 名字的音节序列：汉字→音节（姓氏特殊读音仅在开头生效），字母/数字→单字符小写，其它忽略。
+// 复姓优先整体匹配；未收录汉字回退为首字母（全拼里只占一个字母，首字母搜索不受影响）。
+function _namePinyinSyllables(name) {
+    const s = String(name == null ? '' : name);
+    const chars = Array.from(s);
+    const out = [];
+    let i = 0;
+    const compKeys = Object.keys(_COMPOUND_SURNAME_PINYIN);
+    for (let k = 0; k < compKeys.length; k++) {
+        if (s.startsWith(compKeys[k])) {
+            out.push(_COMPOUND_SURNAME_PINYIN[compKeys[k]]);
+            i = Array.from(compKeys[k]).length;
+            break;
+        }
+    }
+    for (; i < chars.length; i++) {
+        const ch = chars[i];
+        if (/[a-zA-Z0-9]/.test(ch)) { out.push(ch.toLowerCase()); continue; }
+        const code = ch.codePointAt(0);
+        if (code < 0x4e00 || code > 0x9fff) continue;
+        if (i === 0 && _SURNAME_PINYIN[ch]) { out.push(_SURNAME_PINYIN[ch]); continue; }
+        const syl = _PINYIN_CHAR_MAP.get(ch);
+        if (syl) out.push(syl);
+        else { const ini = _charPinyinInitial(ch); if (ini) out.push(ini); }
+    }
+    return out;
+}
+
+const _personFullPinyinCache = new Map(); // name -> 全拼
+function getPersonFullPinyin(name) {
+    const key = String(name == null ? '' : name);
+    if (_personFullPinyinCache.has(key)) return _personFullPinyinCache.get(key);
+    const v = _namePinyinSyllables(key).join('');
+    _personFullPinyinCache.set(key, v);
+    return v;
+}
+
+const _personPinyinCache = new Map(); // name -> 首字母（姓氏感知）
+function getPinyinInitialsForName(name) {
+    const key = String(name == null ? '' : name);
+    if (_personPinyinCache.has(key)) return _personPinyinCache.get(key);
+    const initials = _namePinyinSyllables(key).map(function (s) { return s.charAt(0); }).join('');
+    _personPinyinCache.set(key, initials);
+    return initials;
+}
+function getPersonPinyinInitials(person) {
+    return person ? getPinyinInitialsForName(person.name) : '';
+}
+
+// 联系人排序比较器：按全拼（姓氏感知）升序，同音回退中文 localeCompare。
+// 用于管理页列表、@ 候选、合并目标选择，保证「曾」归 z 而非 c。
+function comparePersonNamesByPinyin(a, b) {
+    const pa = getPersonFullPinyin(a), pb = getPersonFullPinyin(b);
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    return String(a).localeCompare(String(b), 'zh-CN');
+}
+
+// 生成系统托管的全拼别名：重名（与他人正名/别名/全拼冲突）追加数字后缀 zhangsan2/3…
+// taken 为已占用名的 normalizePersonName 键集合；全拼与姓名本身相同（纯英文等）时返回 ''。
+function generatePersonPinyinAlias(name, taken) {
+    const base = getPersonFullPinyin(name);
+    if (!base) return '';
+    const selfKey = normalizePersonName(name);
+    if (base === selfKey) return '';
+    const used = taken || {};
+    let candidate = base;
+    let n = 1;
+    while (used[candidate]) {
+        n++;
+        if (n > 999) return '';
+        candidate = base + n;
+    }
+    return candidate;
+}
+
+// ---------- 剪贴板复制（离线版 file:// 回退 execCommand） ----------
+async function copyTextToClipboard(text) {
+    const value = String(text == null ? '' : text);
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch (e) { /* 回退 */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+    } catch (e) { return false; }
+}
+
+// 人员头像底色板：全部取 600/700 档深色，保证「底色上放文字」的对比度足够
+// （新成员按「用得最少的颜色」分配；字色仍按亮度自动选，兼容旧数据里的浅色自定义色）
+const PERSON_AVATAR_PALETTE = [
+    '#2563eb', '#4f46e5', '#7c3aed', '#9333ea', '#db2777', '#dc2626',
+    '#c2410c', '#b45309', '#15803d', '#0f766e', '#0e7490', '#475569'
+];
+const _PEOPLE_FALLBACK_COLORS = PERSON_AVATAR_PALETTE;
+function getPersonColor(person) {
+    if (!person) return PERSON_AVATAR_PALETTE[0];
+    if (person.color) return person.color;
+    let h = 0;
+    const id = String(person.id || '');
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return PERSON_AVATAR_PALETTE[h % PERSON_AVATAR_PALETTE.length];
+}
+
+// 新成员取色：优先用当前使用次数最少的色（并列时随机），使同屏头像尽量不撞色
+function pickPersonAvatarColor() {
+    const list = (typeof settings !== 'undefined' && settings && Array.isArray(settings.people)) ? settings.people : [];
+    const counts = PERSON_AVATAR_PALETTE.map(function () { return 0; });
+    list.forEach(function (p) {
+        if (!p || !p.color) return;
+        const idx = PERSON_AVATAR_PALETTE.indexOf(String(p.color).toLowerCase());
+        if (idx !== -1) counts[idx]++;
+    });
+    const min = Math.min.apply(null, counts);
+    const pool = [];
+    counts.forEach(function (c, i) { if (c === min) pool.push(i); });
+    return PERSON_AVATAR_PALETTE[pool[Math.floor(Math.random() * pool.length)]] || PERSON_AVATAR_PALETTE[0];
+}
+
+// WCAG 相对亮度 → 自动选字色（白 / 深灰），保证任意底色下文字都可读
+function _personRelLuminance(hex) {
+    let h = String(hex == null ? '' : hex).trim().replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    if (!/^[0-9a-f]{6}$/i.test(h)) return 0;
+    const ch = [0, 2, 4].map(function (i) {
+        const c = parseInt(h.substr(i, 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+function getPersonAvatarTextColor(color) {
+    const L = _personRelLuminance(color);
+    const onWhite = 1.05 / (L + 0.05);
+    const onDark = (L + 0.05) / (_personRelLuminance('#1f2937') + 0.05);
+    return onWhite >= onDark ? '#ffffff' : '#1f2937';
+}
+
+// 无头像时的占位字：中文取姓名最后一个字（张三 → 三）；
+// 西文取最后一个单词的首字母（Shawn Lee → L），单单词取名首字母
+function getPersonAvatarText(person) {
+    const name = String((person && person.name) || '').trim();
+    if (!name) return '?';
+    const cjk = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff]/;
+    if (cjk.test(name)) {
+        const chars = Array.from(name);
+        for (let i = chars.length - 1; i >= 0; i--) {
+            if (cjk.test(chars[i])) return chars[i];
+        }
+        return chars[chars.length - 1] || '?';
+    }
+    const words = name.split(/[\s._-]+/).filter(Boolean);
+    const last = words.length ? words[words.length - 1] : name;
+    return String(last.charAt(0)).toUpperCase();
+}
+
+// ============ 通用「搜索框清除按钮」 ============
+// 用于各视图搜索输入框：有文字才显示，点 fa-xmark 一键清空并保留焦点。
+// 包裹容器需 position:relative；按钮 onmousedown 阻止默认，避免点按钮先触发 input 的 blur。
+function searchClearBtnHtml(inputId) {
+    return '<button type="button" id="search-clear-' + inputId + '" class="search-clear-btn hidden" ' +
+        'title="清除搜索内容" aria-label="清除搜索内容" ' +
+        'onmousedown="event.preventDefault()" onclick="clearSearchInput(\'' + inputId + '\')">' +
+        '<i class="fas fa-xmark text-xs"></i></button>';
+}
+function _syncSearchClearBtn(input) {
+    if (!input) return;
+    const btn = document.getElementById('search-clear-' + input.id);
+    if (btn) btn.classList.toggle('hidden', !input.value);
+}
+function clearSearchInput(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.value = '';
+    // 派发 input 事件触发各输入框既有的 oninput 回调，保证列表/状态同步刷新
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const btn = document.getElementById('search-clear-' + inputId);
+    if (btn) btn.classList.add('hidden');
+    input.focus();
+}
+
+// 人员头像 HTML（统一入口）：头像文件走 <img> 覆盖层，加载失败自动回退到末字占位，
+// 因此离线版（无服务端）或文件被清理时不会出现空白圆。
+function personAvatarOf(person) {
+    const v = person && person.avatar;
+    if (typeof v !== 'string' || !v) return '';
+    if (/^\/api\/people-avatar\//.test(v)) return v;
+    if (/^data:image\//.test(v)) return v; // 兼容早期内联 base64
+    return '';
+}
+function renderPersonAvatarHtml(person, boxClass, textClass) {
+    const color = getPersonColor(person);
+    const avatar = personAvatarOf(person);
+    const cls = 'rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden relative font-semibold '
+        + (boxClass || 'w-9 h-9') + ' ' + (textClass || 'text-sm');
+    const title = avatar ? ' title="' + escapeHtml(String((person && person.name) || '')) + '"' : '';
+    return '<span class="' + cls + '" style="background:' + color + '"' + title + '>'
+        + '<span style="color:' + getPersonAvatarTextColor(color) + '">' + escapeHtml(getPersonAvatarText(person)) + '</span>'
+        + (avatar ? '<img class="person-avatar-img" src="' + escapeHtml(avatar) + '" alt="" onerror="this.remove()">' : '')
+        + '</span>';
 }

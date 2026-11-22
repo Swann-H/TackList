@@ -634,7 +634,8 @@ function buildTaskListGroups() {
     }
     const sig = [
         currentFilter || '', currentListId || '',
-        (currentTagIds || []).join(','), currentFilterId || '',
+        (currentTagIds || []).join(','), currentFilterId || '', currentPersonId || '',
+        currentWaitingFilter ? '1' : '', // FR-08 等待筛选：遗漏会导致切换后命中旧缓存（列表不刷新）
         tasks.length, lists.length, dateSig,
         shouldHideExternalTasks() ? '1' : '0',  // 离线「显示外部日历」开关变化须失效重建
         tvc.noDateTaskPosition,
@@ -799,7 +800,7 @@ function buildTaskListItemHtml(task, useShortTime, opts) {
     const quadColors = getQuadrantColorClass(task);
     const isOverdue = isTaskOverdue(task);
     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
-    const tagCapsules = renderTagCapsules(task, 2, 'right');
+    const tagCapsules = renderTagCapsules(task, 'auto', 'right');
     // 显示任务详情（备注/子任务）：由任务视图配置 showDetails 控制
     // 备注/描述与子任务的行数分配见 renderTaskDetailsBlock（方案 C：描述 4-n 行 + 子任务 n 条）
     const tvcShowDetails = getTaskViewConfig().showDetails;
@@ -1000,7 +1001,7 @@ function renderTaskListView(container) {
         _lastTaskListFilterSig = null; // 强制重置签名，避免下方重复初始化
     }
     // filterSig 不含 currentListId（已通过 listKey 隔离折叠态）
-    const filterSig = (currentFilter || '') + '|' + (currentTagIds || []).join(',') + '|' + (currentFilterId || '') + '|' + tvc.groupBy + '|' + strat;
+    const filterSig = (currentFilter || '') + '|' + (currentTagIds || []).join(',') + '|' + (currentFilterId || '') + '|' + (currentPersonId || '') + '|' + (currentWaitingFilter ? '1' : '') + '|' + tvc.groupBy + '|' + strat;
     if (filterSig !== _lastTaskListFilterSig) {
         _initTaskListGroupCollapse(strat, listKey);
         _lastTaskListFilterSig = filterSig;
@@ -1174,7 +1175,9 @@ function _normalizeTaskListPlaceholders(lazyEls) {
 }
 
 // 按当前滚动位置同步所有分组的渲染窗口；force=true 时强制按最新分组数据重绘（局部更新用）
-function _syncTaskListWindows(force) {
+// extraBottom：向下扩展视口判定范围的像素数（折叠分组时传被折叠内容的高度，
+// 使下方即将平移进视口的分组提前填充，避免动画期间/结束后留白）
+function _syncTaskListWindows(force, extraBottom) {
     const st = _taskListVirtualState;
     if (!st || !st.scrollEl || !st.container || !st.scrollEl.isConnected) return;
     const scrollEl = st.scrollEl;
@@ -1182,7 +1185,7 @@ function _syncTaskListWindows(force) {
     const viewH = scrollEl.clientHeight || 600;
     const est = _taskListRowEstimate;
     const viewTop = sTop - TASK_LIST_WINDOW_OVERSCAN * est;
-    const viewBottom = sTop + viewH + TASK_LIST_WINDOW_OVERSCAN * est;
+    const viewBottom = sTop + viewH + TASK_LIST_WINDOW_OVERSCAN * est + (extraBottom || 0);
     const sRect = scrollEl.getBoundingClientRect();
     const lazyEls = st.container.querySelectorAll('.task-list-group-lazy');
     _normalizeTaskListPlaceholders(lazyEls);
@@ -1430,7 +1433,10 @@ function toggleTaskListGroup(groupKey, opts) {
     }
 
     // 切换内容容器显隐（fx-collapsed 配合平滑过渡动画做高度过渡，未开启时仅 hidden 生效）
+    let collapseDelta = 0;
     if (nowCollapsed) {
+        // 记录折叠前内容高度：下方分组将上移这段距离，窗口同步需按最终几何预判
+        collapseDelta = contentEl.getBoundingClientRect().height;
         contentEl.classList.add('hidden', 'fx-collapsed');
     } else {
         contentEl.classList.remove('hidden', 'fx-collapsed');
@@ -1469,6 +1475,23 @@ function toggleTaskListGroup(groupKey, opts) {
 
     // 与计划面板共享折叠态：同步计划面板中同 key 的分组
     if (typeof syncPlanPanelGroupCollapse === 'function') syncPlanPanelGroupCollapse(groupKey);
+
+    // 折叠/展开会平移下方所有分组的位置：立即按最终几何同步渲染窗口，
+    // 否则下方分组进入视口后仍是空占位，直到下一次滚动才填充（表现为一片空白）
+    if (_taskListVirtualState) {
+        _syncTaskListWindows(false, collapseDelta);
+        // 平滑动画期间高度渐变，动画结束后再校准一次（修正占位高度/释放离屏行）
+        if (document.body.classList.contains('fx-smooth')) {
+            const onEnd = (e) => {
+                if (e && (e.target !== contentEl || e.propertyName !== 'grid-template-rows')) return;
+                contentEl.removeEventListener('transitionend', onEnd);
+                clearTimeout(timer);
+                _syncTaskListWindows(false);
+            };
+            const timer = setTimeout(onEnd, 300);
+            contentEl.addEventListener('transitionend', onEnd);
+        }
+    }
 
     // 同步顶部"全部展开/收起"按钮状态
     const groups = _taskListVirtualState ? _taskListVirtualState.groups : buildTaskListGroups();
@@ -1613,7 +1636,7 @@ function buildScheduleDayCardHtml(date, dayTasks) {
                         <span class="${timeTextClass}">${timeDisplay}</span>
                         ${list ? `<span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full" style="background-color: ${list.color}"></span>${list.name}</span>` : ''}
                         ${typeof renderRecurringTaskBadge === 'function' ? renderRecurringTaskBadge(task) : ''}
-                        ${renderTagCapsules(task, 2, 'right')}
+                        ${renderTagCapsules(task, 'auto', 'right')}
                         ${focusMinutes > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-stopwatch text-red-500"></i>${formatFocusMinutes(focusMinutes)}</span>` : ''}
                         ${task.progress && task.progress > 0 ? `<span class="flex items-center gap-1"><i class="fas fa-flag text-accent"></i>${task.progress}%</span>` : ''}
                     </div>
@@ -1747,7 +1770,7 @@ function getScheduleGroupedTasks() {
     const scfg = getScheduleConfig();
     const showNoDate = scfg.showNoDateTasks !== false; // 「显示无日期任务」开关：关时不注入今天分组
     const noDateMode = showNoDate ? (scfg.noDateTaskPosition || 'last') : 'none';
-    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + todayKey + '|' + (noDateMode === 'first' ? 'f' : (noDateMode === 'none' ? 'n' : 'l')) + '|' + (scfg.showCompleted ? '1' : '0') + '|' + (shouldHideExternalTasks() ? '1' : '0') + '|' + (typeof isRecurringFutureEnabled === 'function' && isRecurringFutureEnabled('schedule') ? '1' : '0') + '|' + (typeof getRecurringRangeKey === 'function' ? getRecurringRangeKey() : '');
+    const sig = (currentListId || '') + '|' + tagKey + '|' + (currentFilter || '') + '|' + (currentFilterId || '') + '|' + (currentPersonId || '') + '|' + (currentWaitingFilter ? '1' : '') + '|' + todayKey + '|' + (noDateMode === 'first' ? 'f' : (noDateMode === 'none' ? 'n' : 'l')) + '|' + (scfg.showCompleted ? '1' : '0') + '|' + (shouldHideExternalTasks() ? '1' : '0') + '|' + (typeof isRecurringFutureEnabled === 'function' && isRecurringFutureEnabled('schedule') ? '1' : '0') + '|' + (typeof getRecurringRangeKey === 'function' ? getRecurringRangeKey() : '');
     if (_scheduleFilteredCache && _scheduleFilteredCache.sig === sig) {
         return _scheduleFilteredCache.grouped;
     }

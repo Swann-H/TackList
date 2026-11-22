@@ -8,6 +8,8 @@ let _cpCandidates = null; // { type:'list'|'tag', prefix:'~'|'#', start, end, qu
 let _cpDelToken = null;   // 已武装的识别块（双退格整删用）：{ start, text }
 let _cpDraft = null;      // 未完成草稿：误触遮罩空白关闭面板时保留（文本+光标），下次呼出恢复；
                           // Esc 关闭 / Enter 创建成功后清空（主动放弃 / 已消费）
+let _cpPresetMention = null; // FR-10「给 TA 新建任务」预置提及：{ personId, text }；
+                             // 仅建任务入口透传，创建时并入 notes，关闭面板即丢弃（不影响 NLP 解析）
 
 // ==================== 模糊时间偏好配置 ====================
 // 时段词：word=触发词, key=settings.commandTimePrefs 字段名, min/max=可调区间(分钟,硬约束),
@@ -17,10 +19,11 @@ let _cpDraft = null;      // 未完成草稿：误触遮罩空白关闭面板时
 // ⚠️ max=1440 表示「24:00」——它是区间右端点的文案边界，不是可放置时刻：
 //    时刻 1440 会回绕到次日 00:00，故实际可放置/可选的最大分钟数取 min(max, 1439)（见 resolveFuzzyTimeConflict / openFuzzyTimePicker）。
 const FUZZY_TIME_WORDS = [
-    { word: '上午', key: 'morning',   min: 360,  max: 720,  defaultMin: 540  },  // 6:00–12:00
+    // aliases：同一时段的其它常见说法，共用该时段的偏好时间（不新增设置项）
+    { word: '上午', aliases: ['早上', '早晨', '清晨'], key: 'morning',   min: 360,  max: 720,  defaultMin: 540  },  // 6:00–12:00
     { word: '中午', key: 'noon',      min: 690,  max: 810,  defaultMin: 720  },  // 11:30–13:30
     { word: '下午', key: 'afternoon', min: 720,  max: 1080, defaultMin: 900  }, // 12:00–18:00
-    { word: '晚上', key: 'evening',   min: 1080, max: 1440, defaultMin: 1140 }  // 18:00–24:00
+    { word: '晚上', aliases: ['傍晚', '夜里'], key: 'evening',   min: 1080, max: 1440, defaultMin: 1140 }  // 18:00–24:00
 ];
 // 相对时间词：now + settings.commandTimePrefs.laterMinutes（仅当未识别到任何日期/时间时生效）
 const FUZZY_RELATIVE_WORDS = ['稍后', '等等', '一会儿'];
@@ -125,6 +128,7 @@ function openCommandPalette() {
 
 function closeCommandPalette(keepDraft) {
     _commandPaletteOpen = false;
+    _cpPresetMention = null; // 预置提及随面板关闭丢弃（取消创建不产生任务）
     // keepDraft=true（误触遮罩空白）：保留当前输入为草稿；否则（Esc / 创建成功 / 移动端返回）清空
     const draftInput = document.getElementById('command-palette-input');
     _cpDraft = (keepDraft && draftInput && draftInput.value)
@@ -155,6 +159,7 @@ function closeCommandPalette(keepDraft) {
 // 还原成常规右栏（不触发保存/关闭动画/移动端返回层），用户可继续在普通界面编辑。
 function closeCommandPaletteKeepDetail() {
     _commandPaletteOpen = false;
+    _cpPresetMention = null;
     _cpDraft = null; // 主动关闭，不保留草稿
     _cpCandidates = null;
     _cpDelToken = null;
@@ -733,6 +738,8 @@ function findCommandPaletteChunks(value) {
     const tokenRe = /([~#*])([^\s|!]+)/g; // ~清单 / #标签 / *模板（! 已被优先级提取，不并入 token 名）
     while ((m = tokenRe.exec(value)) !== null) {
         if (m[1] === '*' && !_isTemplateTokenAtStart(value, m.index)) continue;
+        // `~` 夹在两个日期之间时是区间分隔符，不是清单前缀
+        if (m[1] === '~' && nlpIsDateRangeTilde(value, m.index)) continue;
         take(m.index, m.index + m[0].length);
     }
 
@@ -1283,12 +1290,13 @@ function _renderSearchRow(task, idx, keywords) {
     const quadColors = getQuadrantColorClass(task);
     const isOverdue = isTaskOverdue(task);
     const timeTextClass = isOverdue ? OVERDUE_TEXT_CLASS : 'text-theme-primary';
-    const tagCapsules = renderTagCapsules(task, 2, 'right');
+    const tagCapsules = renderTagCapsules(task, 'auto', 'right');
     const snippet = _notesSnippet((task.notes || '') + ' ' + (task.description || ''), keywords);
 
     return `<div class="px-3 py-1" data-search-index="${idx}">
             <div class="task-list-item cmd-search-item task-row relative flex items-center gap-3 py-2.5 px-3 rounded-r-lg ${quadColors.bg} hover:opacity-85 transition cursor-pointer group ${task.completed ? 'opacity-55' : ''} ${idx === _searchActiveIndex ? 'bg-theme-tertiary' : ''}"
                  data-list-id="${task.listId || 'default'}"
+                 title="点击查看详情（面板保持打开）；Ctrl+点击 关闭面板并直接编辑"
                  onclick="event.stopPropagation(); openSearchResultDetail(event, '${task.id}')">
                 <div class="task-list-color-bar" style="background-color: ${_extTaskBarColor(task, getTaskBarColor(task, listColor))};"></div>
                 ${_extTaskIconHtml(task)}<div class="flex-1 min-w-0"><span class="flex items-center block text-sm ${task.completed ? 'text-theme-secondary' : 'text-theme-primary'} truncate min-w-0">${_highlightText(task.title || '新任务', keywords)}</span>${snippet ? `<span class="block text-xs text-theme-muted truncate mt-0.5">${snippet}</span>` : ''}</div>
@@ -1367,6 +1375,10 @@ function parseNLPInput(input) {
     let fuzzyConflict = false; // 模糊时段词命中后由冲突检测回绕产生
     let dayOffset = 0;         // 相对日期的跨天偏移天数（明天=1 / 后天=2 / 大后天=3 / N天后=N）
     let lateNightWarning = false; // 凌晨时段(00:00-06:00) + 跨天相对日期 的提醒标记
+    let rangeTimeIgnored = false; // 跨天区间混写具体时刻：时刻已剥离忽略，供预览弱提示（M2）
+    let dateLikeUnparsed = false; // 输入疑似含日期写法但解析失败（如「2月30日」），供预览弱提示（L3）
+    let fuzzyWord = '';           // 冲突/顺延后命中的时段词原文，供提示文案（M4）
+    let fuzzyMoved = false;       // 智能排程后落点偏离偏好时间（已过顺延/冲突回绕），供预览提示（M4）
 
     // 0. 用 | 分割：|之前为标题，|之后为详情
     const pipeIndex = text.indexOf('|');
@@ -1389,7 +1401,17 @@ function parseNLPInput(input) {
     }
 
     // 2. 从标题中解析清单：~清单名
-    const listMatch = titleText.match(/~(\S+)/);
+    //    `~` 同时是区间分隔符（11/16~11/18），紧贴日期时按区间处理，不能当清单名剥走
+    let listMatch = null;
+    {
+        const _listRe = /~(\S+)/g;
+        let _lm;
+        while ((_lm = _listRe.exec(titleText)) !== null) {
+            if (nlpIsDateRangeTilde(titleText, _lm.index)) continue;
+            listMatch = _lm;
+            break;
+        }
+    }
     if (listMatch) {
         const listName = listMatch[1];
         const foundList = lists.find(l => l.name === listName && !l.isFolder);
@@ -1425,14 +1447,26 @@ function parseNLPInput(input) {
         const titleDateResult = parseNLPDate(titleText);
         if (titleDateResult) {
             dayOffset = titleDateResult.dayOffset || 0;
+            rangeTimeIgnored = !!titleDateResult.rangeTimeIgnored;
             if (titleDateResult._fuzzyResolve) {
                 // 模糊时段词：交由 resolveFuzzyTimeConflict 做顺延 + 冲突检测
                 const resolved = resolveFuzzyTimeConflict(titleDateResult.date, titleDateResult._fuzzyResolve);
                 startTime = resolved.startTime;
                 isAllDay = false;
                 endTime = null;
-                repeat = null;
+                // 模糊时段词与重复规则可以共存（「每天早上 跑步」），重复信息不能被抹掉
+                repeat = titleDateResult.repeat || null;
                 fuzzyConflict = resolved.conflict;
+                // M4：提示素材。徽章只在真冲突时有意义；「已过顺延/冲突回绕」等静默偏移
+                // 统一以「落点 ≠ 偏好时间」判定，给整行弱提示说明最终落点
+                if (resolved.conflict) {
+                    fuzzyWord = titleDateResult._fuzzyResolve.text || '';
+                }
+                if (resolved.prefTime && resolved.startTime
+                    && resolved.startTime.getTime() !== resolved.prefTime.getTime()) {
+                    fuzzyMoved = true;
+                    fuzzyWord = fuzzyWord || titleDateResult._fuzzyResolve.text || '';
+                }
             } else {
                 startTime = titleDateResult.date;
                 isAllDay = titleDateResult.isAllDay;
@@ -1445,6 +1479,13 @@ function parseNLPInput(input) {
                 });
             }
             removedParts.push(...titleDateResult.matches);
+        } else {
+            // L3：标题里疑似有日期写法但整体解析失败（如「2月30日」这类不存在的日期），
+            // 用户会以为日期已记下，创建后才发现没有——预览区给弱提示。
+            // 口径从严：只认「N月N日 / N日号 / 星期X（含本周日等前缀）」强日期写法（「周末」本就不参与解析，不算）
+            if (/\d{1,2}\s*月\s*\d{1,2}\s*[日号]|\d{1,2}\s*[日号]|(?:下下|下|本|这)?个?(?:周|星期)[一二三四五六日天]/.test(titleText)) {
+                dateLikeUnparsed = true;
+            }
         }
     }
 
@@ -1470,10 +1511,30 @@ function parseNLPInput(input) {
         const notesDateResult = parseNLPDate(notes);
         if (notesDateResult) {
             dayOffset = notesDateResult.dayOffset || 0;
-            startTime = notesDateResult.date;
-            isAllDay = notesDateResult.isAllDay;
-            endTime = notesDateResult.endTime || null;
-            repeat = notesDateResult.repeat || null;
+            rangeTimeIgnored = rangeTimeIgnored || !!notesDateResult.rangeTimeIgnored;
+            if (notesDateResult._fuzzyResolve) {
+                // 模糊时段词：与标题分支同口径，交由 resolveFuzzyTimeConflict 做顺延 + 冲突检测
+                // （否则 notes 里「明天早上交」会落成当天 00:00 而非偏好时段）
+                const resolved = resolveFuzzyTimeConflict(notesDateResult.date, notesDateResult._fuzzyResolve);
+                startTime = resolved.startTime;
+                isAllDay = false;
+                endTime = null;
+                repeat = notesDateResult.repeat || null;
+                fuzzyConflict = resolved.conflict;
+                if (resolved.conflict) {
+                    fuzzyWord = notesDateResult._fuzzyResolve.text || '';
+                }
+                if (resolved.prefTime && resolved.startTime
+                    && resolved.startTime.getTime() !== resolved.prefTime.getTime()) {
+                    fuzzyMoved = true;
+                    fuzzyWord = fuzzyWord || notesDateResult._fuzzyResolve.text || '';
+                }
+            } else {
+                startTime = notesDateResult.date;
+                isAllDay = notesDateResult.isAllDay;
+                endTime = notesDateResult.endTime || null;
+                repeat = notesDateResult.repeat || null;
+            }
             if (removeTimeText) {
                 notesDateResult.matches.forEach(m => {
                     notes = notes.replace(m, ' ');
@@ -1514,25 +1575,109 @@ function parseNLPInput(input) {
         notes,
         removedParts,
         fuzzyConflict,
+        fuzzyWord,
+        fuzzyMoved,
+        rangeTimeIgnored,
+        dateLikeUnparsed,
         lateNightWarning
     };
+}
+
+// ==================== NLP 日期 / 时段文法（解析与区间识别共用） ====================
+// 数字：阿拉伯数字或「一二三…十百千万两零」，与 parseNLPDate 内部 numPattern 同源
+const NLP_NUM_NC = '(?:\\d{1,4}|[一二三四五六七八九十百千万两零]+)';
+// 日期端点文法：单日期解析与区间两端共用同一套 token，保证「下周一到下周三」「11月16日至18日」同构。
+// 注意顺序：长 token 在前（大前天 先于 前天、CN 月日 先于 裸日），否则会被前缀短 token 吃掉半截。
+const NLP_DATE_TOKEN = [
+    '\\d{4}年\\d{1,2}月\\d{1,2}[日号]',
+    NLP_NUM_NC + '年' + NLP_NUM_NC + '月' + NLP_NUM_NC + '[日号]',
+    '(?:下下|下|本|这)个?月' + NLP_NUM_NC + '[日号]',
+    '\\d{1,2}月\\d{1,2}[日号]',
+    NLP_NUM_NC + '月' + NLP_NUM_NC + '[日号]',
+    '\\d{1,2}\\/\\d{1,2}',
+    '\\d{1,2}[日号]',
+    NLP_NUM_NC + '[日号]',
+    '大前天|大后天|今天|明天|后天|昨天|前天|今日|明日|后日|昨日|前日',
+    '(?:本|这|下|下下)?周末',
+    NLP_NUM_NC + '天[以]?后',
+    NLP_NUM_NC + '个?(?:周|星期|礼拜)[以]?后',
+    NLP_NUM_NC + '个?月[以]?后',
+    '(?:上上|上|下下|下|本|这)?(?:个)?(?:周|星期|礼拜)[一二三四五六日天]'
+].join('|');
+// 区间专用：额外容许「11.16」点号缩写（只出现在区间两端，避免把标题里的「版本 11.8」误判成日期）
+const NLP_RANGE_TOKEN = '(?:' + NLP_DATE_TOKEN + '|\\d{1,2}\\.\\d{1,2})';
+const NLP_RANGE_RE = new RegExp('从?(' + NLP_RANGE_TOKEN + ')\\s*(?:开始|起)?\\s*[到至~\\-—–]\\s*(' + NLP_RANGE_TOKEN + ')');
+const NLP_DATE_TOKEN_START_RE = new RegExp('^(?:' + NLP_DATE_TOKEN + ')');
+const NLP_DATE_TOKEN_END_RE = new RegExp('(?:' + NLP_DATE_TOKEN + ')$');
+
+// `~` 既是「区间分隔符」又是「清单前缀」：左侧以日期结尾、右侧以日期开头时按区间处理，
+// 否则「11/16~11/18」会被 parseNLPInput 的清单提取吃掉「~11/18」，结束日静默丢失
+function nlpIsDateRangeTilde(text, idx) {
+    if (text[idx] !== '~') return false;
+    const left = text.slice(0, idx).replace(/\s+$/, '');
+    const right = text.slice(idx + 1).replace(/^\s+/, '');
+    if (!left || !right) return false;
+    return NLP_DATE_TOKEN_END_RE.test(left) && NLP_DATE_TOKEN_START_RE.test(right);
+}
+
+// 时段词：语义类别决定「12 小时制 → 24 小时制」的折算方式。
+//   dawn 凌晨（12 点 → 当日 0 点）        morning 早/早上/上午（不改）
+//   noon 中午（1-5 点后移半天）           afternoon 午后/下午（不足 12 点后移半天）
+//   evening 傍晚/晚/晚上/夜里（不足 12 点后移半天；12 点 → 次日 0 点）
+//   night 深夜/半夜/午夜（不改；12 点 → 次日 0 点）
+// 词表必须长词在前，否则「晚上」会被「晚」截断、「早上」会被「早」截断；
+// 今晚/明晚/今早/明早 这类「日期+时段」合写字整体入表，由 NLP_PERIOD_DAY_OFFSET 补日期
+const NLP_PERIOD_WORDS = '今晚|明晚|今早|明早|今晨|明晨|凌晨|早上|早晨|清晨|上午|中午|正午|午后|下午|傍晚|晚上|夜里|夜间|深夜|半夜|午夜|早|晚';
+const NLP_PERIOD_KIND = {
+    '今晚': 'evening', '明晚': 'evening', '今早': 'morning', '明早': 'morning', '今晨': 'morning', '明晨': 'morning',
+    '凌晨': 'dawn', '早上': 'morning', '早晨': 'morning', '清晨': 'morning', '上午': 'morning', '早': 'morning',
+    '中午': 'noon', '正午': 'noon', '午后': 'afternoon', '下午': 'afternoon', '傍晚': 'evening',
+    '晚上': 'evening', '夜里': 'evening', '夜间': 'evening', '晚': 'evening',
+    '深夜': 'night', '半夜': 'night', '午夜': 'night'
+};
+// 合写时段词隐含的日期偏移（仅在没有其它日期词时生效）：今晚=今天 / 明晚=明天
+const NLP_PERIOD_DAY_OFFSET = { '今晚': 0, '今早': 0, '今晨': 0, '明晚': 1, '明早': 1, '明晨': 1 };
+
+function nlpDaysInMonth(year, monthIndex) {
+    return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+// 时段折算：返回 { hour, roll }，roll=1 表示该时刻实际落在次日（晚上 12 点 = 24:00）
+function nlpApplyPeriod(hour, kind) {
+    if (kind === 'dawn') return { hour: hour === 12 ? 0 : hour, roll: 0 };
+    if (kind === 'morning') return { hour: hour, roll: 0 };
+    if (kind === 'noon') return { hour: (hour >= 1 && hour <= 5) ? hour + 12 : hour, roll: 0 };
+    if (kind === 'afternoon') return { hour: hour < 12 ? hour + 12 : hour, roll: 0 };
+    if (kind === 'evening') return hour === 12 ? { hour: 0, roll: 1 } : { hour: hour < 12 ? hour + 12 : hour, roll: 0 };
+    if (kind === 'night') return hour === 12 ? { hour: 0, roll: 1 } : { hour: hour, roll: 0 };
+    return { hour: hour, roll: 0 };
 }
 
 /**
  * NLP 日期时间解析（增强版）
  * 支持格式：
- *   - 今天/明天/后天/大后天
- *   - N天后 / N天以后（支持中文数字）
- *   - 下周一~下周日 / 本周一~周日 / 周一~周日
- *   - X月X日 / X月X号 / YYYY年M月D日 / YYYY/M/D / YYYY-M-D / M/D
- *   - X号（当月X号）
- *   - 本月底/下月底/年底/明年底/本月末/下月末/年末/明年末
- *   - 上午X点 / 下午X点 / 晚上X点 / 凌晨X点
- *   - X点X分 / X点半
- *   - 时间段：从X点到Y点 / X点到Y点 / X点-Y点
- *   - 跨天时间段：这周一到周三 / 周一到周三
- *   - 重复：每天/每周X/每月X号/每年X月X日/每个工作日/每个节假日假期前一天
- *   - 组合：明天下午3点 / 下周一上午9点半 / 3天后下午2点到5点
+ *   - 今天/明天/后天/大后天，昨天/前天/大前天
+ *   - N天后 / N周后 / N个月后 / 半个月后 / N小时·分钟后 / 半小时后 / 一个半小时后（支持中文数字）
+ *   - 周X / 星期X / 礼拜X，可带 上·上上·下·下下·这·本 前缀；周末/本周末/下周末（→ 周六~周日）
+ *   - X月X日 / X月X号 / YYYY年M月D日 / YYYY/M/D / YYYY-M-D / YYYY.M.D / M/D（均支持中文数字）
+ *   - X号 / X日（当月X号，当月无该日则顺延到有该日的月份）
+ *   - 本月/这月/下月/下下月 + X号
+ *   - 月初/月底/本月底/下月初/年底/年末/明年底
+ *   - 时段词：凌晨/早·早上·早晨·清晨·上午/中午/午后·下午/傍晚·晚·晚上·夜里/深夜·半夜·午夜
+ *     以及「今晚/明晚/今早/明早」合写（自带日期偏移）；时段词与数字之间允许空格
+ *   - X点X分 / X点半 / X点一刻 / X点三刻 / X点(X)分 / 9:30
+ *   - 时间段：从X点到Y点 / X点到Y点 / X点-Y点（两端时段词各自独立折算）
+ *   - 跨天全天区间（产出开始日 + 结束日，isAllDay=true）：
+ *       今天到明天 / 明天至大后天 / 5天后~8天后 / 明天开始到周五
+ *       下周一到下周三 / 这周一到周三 / 周一到周三 / 周五到下周一 / 下周一至周五
+ *       11月16日到11月18日 / 11月16日至18日 / 11月30日-12月2日 / 12月30日到1月2日（跨年）
+ *       28号到下月3号 / 11.16-11.18 / 周末到周一
+ *     分隔符：到 / 至 / ~ / - / —（两端须都是日期词，与「X点到Y点」时段互斥）
+ *   - 期限后缀：X之前 / X以前 / X为止（与日期一并消费，不残留进标题）
+ *   - 重复：每天·每晚·每早 / 每周X / 每月X号 / 每年X月X日 / 每N天·周·月·年 / 每个工作日 / 每个节假日假期前一天
+ *   - 组合：明天下午3点 / 下周一上午9点半 / 3天后下午2点到5点 / 每天早上 跑步
+ * 不支持（刻意）：裸「本周/下周/下下周」「十二月」这类无具体日子的写法、每周多选（周一三五）、
+ *   每月最后一天、24 点写法（「晚上12点」按 00:00 处理）
  */
 function parseNLPDate(text) {
     const now = new Date();
@@ -1546,8 +1691,15 @@ function parseNLPDate(text) {
     let minute = 0;
     let endHour = null;
     let endMinute = 0;
-    let periodSpecified = false;
+    let periodSpecified = false;    // 起始时刻是否自带时段词
+    let endPeriodSpecified = false; // 结束时刻是否自带时段词（时间段两端的时段词互不覆盖）
+    let startPeriodWord = '';       // 起始时刻的时段词（凌晨/上午/下午/晚上），供结束时刻继承语义
+    let startKind = '';             // 起始时刻的时段语义类别（dawn/morning/noon/afternoon/evening/night）
+    let pendingPeriodWord = '';     // 「每晚/每早」等合写重复词挂起的时段词，供时刻解析继承
+    let startRoll = 0;              // 起始时刻是否落到次日（晚上十二点 = 次日 00:00）
+    let endRoll = 0;                // 结束时刻是否落到次日
     let _fuzzyResolve = null; // 命中模糊时段词时携带 {key,min,max,prefMin,text}，供 parseNLPInput 后处理
+    let rangeTimeIgnored = false; // 跨天区间混写具体时刻：时刻写法已剥离且忽略，供预览弱提示（M2）
     // 相对日期的跨天偏移天数：明天=1 / 后天=2 / 大后天=3 / N天后=N；今天与具体日期=0。
     // 供 parseNLPInput 判断「凌晨时段 + 跨天相对日期」时给出提醒。
     let dayOffset = 0;
@@ -1578,6 +1730,29 @@ function parseNLPDate(text) {
 
     const dayMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 0, '天': 0 };
 
+    // 非捕获数字（用于自建正则时保证分组序号稳定）
+    const numNC = '(?:\\d{1,4}|[一二三四五六七八九十百千万两零]+)';
+    // 中文年份「二零二六」按位拼读，不能走 parseCnNum（会按十百千累加）
+    function parseCnYear(str) {
+        if (/^\d+$/.test(str)) return parseInt(str, 10);
+        const map = { '零': 0, '〇': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+        if (str.length >= 3) {
+            let y = 0;
+            for (const ch of str) {
+                const v = map[ch];
+                if (v === undefined) return 0;
+                y = y * 10 + v;
+            }
+            return y;
+        }
+        return parseCnNum(str);
+    }
+
+    const _todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const _addDays = (base, n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+    // 本周一（以周一为一周之始，与区间/单日期共用同一基准）
+    const _thisMonday = () => _addDays(_todayStart, -((_todayStart.getDay() + 6) % 7));
+
     // --- 重复规则解析（优先级最高，先匹配） ---
     let m;
     m = remaining.match(/每个工作日/);
@@ -1599,11 +1774,14 @@ function parseNLPDate(text) {
         }
     }
 
-    // "每天" → repeat: { type: 'daily' }
+    // "每天"（每晚/每早/每晨 这三个合写形式同时隐含时段语义）→ repeat: { type: 'daily' }
     if (!repeat) {
-        m = remaining.match(/每天/);
+        m = remaining.match(/每天|每晚|每早|每晨/);
         if (m) {
             repeat = { type: 'daily', repeatMode: 'startTime' };
+            // 合写的时段部分不进 matches（否则标题里删不掉「晚」），改为挂起到时刻解析
+            if (m[0] === '每晚') pendingPeriodWord = '晚上';
+            else if (m[0] === '每早' || m[0] === '每晨') pendingPeriodWord = '早上';
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
             if (!date) { date = new Date(now); date.setHours(0,0,0,0); }
@@ -1612,7 +1790,7 @@ function parseNLPDate(text) {
 
     // "每周X" → repeat: { type: 'weekly', dayOfWeek: N }
     if (!repeat) {
-        m = remaining.match(/每周([一二三四五六日天])/);
+        m = remaining.match(/每(?:周|星期|礼拜)([一二三四五六日天])/);
         if (m) {
             const targetDay = dayMap[m[1]];
             if (targetDay !== undefined) {
@@ -1622,7 +1800,8 @@ function parseNLPDate(text) {
                 date = new Date(now);
                 const currentDay = date.getDay();
                 let daysAhead = targetDay - currentDay;
-                if (daysAhead <= 0) daysAhead += 7;
+                // 今天正是该星期几时从今天开始（与「周X」单日期口径一致）
+                if (daysAhead < 0) daysAhead += 7;
                 date.setDate(date.getDate() + daysAhead);
                 date.setHours(0,0,0,0);
             }
@@ -1631,37 +1810,237 @@ function parseNLPDate(text) {
 
     // "每月X号/X日" → repeat: { type: 'monthly', dayOfMonth: N }
     if (!repeat) {
-        m = remaining.match(/每月(\d{1,2})[号日]/);
+        m = remaining.match(new RegExp('每月(' + numNC + ')[号日]'));
         if (m) {
-            const day = parseInt(m[1]);
-            repeat = { type: 'monthly', repeatMode: 'startTime', dayOfMonth: day };
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-            date = new Date(now.getFullYear(), now.getMonth(), day);
-            if (date < now) date.setMonth(date.getMonth() + 1);
-            date.setHours(0,0,0,0);
+            const day = parseCnNum(m[1]);
+            if (day >= 1 && day <= 31) {
+                repeat = { type: 'monthly', repeatMode: 'startTime', dayOfMonth: day };
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+                // 今天就是该日时从今天开始（用 00:00 比较，避免「已过时刻」被推到下月）
+                let y = now.getFullYear(), mo = now.getMonth();
+                for (let i = 0; i < 24; i++) {
+                    const cand = new Date(y, mo, 1);
+                    cand.setDate(day);
+                    if (cand.getDate() === day && cand >= _todayStart) { date = cand; break; }
+                    mo++;
+                    if (mo > 11) { mo = 0; y++; }
+                }
+                if (date) date.setHours(0, 0, 0, 0);
+            }
         }
     }
 
     // "每年X月X日" → repeat: { type: 'yearly', month: N, day: N }
     if (!repeat) {
-        m = remaining.match(/每年(\d{1,2})月(\d{1,2})[日号]/);
+        m = remaining.match(new RegExp('每年(' + numNC + ')月(' + numNC + ')[日号]'));
         if (m) {
-            const month = parseInt(m[1]);
-            const day = parseInt(m[2]);
-            repeat = { type: 'yearly', repeatMode: 'startTime', month: month, day: day };
+            const month = parseCnNum(m[1]);
+            const day = parseCnNum(m[2]);
+            if (month >= 1 && month <= 12 && day >= 1 && day <= nlpDaysInMonth(now.getFullYear(), month - 1)) {
+                repeat = { type: 'yearly', repeatMode: 'startTime', month: month, day: day };
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+                date = new Date(now.getFullYear(), month - 1, day);
+                if (date < _todayStart) date.setFullYear(date.getFullYear() + 1);
+                date.setHours(0, 0, 0, 0);
+            }
+        }
+    }
+
+    // --- 每 N 天/周/月/年（自定义间隔重复）：每两天 / 每两周 / 每3个月 ---
+    if (!repeat) {
+        m = remaining.match(new RegExp('每(' + numNC + ')个?(天|周|星期|礼拜|月|年)'));
+        if (m) {
+            const unitMap = { '天': 'days', '周': 'weeks', '星期': 'weeks', '礼拜': 'weeks', '月': 'months', '年': 'years' };
+            const n = parseCnNum(m[1]);
+            if (n > 0) {
+                repeat = { type: 'custom', interval: n, unit: unitMap[m[2]], repeatMode: 'startTime' };
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+                date = new Date(now);
+                date.setHours(0, 0, 0, 0);
+            }
+        }
+    }
+
+    // --- 跨天日期区间（全天任务）：今天到明天 / 下周一到下周三 / 11月16日到11月18日 ---
+    // 必须在单日期解析之前识别：否则「今天到明天」会被「明天」先消费掉一半，造成 matches 重叠
+    // （标题残留「今天到」）、结束日丢失，且「下周一到下周三」里「下周三」无法与「周一」配对。
+    // 命中后 date/结束日直接成型，后续各段 if (!date) 分支自动跳过；时段解析需另加守卫。
+    let dateRangeEnd = null;  // 区间末日（当日 00:00，与详情面板「结束日期」存法一致）
+    {
+        // 端点 → { date, kind, offset, weekday }；kind 决定「结束早于开始」时能否顺延（跨年/跨月）。
+        // 星期词的基准分四种，保证「下周X」始终落在真正的下一周（与单日期解析口径一致）：
+        //   · 带「下」→ 下周一 + 目标偏移（「下周三」= 下周一后两天）
+        //   · 带「下下」→ 下下周一 + 偏移
+        //   · 带「上/上上」→ 上周/上上周对应日（允许已过去）
+        //   · 带「这/本」→ 本周对应日；无前缀 → 今天或之后最近的该星期几
+        const _resolveRangeToken = (s, anchor) => {
+            let mm;
+            if ((mm = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})[日号]$/))) {
+                const y = +mm[1], mo = +mm[2], dy = +mm[3];
+                if (mo < 1 || mo > 12 || dy < 1 || dy > nlpDaysInMonth(y, mo - 1)) return null;
+                return { date: new Date(y, mo - 1, dy), kind: 'exact' };
+            }
+            if ((mm = s.match(new RegExp('^(' + numNC + ')年(' + numNC + ')月(' + numNC + ')[日号]$')))) {
+                const y = parseCnYear(mm[1]), mo = parseCnNum(mm[2]), dy = parseCnNum(mm[3]);
+                if (!(y > 1000) || mo < 1 || mo > 12 || dy < 1 || dy > nlpDaysInMonth(y, mo - 1)) return null;
+                return { date: new Date(y, mo - 1, dy), kind: 'exact' };
+            }
+            if ((mm = s.match(new RegExp('^(下下|下|本|这)个?月(' + numNC + ')[日号]$')))) {
+                const moOff = mm[1] === '下' ? 1 : (mm[1] === '下下' ? 2 : 0);
+                const day = parseCnNum(mm[2]);
+                const base = new Date(now.getFullYear(), now.getMonth() + moOff, 1);
+                if (day < 1 || day > nlpDaysInMonth(base.getFullYear(), base.getMonth())) return null;
+                return { date: new Date(base.getFullYear(), base.getMonth(), day), kind: 'monthPrefixed' };
+            }
+            if ((mm = s.match(new RegExp('^(' + numNC + ')月(' + numNC + ')[日号]$')))) {
+                const mo = parseCnNum(mm[1]), dy = parseCnNum(mm[2]);
+                if (mo < 1 || mo > 12 || dy < 1 || dy > nlpDaysInMonth(now.getFullYear(), mo - 1)) return null;
+                const d = new Date(now.getFullYear(), mo - 1, dy);
+                if (d < _todayStart) d.setFullYear(d.getFullYear() + 1);
+                return { date: d, kind: 'year' };
+            }
+            if ((mm = s.match(/^(\d{1,2})[\/\.](\d{1,2})$/))) {
+                const mo = +mm[1], dy = +mm[2];
+                if (mo < 1 || mo > 12 || dy < 1 || dy > nlpDaysInMonth(now.getFullYear(), mo - 1)) return null;
+                const d = new Date(now.getFullYear(), mo - 1, dy);
+                if (d < _todayStart) d.setFullYear(d.getFullYear() + 1);
+                return { date: d, kind: 'year' };
+            }
+            // 裸「18号 / 16日 / 十八号」：右端点以起点所在月为锚（11月16日至18日），
+            // 左端点无锚时取当月，已过则推到下月
+            if ((mm = s.match(new RegExp('^(' + numNC + ')[日号]$')))) {
+                const dy = parseCnNum(mm[1]);
+                if (!(dy >= 1 && dy <= 31)) return null;
+                const baseY = anchor ? anchor.getFullYear() : now.getFullYear();
+                const baseM = anchor ? anchor.getMonth() : now.getMonth();
+                if (dy > nlpDaysInMonth(baseY, baseM)) return null;
+                const d = new Date(baseY, baseM, dy);
+                if (!anchor && d < _todayStart) d.setMonth(d.getMonth() + 1);
+                return { date: d, kind: anchor ? 'dayAnchored' : 'month' };
+            }
+            // 周末：以周六为起点（单独使用时再补周日为区间末日）
+            if ((mm = s.match(/^(本|这|下|下下)?周末$/))) {
+                const off = mm[1] === '下' ? 1 : (mm[1] === '下下' ? 2 : 0);
+                const dow = _todayStart.getDay();
+                if (!mm[1] && (dow === 6 || dow === 0)) {
+                    return { date: _addDays(_todayStart, dow === 0 ? -1 : 0), kind: 'weekend' };
+                }
+                return { date: _addDays(_thisMonday(), off * 7 + 5), kind: 'weekend' };
+            }
+            const relMap = { '大前天': -3, '前天': -2, '前日': -2, '昨天': -1, '昨日': -1, '今天': 0, '今日': 0, '明天': 1, '明日': 1, '后天': 2, '后日': 2, '大后天': 3 };
+            if (relMap[s] !== undefined) {
+                return { date: _addDays(_todayStart, relMap[s]), kind: 'day', offset: relMap[s] > 0 ? relMap[s] : 0 };
+            }
+            if ((mm = s.match(new RegExp('^(' + numNC + ')天[以]?后$')))) {
+                const n = parseCnNum(mm[1]);
+                if (!(n > 0)) return null;
+                return { date: _addDays(_todayStart, n), kind: 'day', offset: n };
+            }
+            if ((mm = s.match(new RegExp('^(' + numNC + ')个?(?:周|星期|礼拜)[以]?后$')))) {
+                const n = parseCnNum(mm[1]);
+                if (!(n > 0)) return null;
+                return { date: _addDays(_todayStart, n * 7), kind: 'day', offset: n * 7 };
+            }
+            if ((mm = s.match(new RegExp('^(' + numNC + ')个?月[以]?后$')))) {
+                const n = parseCnNum(mm[1]);
+                if (!(n > 0)) return null;
+                const d = new Date(_todayStart);
+                d.setMonth(d.getMonth() + n);
+                return { date: d, kind: 'day', offset: 0 };
+            }
+            if ((mm = s.match(/^(上上|上|下下|下|本|这)?(?:个)?(?:周|星期|礼拜)([一二三四五六日天])$/))) {
+                const target = dayMap[mm[2]];
+                if (target === undefined) return null;
+                const prefix = mm[1] || '';
+                const targetOffset = (target + 6) % 7;                                 // 周一=0 … 周日=6
+                const thisMonday = _thisMonday();
+                if (prefix === '下') return { date: _addDays(thisMonday, 7 + targetOffset), kind: 'week' };
+                if (prefix === '下下') return { date: _addDays(thisMonday, 14 + targetOffset), kind: 'week' };
+                if (prefix === '上') return { date: _addDays(thisMonday, -7 + targetOffset), kind: 'week' };
+                if (prefix === '上上') return { date: _addDays(thisMonday, -14 + targetOffset), kind: 'week' };
+                if (prefix === '这' || prefix === '本') return { date: _addDays(thisMonday, targetOffset), kind: 'week' };
+                let d = _addDays(thisMonday, targetOffset);
+                if (d < _todayStart) d = _addDays(d, 7);
+                return { date: d, kind: 'weekBare', weekday: target };
+            }
+            return null;
+        };
+
+        const _rangeMatch = remaining.match(NLP_RANGE_RE);
+        if (_rangeMatch) {
+            const startInfo = _resolveRangeToken(_rangeMatch[1], null);
+            // 右端点裸「18日」以起点所在月为锚，避免跨月区间（1月5日到8日）被解析到当月
+            const endInfo = _resolveRangeToken(_rangeMatch[2], startInfo ? startInfo.date : null);
+            let end = null;
+            if (startInfo && endInfo) {
+                const start = startInfo.date;
+                end = endInfo.date;
+                // 终点不带前缀的星期词：以起点为锚取「之后的最近该星期几」（跨度 1~7 天），
+                // 这样「周五到下周一」「周一到周三」都落在同一周序上，不受今天星期几影响
+                if (endInfo.kind === 'weekBare') {
+                    let ahead = (endInfo.weekday - start.getDay() + 7) % 7;
+                    if (ahead === 0) ahead = 7;
+                    end = _addDays(start, ahead);
+                }
+                // 终点早于起点：只有跨年/跨月写法才顺延（12月30日到1月2日 / 28号到下月3号），
+                // 其余（明天的今天、5天后到3天后、同月的反向）判为非法，回退到单日期解析
+                if (end < start) {
+                    if (endInfo.kind === 'year' && end.getMonth() < start.getMonth()) end.setFullYear(end.getFullYear() + 1);
+                    else if (endInfo.kind === 'month' || endInfo.kind === 'dayAnchored') end.setMonth(end.getMonth() + 1);
+                    else end = null;
+                }
+                // 同一天不视为区间（「今天到今天」仍是单日全天）
+                if (end && end.getTime() === start.getTime()) {
+                    // 周末例外：周六到周六仍按周六~周日算
+                    if (endInfo.kind !== 'weekend') end = null;
+                }
+                if (end && endInfo.kind === 'weekend' && startInfo.kind === 'weekend') end = _addDays(start, 1);
+            }
+            if (end) {
+                date = startInfo.date;
+                dateRangeEnd = end;
+                dayOffset = startInfo.offset || 0;
+                matches.push(_rangeMatch[0]);
+                remaining = remaining.replace(_rangeMatch[0], ' ');
+            } else if (startInfo) {
+                // 区间不成立（同日 / 反向 / 终点非法）：按起点单词处理，但整段一并消费，
+                // 避免残留「到昨天」「到3天后」这类半截文字
+                date = startInfo.date;
+                dayOffset = startInfo.offset || 0;
+                matches.push(_rangeMatch[0]);
+                remaining = remaining.replace(_rangeMatch[0], ' ');
+            } else if (endInfo) {
+                date = endInfo.date;
+                matches.push(_rangeMatch[0]);
+                remaining = remaining.replace(_rangeMatch[0], ' ');
+            }
+        }
+    }
+
+    // --- 周末（单独出现）：周六 → 周日 的全天区间 ---
+    if (!date) {
+        m = remaining.match(/(本|这|下|下下)?周末/);
+        if (m) {
+            const off = m[1] === '下' ? 1 : (m[1] === '下下' ? 2 : 0);
+            const dow = _todayStart.getDay();
+            let start;
+            if (!m[1] && (dow === 6 || dow === 0)) start = _addDays(_todayStart, dow === 0 ? -1 : 0);
+            else start = _addDays(_thisMonday(), off * 7 + 5);
+            date = start;
+            dateRangeEnd = _addDays(start, 1);
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
-            date = new Date(now.getFullYear(), month - 1, day);
-            if (date < now) date.setFullYear(date.getFullYear() + 1);
-            date.setHours(0,0,0,0);
         }
     }
 
     // --- 日期解析 ---
-    // N天后 / N天以后
+    // N天后 / N天以后 / N日后（中文数字「三日」常见于「三日后」）
+    // 前置否定：「11月16日后」是「某日之后」不是「16 天后」
     if (!date) {
-        m = remaining.match(new RegExp(numPattern + '天[以]?后'));
+        m = remaining.match(new RegExp('(?<![\\d月])' + numPattern + '(?:天|日)[以]?后'));
         if (m) {
             const days = parseCnNum(m[1]);
             date = new Date(now);
@@ -1672,7 +2051,42 @@ function parseNLPDate(text) {
         }
     }
 
-    // N小时后 / N个小时后（相对时间，设置具体时间点）
+    // N周后 / N个星期后 / 两周后
+    if (!date) {
+        m = remaining.match(new RegExp('(' + numNC + ')个?(?:周|星期|礼拜)[以]?后'));
+        if (m) {
+            const weeks = parseCnNum(m[1]);
+            if (weeks > 0) {
+                date = _addDays(_todayStart, weeks * 7);
+                dayOffset = weeks * 7;
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+            }
+        }
+    }
+
+    // N个月后 / 半个月后
+    if (!date) {
+        m = remaining.match(new RegExp('(' + numNC + ')个?月[以]?后'));
+        if (m) {
+            const months = parseCnNum(m[1]);
+            if (months > 0) {
+                date = new Date(_todayStart);
+                date.setMonth(date.getMonth() + months);
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+            }
+        }
+    }
+    if (!date) {
+        m = remaining.match(/半个?月[以]?后/);
+        if (m) {
+            date = _addDays(_todayStart, 15);
+            matches.push(m[0]);
+            remaining = remaining.replace(m[0], ' ');
+        }
+    }
+
     if (!date || (date && hour === null)) {
         m = remaining.match(new RegExp(numPattern + '个?小时[以]?后'));
         if (m) {
@@ -1704,9 +2118,10 @@ function parseNLPDate(text) {
         }
     }
 
-    // 半小时后 / 半小时以后（相对时间，设置具体时间点）
+    // 半小时后 / 半个小时后 / 半小时以后（相对时间，设置具体时间点）
+    // 前置否定：不能把「一个半小时后」截成「半小时后」，那档 90 分钟由下面的分支处理
     if (!date || (date && hour === null)) {
-        m = remaining.match(/半小时[以]?后/);
+        m = remaining.match(/(?<!个)半(?:个)?小时[以]?后/);
         if (m) {
             const targetDate = new Date(now.getTime() + 30 * 60 * 1000);
             if (!date) date = targetDate;
@@ -1734,23 +2149,31 @@ function parseNLPDate(text) {
         }
     }
 
-    // YYYY年M月D日
+    // YYYY年M月D日（含中文数字「二零二六年十一月十六日」；非法日期不再静默顺延）
     if (!date) {
-        m = remaining.match(/(\d{4})年(\d{1,2})月(\d{1,2})[日号]/);
+        m = remaining.match(new RegExp('(\\d{4}|[零〇一二三四五六七八九]{2,4})年(' + numNC + ')月(' + numNC + ')[日号]'));
         if (m) {
-            date = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
+            const y = parseCnYear(m[1]);
+            const mo = parseCnNum(m[2]);
+            const dy = parseCnNum(m[3]);
+            if (y > 1000 && mo >= 1 && mo <= 12 && dy >= 1 && dy <= nlpDaysInMonth(y, mo - 1)) {
+                date = new Date(y, mo - 1, dy);
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+            }
         }
     }
 
-    // YYYY/M/D 或 YYYY-M-D
+    // YYYY/M/D、YYYY-M-D、YYYY.M.D
     if (!date) {
-        m = remaining.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+        m = remaining.match(/(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
         if (m) {
-            date = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
+            const y = parseInt(m[1]), mo = parseInt(m[2]), dy = parseInt(m[3]);
+            if (mo >= 1 && mo <= 12 && dy >= 1 && dy <= nlpDaysInMonth(y, mo - 1)) {
+                date = new Date(y, mo - 1, dy);
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+            }
         }
     }
 
@@ -1760,64 +2183,93 @@ function parseNLPDate(text) {
         if (m) {
             const month = parseInt(m[1]);
             const day = parseInt(m[2]);
-            if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            if (month >= 1 && month <= 12 && day >= 1 && day <= nlpDaysInMonth(now.getFullYear(), month - 1)) {
                 date = new Date(now.getFullYear(), month - 1, day);
                 // 同一天即使时刻已过也保持今天，避免误判为明年
-                const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                if (date < todayStart) date.setFullYear(date.getFullYear() + 1);
+                if (date < _todayStart) date.setFullYear(date.getFullYear() + 1);
                 matches.push(m[0]);
                 remaining = remaining.replace(m[0], ' ');
             }
         }
     }
 
-    // X月X日/X月X号
+    // X月X日/X月X号（含中文数字「十一月十六日」）
     if (!date) {
-        m = remaining.match(/(\d{1,2})月(\d{1,2})[日号]/);
+        m = remaining.match(new RegExp('(' + numNC + ')月(' + numNC + ')[日号]'));
         if (m) {
-            const month = parseInt(m[1]) - 1;
-            const day = parseInt(m[2]);
-            date = new Date(now.getFullYear(), month, day);
-            // 仅当日期严格早于今天（非同一天）才推进到下一年
-            // 同一天即使时刻已过也保持今天，避免"今天7月7日"被误判为明年
-            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            if (date < todayStart) date.setFullYear(date.getFullYear() + 1);
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-        }
-    }
-
-    // X号（当月X号）
-    if (!date) {
-        m = remaining.match(/(?<!\d)(\d{1,2})号(?!\d)/);
-        if (m) {
-            const day = parseInt(m[1]);
-            if (day >= 1 && day <= 31) {
-                date = new Date(now.getFullYear(), now.getMonth(), day);
-                // 同一天即使时刻已过也保持今天，避免误判为下月
-                const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                if (date < todayStart) date.setMonth(date.getMonth() + 1);
+            const month = parseCnNum(m[1]) - 1;
+            const day = parseCnNum(m[2]);
+            if (month >= 0 && month <= 11 && day >= 1 && day <= nlpDaysInMonth(now.getFullYear(), month)) {
+                date = new Date(now.getFullYear(), month, day);
+                // 仅当日期严格早于今天（非同一天）才推进到下一年
+                // 同一天即使时刻已过也保持今天，避免"今天7月7日"被误判为明年
+                if (date < _todayStart) date.setFullYear(date.getFullYear() + 1);
                 matches.push(m[0]);
                 remaining = remaining.replace(m[0], ' ');
             }
         }
     }
 
-    // 本月底/本月末
+    // 本月/这月/下月/下下月 + X号（「下个月20号」不能落到本月）
     if (!date) {
-        m = remaining.match(/本月底|本月末/);
+        m = remaining.match(new RegExp('(下下|下|本|这)个?月(' + numNC + ')[日号]'));
         if (m) {
-            date = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+            const off = m[1] === '下' ? 1 : (m[1] === '下下' ? 2 : 0);
+            const day = parseCnNum(m[2]);
+            const base = new Date(now.getFullYear(), now.getMonth() + off, 1);
+            if (day >= 1 && day <= nlpDaysInMonth(base.getFullYear(), base.getMonth())) {
+                date = new Date(base.getFullYear(), base.getMonth(), day);
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+            }
+        }
+    }
+
+    // X号 / X日（当月X号，含中文数字「十六号」）；
+    // 前面紧贴「数字月」时不参与（「2月30日」整体交给上面的月日分支判定，不能退化成「30日」）；
+    // 「第3日」这类序数写法也不参与；中文「一日/三日」多是量词（一日游），只有 ≥10 才当日期
+    if (!date) {
+        let _dayRaw = null;
+        m = remaining.match(new RegExp('(?<![\\d月第])(' + numNC + ')[号日](?!\\d)'));
+        if (m) {
+            const cnNumeral = !/^\d+$/.test(m[1]);
+            const day = parseCnNum(m[1]);
+            const isOk = day >= 1 && day <= 31 && !(cnNumeral && m[0].endsWith('日') && day < 10);
+            if (isOk) _dayRaw = day;
+        }
+        if (_dayRaw !== null) {
+            let y = now.getFullYear(), mo = now.getMonth();
+            for (let i = 0; i < 24; i++) {
+                const cand = new Date(y, mo, 1);
+                cand.setDate(_dayRaw);
+                if (cand.getDate() === _dayRaw && cand >= _todayStart) { date = cand; break; }
+                mo++;
+                if (mo > 11) { mo = 0; y++; }
+            }
+            if (date) {
+                matches.push(m[0]);
+                remaining = remaining.replace(m[0], ' ');
+            }
+        }
+    }
+
+    // 月初 / 月底 / 本月末 / 下月初 / 下下月底
+    if (!date) {
+        m = remaining.match(/(下下|下|本|这)?个?月(初|底|末)/);
+        if (m) {
+            const off = m[1] === '下' ? 1 : (m[1] === '下下' ? 2 : 0);
+            const first = new Date(now.getFullYear(), now.getMonth() + off, 1);
+            date = (m[2] === '初') ? first : new Date(first.getFullYear(), first.getMonth() + 1, 0);
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
     }
 
-    // 下月底/下月末
+    // 明年底/明年末（必须先于「年底」，否则「明年底」会被截成今年底）
     if (!date) {
-        m = remaining.match(/下月底|下月末/);
+        m = remaining.match(/明年底|明年末/);
         if (m) {
-            date = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+            date = new Date(now.getFullYear() + 1, 11, 31);
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
@@ -1828,98 +2280,47 @@ function parseNLPDate(text) {
         m = remaining.match(/年底|年末/);
         if (m) {
             date = new Date(now.getFullYear(), 11, 31);
-            if (date < now) date.setFullYear(date.getFullYear() + 1);
+            if (date < _todayStart) date.setFullYear(date.getFullYear() + 1);
             matches.push(m[0]);
             remaining = remaining.replace(m[0], ' ');
         }
     }
 
-    // 明年底/明年末
+    // 相对日词（长词在前：大前天/大后天 必须先于 前天/后天）
     if (!date) {
-        m = remaining.match(/明年底|明年末/);
-        if (m) {
-            date = new Date(now.getFullYear() + 1, 11, 31);
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-        }
-    }
-
-    // 大后天
-    if (!date) {
-        m = remaining.match(/大后天/);
-        if (m) {
-            date = new Date(now);
-            date.setDate(date.getDate() + 3);
-            dayOffset = 3;
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-        }
-    }
-
-    // 后天
-    if (!date) {
-        m = remaining.match(/后天/);
-        if (m) {
-            date = new Date(now);
-            date.setDate(date.getDate() + 2);
-            dayOffset = 2;
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-        }
-    }
-
-    // 明天
-    if (!date) {
-        m = remaining.match(/明天/);
-        if (m) {
-            date = new Date(now);
-            date.setDate(date.getDate() + 1);
-            dayOffset = 1;
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-        }
-    }
-
-    // 今天
-    if (!date) {
-        m = remaining.match(/今天/);
-        if (m) {
-            date = new Date(now);
-            matches.push(m[0]);
-            remaining = remaining.replace(m[0], ' ');
-        }
-    }
-
-    // 下周X
-    if (!date) {
-        m = remaining.match(/下(?:周|星期)([一二三四五六日天])/);
-        if (m) {
-            const targetDay = dayMap[m[1]];
-            if (targetDay !== undefined) {
-                date = new Date(now);
-                const currentDay = date.getDay();
-                let daysAhead = targetDay - currentDay;
-                if (daysAhead <= 0) daysAhead += 7;
-                // "下周X" = 下一个X（最近的未来X），与"本周X"算法一致
-                // 例如周五输入"下周一" → 3天后（而非10天后）
-                date.setDate(date.getDate() + daysAhead);
-                matches.push(m[0]);
-                remaining = remaining.replace(m[0], ' ');
+        const _relWords = [['大前天', -3], ['大后天', 3], ['前天', -2], ['前日', -2], ['后天', 2], ['后日', 2], ['昨天', -1], ['昨日', -1], ['明天', 1], ['明日', 1], ['今天', 0], ['今日', 0]];
+        for (const [word, off] of _relWords) {
+            if (remaining.indexOf(word) !== -1) {
+                date = _addDays(_todayStart, off);
+                if (off > 0) dayOffset = off;
+                matches.push(word);
+                remaining = remaining.replace(word, ' ');
+                break;
             }
         }
     }
 
-    // 本周X / 周X / 星期X
+    // 周X / 星期X / 礼拜X（可带 上/上上/下/下下/本/这 前缀）
+    //   下  → 下周一 + 偏移（真正的下一周，与区间口径一致；旧实现是「最近的下一个X」，
+    //         导致周一输入「下周三」落到本周三，与「下周一到下周三」互相矛盾）
+    //   上/上上 → 上周/上上周对应日；本/这 → 本周对应日；无前缀 → 今天或之后最近
     if (!date) {
-        m = remaining.match(/(?:本)?(?:周|星期)([一二三四五六日天])/);
+        m = remaining.match(/(上上|上|下下|下|本|这)?(?:个)?(?:周|星期|礼拜)([一二三四五六日天])/);
         if (m) {
-            const targetDay = dayMap[m[1]];
+            const targetDay = dayMap[m[2]];
             if (targetDay !== undefined) {
-                date = new Date(now);
-                const currentDay = date.getDay();
-                let daysAhead = targetDay - currentDay;
-                if (daysAhead <= 0) daysAhead += 7;
-                date.setDate(date.getDate() + daysAhead);
+                const prefix = m[1] || '';
+                const targetOffset = (targetDay + 6) % 7;   // 周一=0 … 周日=6
+                const monday = _thisMonday();
+                if (prefix === '下') date = _addDays(monday, 7 + targetOffset);
+                else if (prefix === '下下') date = _addDays(monday, 14 + targetOffset);
+                else if (prefix === '上') date = _addDays(monday, -7 + targetOffset);
+                else if (prefix === '上上') date = _addDays(monday, -14 + targetOffset);
+                else if (prefix === '本' || prefix === '这') date = _addDays(monday, targetOffset);
+                else {
+                    date = _addDays(monday, targetOffset);
+                    if (date < _todayStart) date = _addDays(date, 7);
+                }
                 matches.push(m[0]);
                 remaining = remaining.replace(m[0], ' ');
             }
@@ -1928,54 +2329,32 @@ function parseNLPDate(text) {
 
     // --- 时间段解析 ---
 
-    // 辅助函数：解析单个时间部分
+    // 辅助函数：解析单个时间部分（时段词按语义折算；支持 半 / 一刻 / 三刻 / N分）
     function parseTimePart(str) {
         str = str.trim();
-        let m;
-        // X点X分
-        m = str.match(/(凌晨|上午|下午|晚上)?(\d{1,2}|[一二三四五六七八九十两]+)[点时:：](\d{1,2}|[一二三四五六七八九十两]+)分?/);
-        if (m) {
-            let h = parseHour(m[2]);
-            let min = parseHour(m[3]);
-            let period = m[1];
-            let ps = false;
-            if (period === '下午' || period === '晚上') { ps = true; if (h < 12) h += 12; }
-            else if (period === '凌晨') { ps = true; if (h === 12) h = 0; }
-            else if (period === '上午') { ps = true; }
-            return { hour: h, minute: min, periodSpecified: ps };
-        }
-        // X点半
-        m = str.match(/(凌晨|上午|下午|晚上)?(\d{1,2}|[一二三四五六七八九十两]+)[点时]半/);
-        if (m) {
-            let h = parseHour(m[2]);
-            let period = m[1];
-            let ps = false;
-            if (period === '下午' || period === '晚上') { ps = true; if (h < 12) h += 12; }
-            else if (period === '凌晨') { ps = true; if (h === 12) h = 0; }
-            else if (period === '上午') { ps = true; }
-            return { hour: h, minute: 30, periodSpecified: ps };
-        }
-        // X点
-        m = str.match(/(凌晨|上午|下午|晚上)?(\d{1,2}|[一二三四五六七八九十两]+)[点时]/);
-        if (m) {
-            let h = parseHour(m[2]);
-            let period = m[1];
-            let ps = false;
-            if (period === '下午' || period === '晚上') { ps = true; if (h < 12) h += 12; }
-            else if (period === '凌晨') { ps = true; if (h === 12) h = 0; }
-            else if (period === '上午') { ps = true; }
-            return { hour: h, minute: 0, periodSpecified: ps };
-        }
-        return null;
+        const mm = str.match(new RegExp('(' + NLP_PERIOD_WORDS + ')?\\s*(' + numNC + ')\\s*[点时:：]\\s*(半|一刻|三刻|' + numNC + '分?)?'));
+        if (!mm) return null;
+        const h0 = parseHour(mm[2]);
+        const tail = mm[3] || '';
+        let min = 0;
+        if (tail === '半') min = 30;
+        else if (tail === '一刻') min = 15;
+        else if (tail === '三刻') min = 45;
+        else if (tail) min = parseHour(tail.replace('分', ''));
+        const word = mm[1] || '';
+        const kind = NLP_PERIOD_KIND[word] || '';
+        const applied = nlpApplyPeriod(h0, kind);
+        return { hour: applied.hour, minute: min, periodSpecified: !!word, period: word, kind: kind, roll: applied.roll };
     }
 
     // 更简单的时间段解析
-    // "从下午3点到5点" / "9点到11点" / "3点-5点"
+    // "从下午3点到5点" / "9点到11点" / "3点-5点" / "9:00-11:30"
+    const _timeTail = '(?:半|一刻|三刻|' + numNC + '分?)?';
     const rangePatterns = [
-        // 从X点到Y点（带时段）
-        new RegExp('从?(凌晨|上午|下午|晚上)?' + numPattern + '[点时:：](?:半|' + numPattern + '分?)?\\s*[到至~\\-]\\s*(凌晨|上午|下午|晚上)?' + numPattern + '[点时:：](?:半|' + numPattern + '分?)?'),
-        // X点-Y点
-        new RegExp(numPattern + '[点时:：](?:半|' + numPattern + '分?)?\\s*[到至~\\-]\\s*' + numPattern + '[点时:：](?:半|' + numPattern + '分?)?')
+        // 从X点到Y点（两端各自可带时段词，允许「下午 3点」这种带空格的写法）
+        new RegExp('从?(' + NLP_PERIOD_WORDS + ')?\\s*' + numNC + '\\s*[点时:：]\\s*' + _timeTail + '\\s*[到至~\\-—]\\s*(' + NLP_PERIOD_WORDS + ')?\\s*' + numNC + '\\s*[点时:：]\\s*' + _timeTail),
+        // X点-Y点（两端都不带时段词）
+        new RegExp(numNC + '\\s*[点时:：]\\s*' + _timeTail + '\\s*[到至~\\-—]\\s*' + numNC + '\\s*[点时:：]\\s*' + _timeTail)
     ];
 
     let rangeMatched = false;
@@ -1983,16 +2362,39 @@ function parseNLPDate(text) {
         m = remaining.match(pat);
         if (m) {
             const fullMatch = m[0];
-            const parts = fullMatch.split(/\s*[到至~\-]\s*/);
+            const parts = fullMatch.split(/\s*[到至~\-—]\s*/);
             if (parts.length === 2) {
                 const startResult = parseTimePart(parts[0].replace(/^从/, ''));
                 const endResult = parseTimePart(parts[1]);
                 if (startResult && endResult) {
+                    // 「每晚8点到10点」：合写重复词挂起的时段语义补给没有时段词的起点
+                    if (!startResult.period && pendingPeriodWord) {
+                        const _pk = NLP_PERIOD_KIND[pendingPeriodWord] || '';
+                        const _applied = nlpApplyPeriod(startResult.hour, _pk);
+                        startResult.hour = _applied.hour;
+                        startResult.roll = _applied.roll;
+                        startResult.kind = _pk;
+                        startResult.period = pendingPeriodWord;
+                        startResult.periodSpecified = true;
+                    }
                     hour = startResult.hour;
                     minute = startResult.minute;
                     endHour = endResult.hour;
                     endMinute = endResult.minute;
-                    periodSpecified = startResult.periodSpecified || endResult.periodSpecified;
+                    // 两端的时段词各自独立：不能用 OR 合并，否则「下午3点到5点」的结束时刻
+                    // 会误以为已指定时段而跳过智能修正，被解析成次日 05:00
+                    periodSpecified = startResult.periodSpecified;
+                    endPeriodSpecified = endResult.periodSpecified;
+                    startPeriodWord = startResult.period || '';
+                    startKind = startResult.kind || '';
+                    startRoll = startResult.roll || 0;
+                    endRoll = endResult.roll || 0;
+                    // 合写时段词（今晚/明晚）自带日期偏移：仅在没写其它日期时生效
+                    const _pOff = NLP_PERIOD_DAY_OFFSET[startPeriodWord];
+                    if (_pOff !== undefined && !date) {
+                        date = _addDays(_todayStart, _pOff);
+                        if (_pOff > 0) dayOffset = _pOff;
+                    }
                     rangeMatched = true;
                     matches.push(fullMatch);
                     remaining = remaining.replace(fullMatch, ' ');
@@ -2004,57 +2406,54 @@ function parseNLPDate(text) {
     }
 
     // --- 单时间点解析（如果时间段未匹配） ---
-    if (!rangeMatched) {
-        // X点X分
-        m = remaining.match(new RegExp('(凌晨|上午|下午|晚上)?' + numPattern + '[点时:：]' + numPattern + '分?'));
+    // 跨天日期区间命中后不再解析时刻：区间与「X点到Y点」语义互斥，混写（今天到明天下午3点）保留原样，
+    // 避免把起点日 00:00 改成 15:00、或让 endHour 覆盖掉区间末日
+    if (!rangeMatched && !dateRangeEnd) {
+        m = remaining.match(new RegExp('(' + NLP_PERIOD_WORDS + ')?\\s*(' + numNC + ')\\s*[点时:：]\\s*(半|一刻|三刻|' + numNC + '分?)?'));
+        // 「早一点/晚一点」是副词不是时刻，避免被解析成 01:00（匹配串可能带尾随空格）
+        if (m && /^[早晚]一点\s*$/.test(m[0])) m = null;
         if (m) {
-            hour = parseHour(m[2]);
-            minute = parseHour(m[3]);
-            const period = m[1];
-            if (period === '下午' || period === '晚上') { periodSpecified = true; if (hour < 12) hour += 12; }
-            else if (period === '凌晨') { periodSpecified = true; if (hour === 12) hour = 0; }
-            else if (period === '上午') { periodSpecified = true; }
+            const word = m[1] || pendingPeriodWord || '';
+            const kind = NLP_PERIOD_KIND[word] || '';
+            const tail = m[3] || '';
+            let _min = 0;
+            if (tail === '半') _min = 30;
+            else if (tail === '一刻') _min = 15;
+            else if (tail === '三刻') _min = 45;
+            else if (tail) _min = parseHour(tail.replace('分', ''));
+            const applied = nlpApplyPeriod(parseHour(m[2]), kind);
+            hour = applied.hour;
+            minute = _min;
+            startRoll = applied.roll;
+            periodSpecified = !!word;
+            startPeriodWord = word;
+            startKind = kind;
+            // 合写时段词（今晚/明晚）自带日期偏移：仅在没写其它日期时生效
+            const _pOff = NLP_PERIOD_DAY_OFFSET[word];
+            if (_pOff !== undefined && !date) {
+                date = _addDays(_todayStart, _pOff);
+                if (_pOff > 0) dayOffset = _pOff;
+            }
             matches.push(m[0]);
             isAllDay = false;
         }
-
-        // X点半
-        if (hour === null) {
-            m = remaining.match(new RegExp('(凌晨|上午|下午|晚上)?' + numPattern + '[点时]半'));
-            if (m) {
-                hour = parseHour(m[2]);
-                minute = 30;
-                const period = m[1];
-                if (period === '下午' || period === '晚上') { periodSpecified = true; if (hour < 12) hour += 12; }
-                else if (period === '凌晨') { periodSpecified = true; if (hour === 12) hour = 0; }
-                else if (period === '上午') { periodSpecified = true; }
-                matches.push(m[0]);
-                isAllDay = false;
-            }
-        }
-
-        // X点
-        if (hour === null) {
-            m = remaining.match(new RegExp('(凌晨|上午|下午|晚上)?' + numPattern + '[点时](?!\\d)'));
-            if (m) {
-                hour = parseHour(m[2]);
-                const period = m[1];
-                if (period === '下午' || period === '晚上') { periodSpecified = true; if (hour < 12) hour += 12; }
-                else if (period === '凌晨') { periodSpecified = true; if (hour === 12) hour = 0; }
-                else if (period === '上午') { periodSpecified = true; }
-                matches.push(m[0]);
-                isAllDay = false;
-            }
-        }
     }
 
-    // --- 模糊时段词解析（上午/中午/下午/晚上）：取用户偏好时间 ---
+    // --- 模糊时段词解析（上午/早上/中午/下午/傍晚/晚上）：取用户偏好时间 ---
     // 仅当未匹配到具体小时时生效（"上午10点"仍以 10 点为准）；命中后直接返回，
-    // 日期/顺延/冲突检测交由 parseNLPInput 的 resolveFuzzyTimeConflict 后处理
-    if (hour === null && !repeat) {
+    // 日期/顺延/冲突检测交由 parseNLPInput 的 resolveFuzzyTimeConflict 后处理。
+    // 跨天区间命中时不走这里：区间已确定全天，不能被「下午」改写成具体时刻。
+    // 带重复规则时也走这里（「每天早上 跑步」= 每天 09:00），重复信息原样带出。
+    if (hour === null && !dateRangeEnd) {
         const _fuzzyPrefs = settings.commandTimePrefs || {};
         for (const fw of FUZZY_TIME_WORDS) {
-            const fm = remaining.match(fw.word);
+            let fm = remaining.match(fw.word);
+            if (!fm && fw.aliases) {
+                for (const alias of fw.aliases) {
+                    const hit = remaining.match(alias);
+                    if (hit) { fm = hit; break; }
+                }
+            }
             if (fm) {
                 let prefMin = (typeof _fuzzyPrefs[fw.key] === 'number') ? _fuzzyPrefs[fw.key] : fw.defaultMin;
                 prefMin = Math.max(fw.min, Math.min(fw.max, prefMin));
@@ -2065,12 +2464,34 @@ function parseNLPDate(text) {
                     date: _fdate,
                     isAllDay: false,
                     endTime: null,
-                    repeat: null,
+                    repeat: repeat,
                     matches: matches,
                     dayOffset: dayOffset,
                     _fuzzyResolve: { key: fw.key, min: fw.min, max: fw.max, prefMin: prefMin, text: fm[0] }
                 };
             }
+        }
+    } else if (dateRangeEnd && hour === null) {
+        // 跨天日期区间命中：残留的时间写法不参与排程（区间已确定为全天），
+        // 但要加入 matches 从标题剥离，避免残留在任务标题里。
+        // 必须先剥带数字的具体时刻（整串，含时段词），再剥纯时段词：
+        // 顺序反了会把「下午3点」拆成「下午」「3点」两条，replace「下午」后「3点」就再也匹配不到，
+        // 残留在标题里（「11/16到11/18 下午3点 跑步」→ 标题「3点 跑步」）。
+        const _tm = remaining.match(new RegExp('(' + NLP_PERIOD_WORDS + ')?\\s*(' + numNC + ')\\s*[点时:：]\\s*(?:半|一刻|三刻|' + numNC + '分?)?'));
+        if (_tm) {
+            matches.push(_tm[0]);
+            remaining = remaining.replace(_tm[0], ' ');
+            rangeTimeIgnored = true; // 供预览弱提示「区间任务忽略时刻」（M2）
+        }
+        for (const fw of FUZZY_TIME_WORDS) {
+            let fm = remaining.match(fw.word);
+            if (!fm && fw.aliases) {
+                for (const alias of fw.aliases) {
+                    const hit = remaining.match(alias);
+                    if (hit) { fm = hit; break; }
+                }
+            }
+            if (fm) { matches.push(fm[0]); break; }
         }
     }
 
@@ -2078,28 +2499,55 @@ function parseNLPDate(text) {
     if (!date && hour === null && !repeat) return null;
 
     // 智能时间解析
-    // 未指定时段（上午/下午/晚上/凌晨）时，1-7 点自动视为下午（+12）
+    // 未指定时段时，1-7 点自动视为下午（+12）—— 时段词表已覆盖 早/晚/中午/傍晚/深夜 等常见写法
     if (hour !== null && !periodSpecified) {
         if (hour >= 1 && hour <= 7) hour += 12;
     }
-    // 时间段的结束时间应用相同的智能修正，避免"3点到5点"被识别为 15:00-05:00
-    if (endHour !== null && !periodSpecified) {
-        if (endHour >= 1 && endHour <= 7) endHour += 12;
+    // 时间段的结束时刻：与起点逐端点判断（旧写法用 OR 合并两端的「是否带时段词」，
+    // 导致「下午3点到5点」的终点跳过修正 → 次日 05:00）
+    //   · 终点自带时段词 → 以它为准，parseTimePart 已折算
+    //   · 起点晨间（凌晨/早/上午）→ 终点沿用晨间，不做下午化（早上6点到7点 = 06:00-07:00）
+    //   · 起点中午/午后/傍晚 → 终点不到 12 点就后移半天（晚上7点到9点 = 19:00-21:00）
+    //   · 起点夜间（深夜/半夜）→ 不做后移（深夜1点到3点 = 01:00-03:00）
+    //   · 起点无时段 → 沿用旧规则，仅 1-7 点视为下午（3点到5点 = 15:00-17:00）
+    // 后移后仍不晚于起点则不后移：说明用户要的是跨天（晚上11点到1点 → 次日 01:00）
+    if (endHour !== null && !endPeriodSpecified) {
+        const _startAbs = (hour === null ? 0 : hour * 60 + minute);
+        const _pmInherit = (startKind === 'noon' || startKind === 'afternoon' || startKind === 'evening');
+        if (_pmInherit) {
+            if (startKind === 'evening' && endHour === 12) { endHour = 0; endRoll = 1; }
+            else if (endHour >= 1 && endHour < 12 && (endHour + 12) * 60 + endMinute > _startAbs) endHour += 12;
+        } else if (!startKind && endHour >= 1 && endHour <= 7) {
+            // 起点也没写时段：与起点同一套「1-7 点视为下午」的语义
+            if ((endHour + 12) * 60 + endMinute > _startAbs) endHour += 12;
+        }
     }
 
-    // 如果没有日期但有时间，默认今天
+    // 如果没有日期但有时间，默认今天（已过则次日）
+    let _autoAdvanced = false;
     if (!date) {
         date = new Date(now);
         if (hour !== null) {
             const candidate = new Date(date);
             candidate.setHours(hour, minute, 0, 0);
-            if (candidate <= now) date.setDate(date.getDate() + 1);
+            if (candidate <= now) { date.setDate(date.getDate() + 1); _autoAdvanced = true; }
+        }
+    }
+
+    // 期限后缀（「周五之前」「12月1日为止」「11月16日后」）：与已解析日期一并消费，避免残留在标题
+    if (matches.length && date) {
+        const _qualifier = remaining.match(/^\s*(之前|之后|以前|以后|为止|前|后)(?=\s|$)/);
+        if (_qualifier) {
+            matches.push(_qualifier[1]);
+            remaining = remaining.replace(_qualifier[1], ' ');
         }
     }
 
     // 设置时间
     if (hour !== null) {
         date.setHours(hour, minute, 0, 0);
+        // 晚上十二点 / 半夜 12 点 = 次日 00:00（无日期时上面的「已过则次日」已处理，勿重复加一天）
+        if (startRoll && !_autoAdvanced) date.setDate(date.getDate() + 1);
     } else {
         date.setHours(0, 0, 0, 0);
     }
@@ -2108,63 +2556,19 @@ function parseNLPDate(text) {
     if (endHour !== null) {
         endTime = new Date(date);
         endTime.setHours(endHour, endMinute, 0, 0);
+        if (endRoll) endTime.setDate(endTime.getDate() + 1);
         // 如果结束时间早于开始时间，结束时间为次日
         if (endTime <= date) endTime.setDate(endTime.getDate() + 1);
     }
 
-    // --- 跨天时间段：这周一到周三 / 周一到周三 ---
-    m = text.match(/(?:这|本)?(?:周|星期)([一二三四五六日天])\s*[到至~\-]\s*(?:周|星期)?([一二三四五六日天])/);
-    if (m && !endTime) {
-        const startDay = dayMap[m[1]];
-        const endDay = dayMap[m[2]];
-        if (startDay !== undefined && endDay !== undefined) {
-            const startDate = new Date(now);
-            const currentDay = startDate.getDay();
-            let daysAhead = startDay - currentDay;
-            if (daysAhead < 0) daysAhead += 7;
-            startDate.setDate(startDate.getDate() + daysAhead);
-            startDate.setHours(0,0,0,0);
-
-            const endDate = new Date(startDate);
-            let endDaysAhead = endDay - startDay;
-            if (endDaysAhead <= 0) endDaysAhead += 7;
-            endDate.setDate(endDate.getDate() + endDaysAhead);
-            endDate.setHours(23, 59, 59, 0);
-
-            date = startDate;
-            endTime = endDate;
-            isAllDay = true;
-            matches.push(m[0]);
-        }
+    // 跨天日期区间：结束日按「末日 00:00」存（与详情面板结束日期一致，跨度为整数天，
+    // 且 isMultiDayTask / fmtMDRange / 日程视图都只取日期部分，时刻不参与判定）
+    if (dateRangeEnd) {
+        endTime = new Date(dateRangeEnd.getFullYear(), dateRangeEnd.getMonth(), dateRangeEnd.getDate());
+        isAllDay = true;
     }
 
-    // --- 跨天时间段：今天到明天 / 今天到后天 / 明天到后天 ---
-    if (!endTime) {
-        const dayKeywordMap = { '今天': 0, '明天': 1, '后天': 2, '大后天': 3 };
-        m = text.match(/(今天|明天|后天|大后天)\s*[到至~\-]\s*(今天|明天|后天|大后天)/);
-        if (m) {
-            const startOffset = dayKeywordMap[m[1]];
-            const endOffset = dayKeywordMap[m[2]];
-            if (startOffset !== undefined && endOffset !== undefined && endOffset > startOffset) {
-                const startDate = new Date(now);
-                startDate.setDate(startDate.getDate() + startOffset);
-                startDate.setHours(0, 0, 0, 0);
-
-                const endDate = new Date(now);
-                endDate.setDate(endDate.getDate() + endOffset);
-                endDate.setHours(23, 59, 59, 0);
-
-                date = startDate;
-                endTime = endDate;
-                isAllDay = true;
-                matches.push(m[0]);
-                // 从 remaining 中也移除该关键词，避免后续重复匹配
-                remaining = remaining.replace(m[0], ' ');
-            }
-        }
-    }
-
-    return { date, isAllDay, endTime, repeat, matches, dayOffset };
+    return { date, isAllDay, endTime, repeat, matches, dayOffset, rangeTimeIgnored: rangeTimeIgnored };
 }
 
 // ==================== 模糊时段词后处理：顺延 + 冲突检测 ====================
@@ -2221,6 +2625,7 @@ function resolveFuzzyTimeConflict(baseDate, fw) {
     }
 
     // 1. 确定候选日期与时间
+    const prefCandidate = mkDateTime(baseDate, prefMin); // 用户偏好时刻（冲突/过期调整前），供提示对比
     let candidate = mkDateTime(baseDate, prefMin);
     if (sameDay(candidate, now) && candidate.getTime() <= now.getTime()) {
         if (!smart) {
@@ -2240,7 +2645,7 @@ function resolveFuzzyTimeConflict(baseDate, fw) {
         }
     }
     // 关闭智能计划：不检测任务冲突，直接返回
-    if (!smart) return { startTime: candidate, conflict: false };
+    if (!smart) return { startTime: candidate, conflict: false, prefTime: prefCandidate };
 
     // 2. 冲突检测顺延（在该词语区间内按步长推进）
     let conflict = false;
@@ -2272,7 +2677,7 @@ function resolveFuzzyTimeConflict(baseDate, fw) {
         }
         candidate = mkDateTime(curDay, curMin);
     }
-    return { startTime: candidate, conflict: conflict };
+    return { startTime: candidate, conflict: conflict, prefTime: prefCandidate };
 }
 
 // ==================== NLP 预览渲染 ====================
@@ -2283,16 +2688,24 @@ function renderNLPPreview(parsed) {
     // 日期预览
     if (parsed.startTime) {
         const d = parsed.startTime;
-        const dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
+        let dateStr = `${d.getMonth() + 1}月${d.getDate()}日`;
         let timeStr = parsed.isAllDay ? '全天' : `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
         if (parsed.endTime && !parsed.isAllDay) {
             const ed = parsed.endTime;
             timeStr += `-${ed.getHours().toString().padStart(2, '0')}:${ed.getMinutes().toString().padStart(2, '0')}`;
+        } else if (parsed.endTime && parsed.isAllDay && !isSameDay(d, parsed.endTime)) {
+            // 跨天全天任务：日期段用与任务视图一致的 fmtMDRange（非今年自动带年份），
+            // 末端不带时刻，避免出现「11月16日 - 11月17日 00:00」这样的假时间
+            dateStr = fmtMDRange(d, parsed.endTime);
         }
         parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 accent-chip rounded text-xs"><i class="fas fa-calendar-alt"></i>${dateStr} ${timeStr}</span>`);
-        // 模糊时段词命中后冲突回绕：提示该时间点已存在任务
+        // 模糊时段词命中后冲突回绕：提示该时间点已存在任务，并写明最终落点（M4：
+        // 此前只有「时间冲突」三个字，不说改到几点、为何改，静默违背输入意图）
         if (parsed.fuzzyConflict) {
-            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 tone-soft-yellow rounded text-xs"><i class="fas fa-exclamation-circle"></i>时间冲突</span>`);
+            const _rd = parsed.startTime;
+            const _rt = _rd ? `${_rd.getHours().toString().padStart(2, '0')}:${_rd.getMinutes().toString().padStart(2, '0')}` : '';
+            const _rw = parsed.fuzzyWord ? `「${parsed.fuzzyWord}」` : '该';
+            parts.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 tone-soft-yellow rounded text-xs" title="${_rw}时段已有任务，已调整为 ${_rt}"><i class="fas fa-exclamation-circle"></i>时间冲突</span>`);
         }
     }
 
@@ -2363,11 +2776,28 @@ function renderNLPPreview(parsed) {
     const lateNightHtml = parsed.lateNightWarning
         ? `<div class="flex items-center gap-2 mb-2 tone-ink-amber-500"><i class="fas fa-exclamation-circle"></i><span class="text-sm">当前已过凌晨0点，注意任务时间设置是否符合预期。</span></div>`
         : '';
+    // 智能排程后落点偏离偏好时间（偏好已过顺延 / 冲突回绕）：整行弱提示说明最终落点（M4）
+    const _fzWord = parsed.fuzzyWord ? `「${parsed.fuzzyWord}」` : '';
+    const _fzTime = parsed.startTime ? `${parsed.startTime.getHours().toString().padStart(2, '0')}:${parsed.startTime.getMinutes().toString().padStart(2, '0')}` : '';
+    const fuzzyMovedHtml = parsed.fuzzyMoved
+        ? `<div class="flex items-center gap-2 mb-2 tone-ink-amber-500"><i class="fas fa-exclamation-circle"></i><span class="text-sm">已偏离${_fzWord}偏好时间，调整为 ${_fzTime}。</span></div>`
+        : '';
+    // 区间任务混写具体时刻：时刻已被忽略（任务按全天创建），避免用户以为时刻已生效（M2）
+    const rangeTimeHtml = parsed.rangeTimeIgnored
+        ? `<div class="flex items-center gap-2 mb-2 text-theme-muted"><i class="fas fa-calendar-alt"></i><span class="text-sm">日期区间任务已按全天创建，其中的具体时刻已忽略。</span></div>`
+        : '';
+    // 疑似日期写法解析失败（如「2月30日」）：提醒核对，避免以为日期已记下（L3）
+    const dateLikeHtml = parsed.dateLikeUnparsed
+        ? `<div class="flex items-center gap-2 mb-2 text-theme-muted"><i class="fas fa-calendar-times"></i><span class="text-sm">未能识别输入中的日期写法，请检查是否有效（如「2月30日」不存在）。</span></div>`
+        : '';
     const notesHtml = parsed.notes ? `<div class="text-xs text-theme-secondary mt-1 ml-7 truncate"><i class="fas fa-align-left mr-1"></i>${escapeHtml(parsed.notes)}</div>` : '';
 
     return `<div class="px-5 py-4">
         ${tagsHtml}
         ${lateNightHtml}
+        ${fuzzyMovedHtml}
+        ${rangeTimeHtml}
+        ${dateLikeHtml}
         <div class="flex items-center gap-2">
             <i class="fas fa-plus-circle text-green-500"></i>
             <span class="text-sm text-theme-secondary">创建任务：</span>
@@ -2409,7 +2839,7 @@ function createTaskFromNLP(parsed) {
         listId: parsed.listId,
         important: parsed.important,
         urgent: parsed.urgent,
-        notes: parsed.notes || '',
+        notes: (_cpPresetMention ? _cpPresetMention.text + (parsed.notes || '') : (parsed.notes || '')),
         tags: allTagIds,
         startTime: parsed.startTime ? parsed.startTime.toISOString() : null,
         endTime: parsed.endTime ? parsed.endTime.toISOString() : null,
@@ -2419,10 +2849,20 @@ function createTaskFromNLP(parsed) {
         completed: false,
         createdAt: new Date().toISOString(),
         mode: 'text',
+        peopleIds: [],
+        waitingForIds: [],
         subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0, startTime: null, reminders: [] }],
         progress: 0
     };
 
+    // 人员功能：自然语言可能带 @提及，创建时按正文重算派生缓存
+    if (typeof recomputeTaskPeopleIds === 'function') recomputeTaskPeopleIds(newTask);
+    // FR-10：消费预置提及——更新该联系人最近使用时间（与 @ 候选插入同口径）
+    if (_cpPresetMention) {
+        const presetPerson = (typeof getPersonById === 'function') ? getPersonById(_cpPresetMention.personId) : null;
+        if (presetPerson) presetPerson.lastUsedAt = Date.now();
+        _cpPresetMention = null;
+    }
     tasks.push(newTask);
     saveData();
     renderLists();
@@ -2615,6 +3055,19 @@ function openCommandPaletteWithSearch() {
     input.value = '/s ';
     input.focus();
     handleCommandPaletteInput({});
+}
+
+// FR-10「给 TA 新建任务」：打开建任务面板并预置描述提及（创建时并入 notes，正文即事实）
+function openCommandPaletteWithMention(personId) {
+    const person = (typeof getPersonById === 'function') ? getPersonById(personId) : null;
+    if (!person) { openCommandPalette(); return; }
+    _cpPresetMention = { personId: person.id, text: '@' + person.name + ' ' };
+    openCommandPalette();
+    const input = document.getElementById('command-palette-input');
+    if (input) {
+        input.placeholder = '准备做什么？（详情将自动带上 @' + person.name + '）';
+        input.focus();
+    }
 }
 
 document.addEventListener('keydown', function(e) {

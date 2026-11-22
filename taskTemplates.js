@@ -341,10 +341,15 @@ function createTaskFromTemplate(tpl, options) {
         createdAt: now,
         mode: mode,
         description: description,
+        peopleIds: [],
+        waitingForIds: [],
         subtasks: [],
         progress: 0,
         templateId: tpl.id
     };
+
+    // 人员功能：模板正文可能含 @提及，实例化时按正文重算派生缓存
+    if (typeof recomputeTaskPeopleIds === 'function') recomputeTaskPeopleIds(task);
 
     validSubtasks.forEach(function (s) {
         task.subtasks.push({
@@ -804,11 +809,12 @@ function _tplPickerPanelHtml() {
             '<div class="flex items-center gap-2">' +
                 // lead：搜索展开时占满剩余宽度（收起时留白，圆钮自然靠右）
                 '<div class="flex-1 min-w-0 flex items-center">' +
-                    '<div id="tpl-picker-search-wrap" class="hidden w-full min-w-0">' +
+                    '<div id="tpl-picker-search-wrap" class="hidden w-full min-w-0 relative">' +
                         '<input id="tpl-picker-search" type="text" autocomplete="off" spellcheck="false" ' +
                             'placeholder="搜索模板名称或任务标题…" ' +
-                            'oninput="onTaskTemplatePickerSearchInput(this.value)" onkeydown="onTaskTemplatePickerSearchKeydown(event)" ' +
-                            'class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                            'oninput="onTaskTemplatePickerSearchInput(this.value);_syncSearchClearBtn(this)" onkeydown="onTaskTemplatePickerSearchKeydown(event)" ' +
+                            'class="w-full px-3 py-2 pr-9 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                        '<button type="button" id="search-clear-tpl-picker-search" class="search-clear-btn hidden" title="清除搜索内容" aria-label="清除搜索内容" onmousedown="event.preventDefault()" onclick="clearTaskTemplatePickerSearch()"><i class="fas fa-xmark text-xs"></i></button>' +
                     '</div>' +
                 '</div>' +
                 // 搜索沿用回收站 / 模板管理页的 cyan-500（全站搜索入口既定色）
@@ -830,6 +836,7 @@ function _syncTaskTemplatePickerSearchUI() {
     if (input) {
         const q = _tplPickerState ? _tplPickerState.query : '';
         if (input.value !== q) input.value = q;
+        _syncSearchClearBtn(input);
     }
     if (btn) {
         btn.classList.toggle('is-on', on);
@@ -1777,11 +1784,12 @@ function renderTaskTemplatesView(container) {
             header +
             '<div id="tpl-page-scroll" class="flex-1 overflow-y-auto min-h-0 px-4 pb-6">' +
                 (searchVisible
-                    ? '<div class="my-3">' +
+                    ? '<div class="my-3 relative">' +
                           '<input id="tpl-page-search" type="text" value="' + escapeHtml(_tplPageSearchQuery) + '" ' +
                               'placeholder="搜索模板名称或任务标题…" autocomplete="off" spellcheck="false" ' +
-                              'oninput="onTaskTemplatesSearchInput(this.value)" ' +
-                              'class="w-full px-3 py-2 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                              'oninput="onTaskTemplatesSearchInput(this.value);_syncSearchClearBtn(this)" ' +
+                              'class="w-full px-3 py-2 pr-9 border-2 border-theme rounded-lg bg-theme-secondary text-theme-primary text-sm focus:outline-none focus:border-accent">' +
+                          '<button type="button" id="search-clear-tpl-page-search" class="search-clear-btn hidden" title="清除搜索内容" aria-label="清除搜索内容" onmousedown="event.preventDefault()" onclick="clearTaskTemplatesSearch()"><i class="fas fa-xmark text-xs"></i></button>' +
                       '</div>'
                     : '') +
                 '<div id="tpl-page-list"></div>' +
@@ -1794,6 +1802,7 @@ function renderTaskTemplatesView(container) {
     if (searchVisible) {
         setTimeout(function () {
             const input = document.getElementById('tpl-page-search');
+            _syncSearchClearBtn(input);
             if (input) {
                 input.focus();
                 input.setSelectionRange(input.value.length, input.value.length);
@@ -1807,13 +1816,23 @@ function _tplPageHeaderButtons(searchBtnClass) {
         '<button type="button" onclick="toggleTaskTemplatesSearch()" class="w-10 h-10 rounded-full flex items-center justify-center transition ' + searchBtnClass + '" title="' + (_tplPageSearchVisible ? '隐藏搜索' : '搜索') + '">' +
             '<i class="fas fa-search"></i>' +
         '</button>' +
-        '<button type="button" onclick="startNewTaskTemplate()" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition" title="新建模板">' +
+        (typeof groupManagerButtonHtml === 'function' ? groupManagerButtonHtml('template') : '') +
+        '<button type="button" onclick="onTplPlusClick(this)" class="w-10 h-10 rounded-full border-2 border-purple-500 text-purple-500 flex items-center justify-center hover:bg-purple-500 hover:text-white transition" title="新建模板">' +
             '<i class="fas fa-plus"></i>' +
         '</button>' +
         '<button type="button" onclick="closeTaskTemplatesView()" class="w-10 h-10 rounded-full border-2 border-slate-400 text-slate-500 flex items-center justify-center hover:bg-slate-400 hover:text-white active:bg-slate-500 active:scale-95 transition" title="返回">' +
             '<i class="fas fa-arrow-left"></i>' +
         '</button>' +
     '</div>';
+}
+
+// 标题栏「+」：若已有分组则弹选组气泡；否则直接新建（落到默认组）
+function onTplPlusClick(btn) {
+    if (typeof openGroupPick === 'function' && getGroupDefs('template').length) {
+        openGroupPick('template', btn);
+    } else {
+        startNewTaskTemplate('');
+    }
 }
 
 function toggleTaskTemplatesSearch() {
@@ -1835,6 +1854,7 @@ function clearTaskTemplatesSearch() {
         input.value = '';
         input.focus();
     }
+    _syncSearchClearBtn(input);
     _renderTaskTemplatesList();
 }
 
@@ -1883,18 +1903,61 @@ function _renderTaskTemplatesList() {
     }
 
     const label = q ? '搜索结果 · ' + filtered.length : '全部模板';
-    const rows = filtered.map(function (tpl) {
-        return _renderTaskTemplateRow(tpl, q);
-    }).join('');
-    box.innerHTML =
-        '<div class="bg-theme-secondary rounded-xl shadow-theme p-4">' +
-            '<div class="flex items-center justify-between mb-2">' +
-                '<h3 class="text-base font-semibold text-theme-primary">' + label + '</h3>' +
+
+    // 搜索态：跨组平铺（沿用原有单卡片布局，不分组）
+    if (q) {
+        const rows = filtered.map(function (tpl) {
+            return _renderTaskTemplateRow(tpl, true);
+        }).join('');
+        box.innerHTML =
+            '<div class="bg-theme-secondary rounded-xl shadow-theme p-4">' +
+                '<div class="flex items-center justify-between mb-2"><h3 class="text-base font-semibold text-theme-primary">' + label + '</h3></div>' +
+                '<div>' + rows + '</div>' +
+            '</div>';
+        _setupTaskTemplateDetailFit();
+        _flashTaskTemplateRow();
+        return;
+    }
+
+    // 非搜索态：按分组分段渲染，默认组恒置底
+    const sections = groupItems('template', all);
+    const html = sections.map(function (sec) {
+        const collapsed = !!sec.collapsed;
+        const head = '<div class="flex items-center justify-between px-1 py-2' + (sec.isDefault ? '' : ' cursor-pointer group') + '" ' +
+                (sec.isDefault ? '' : 'onclick="toggleTplGroupCollapse(\'' + sec.id + '\')" title="展开/收起分组"') + '>' +
+            '<div class="flex items-center gap-2 min-w-0">' +
+                (sec.isDefault ? '' : '<i class="fas fa-chevron-' + (collapsed ? 'right' : 'down') + ' text-xs text-theme-muted w-3 flex-shrink-0"></i>') +
+                '<i class="fas ' + (sec.isDefault ? 'fa-inbox' : 'fa-folder') + ' text-sm flex-shrink-0 ' + (sec.isDefault ? 'text-theme-muted' : 'text-teal-500') + '"></i>' +
+                '<h3 class="text-base font-semibold text-theme-primary truncate">' + escapeHtml(sec.name) + '</h3>' +
+                '<span class="text-xs text-theme-muted flex-shrink-0">' + sec.items.length + '</span>' +
             '</div>' +
-            '<div>' + rows + '</div>' +
+            (sec.isDefault ? '' :
+                '<button type="button" onclick="event.stopPropagation();openTplGroupPicker(\'' + sec.id + '\',this)" class="w-7 h-7 rounded-lg flex items-center justify-center text-theme-muted hover:bg-theme-tertiary hover:text-accent flex-shrink-0" title="新建到此分组"><i class="fas fa-plus text-xs"></i></button>') +
         '</div>';
+        const rows = sec.items.map(function (tpl) { return _renderTaskTemplateRow(tpl, false); }).join('');
+        const body = collapsed ? ''
+            : (sec.items.length
+                ? '<div class="bg-theme-secondary rounded-xl shadow-theme p-4">' + rows + '</div>'
+                : '<div class="bg-theme-secondary rounded-xl shadow-theme p-5 text-center text-xs text-theme-muted">这个分组还没有模板</div>');
+        return '<div class="mb-4" data-tpl-group="' + sec.id + '">' + head + body + '</div>';
+    }).join('');
+    box.innerHTML = html;
     _setupTaskTemplateDetailFit();
     _flashTaskTemplateRow();
+}
+
+// 分组折叠状态（会话内保存：写 settings.templateGroups[i].collapsed）
+function toggleTplGroupCollapse(groupId) {
+    const g = getGroupDefs('template').find(function (x) { return x && x.id === groupId; });
+    if (!g) return;
+    g.collapsed = !g.collapsed;
+    saveData();
+    _renderTaskTemplatesList();
+}
+
+// 分组头「+」：直接新建到该组
+function openTplGroupPicker(groupId) {
+    startNewTaskTemplate(groupId);
 }
 
 let _tplRowDeleteConfirmId = null;
@@ -1926,13 +1989,20 @@ function _renderTaskTemplateRow(tpl, searching) {
         : '';
     const listAll = getTaskTemplates();
     const idx = listAll.findIndex(function (t) { return t.id === tpl.id; });
+    const gid = (typeof normalizeGroupId === 'function') ? normalizeGroupId('template', tpl.groupId) : (tpl.groupId || '');
+    const gids = listAll.map(function (t) {
+        return (typeof normalizeGroupId === 'function') ? normalizeGroupId('template', t && t.groupId) : ((t && t.groupId) || '');
+    });
+    let prevSame = -1, nextSame = -1;
+    for (let k = idx - 1; k >= 0; k--) { if (gids[k] === gid) { prevSame = k; break; } }
+    for (let k = idx + 1; k < gids.length; k++) { if (gids[k] === gid) { nextSame = k; break; } }
     const actionBase = 'w-8 h-8 rounded-lg flex items-center justify-center transition flex-shrink-0';
     const editCls = actionBase + ' tone-outline-accent';
     const copyCls = actionBase + ' tone-outline-emerald';
     const sortCls = actionBase + ' tone-outline-sky';
     const useCls = 'px-2.5 py-1.5 text-xs rounded-lg tone-outline-purple transition flex-shrink-0';
-    const disabledUp = searching || idx <= 0;
-    const disabledDown = searching || idx === -1 || idx >= listAll.length - 1;
+    const disabledUp = searching || prevSame === -1;
+    const disabledDown = searching || nextSame === -1;
     const confirming = _tplRowDeleteConfirmId === tpl.id;
     const deleteCls = actionBase + (confirming
         ? ' tone-solid-red'
@@ -2170,13 +2240,18 @@ function _flashTaskTemplateRow() {
 }
 
 
-function startNewTaskTemplate() {
+// 新建模板时预设的分组（由标题栏「+」或分组头「+」传入；空串=默认）
+let _tplPendingNewGroupId = '';
+
+function startNewTaskTemplate(groupId) {
     if (_tplPageSearchVisible && _tplPageSearchQuery) {
         _tplPageSearchVisible = false;
         _tplPageSearchQuery = '';
         _tplPageResetScroll = true;
         renderView();
     }
+    _tplPendingNewGroupId = typeof normalizeGroupId === 'function'
+        ? normalizeGroupId('template', groupId || '') : (groupId || '');
     openTaskTemplatePanel(null);
 }
 
@@ -2375,6 +2450,10 @@ function duplicateTaskTemplate(tplId) {
         updatedAt: now,
         task: taskCopy
     };
+    if (tpl.groupId && typeof normalizeGroupId === 'function'
+        && normalizeGroupId('template', tpl.groupId)) {
+        copy.groupId = tpl.groupId; // 复制保留源分组（用户仅要求标题栏「+」选组）
+    }
     const list = getTaskTemplates();
     const index = list.findIndex(function (t) { return t.id === tplId; });
     if (index === -1) list.push(copy);
@@ -2422,8 +2501,16 @@ function deleteTaskTemplateFromPanel() {
 function moveTaskTemplate(tplId, dir) {
     const list = getTaskTemplates();
     const i = list.findIndex(function (t) { return t.id === tplId; });
-    const j = i + dir;
-    if (i === -1 || j < 0 || j >= list.length) return;
+    if (i === -1) return;
+    const gid = (typeof normalizeGroupId === 'function') ? normalizeGroupId('template', list[i].groupId) : (list[i].groupId || '');
+    // 组内相邻项的下标：跳过不属于同一组的条目
+    let j = i + dir;
+    while (j >= 0 && j < list.length) {
+        const otherGid = (typeof normalizeGroupId === 'function') ? normalizeGroupId('template', list[j].groupId) : (list[j].groupId || '');
+        if (otherGid === gid) break;
+        j += dir;
+    }
+    if (j < 0 || j >= list.length) return;
     const tmp = list[i];
     list[i] = list[j];
     list[j] = tmp;
@@ -2475,19 +2562,37 @@ function dropTaskTemplate(e, row, targetId) {
     const list = getTaskTemplates();
     const fromIndex = list.findIndex(function (t) { return t.id === fromId; });
     if (fromIndex === -1) { endTaskTemplateDrag(); return; }
-    const item = list.splice(fromIndex, 1)[0];
-    const targetIndex = list.findIndex(function (t) { return t.id === targetId; });
-    if (targetIndex === -1) {
-        list.splice(fromIndex, 0, item);
-        endTaskTemplateDrag();
-        return;
-    }
+    const item = list[fromIndex];
+    const targetTpl = list.find(function (t) { return t.id === targetId; });
+    if (!targetTpl) { endTaskTemplateDrag(); return; }
+
+    const fromGid = (typeof normalizeGroupId === 'function') ? normalizeGroupId('template', item.groupId) : (item.groupId || '');
+    const toGid = (typeof normalizeGroupId === 'function') ? normalizeGroupId('template', targetTpl.groupId) : (targetTpl.groupId || '');
+
     let after = false;
     if (row) {
         const rect = row.getBoundingClientRect();
         after = e.clientY > rect.top + rect.height / 2;
     }
-    list.splice(targetIndex + (after ? 1 : 0), 0, item);
+
+    if (fromGid !== toGid) {
+        // 跨组：改派分组并插到目标组内目标位置
+        const idx = list.findIndex(function (t) { return t.id === targetId; });
+        if (toGid) item.groupId = toGid; else delete item.groupId;
+        list.splice(fromIndex, 1);
+        const adj = list.findIndex(function (t) { return t.id === targetId; });
+        list.splice(adj + (after ? 1 : 0), 0, item);
+    } else {
+        // 同组：沿用原有顺序调整（仅落在同组项上才生效，避免落到别的组造成跨组误排）
+        list.splice(fromIndex, 1);
+        const adj = list.findIndex(function (t) { return t.id === targetId; });
+        if (adj === -1) {
+            list.splice(fromIndex, 0, item);
+        } else {
+            list.splice(adj + (after ? 1 : 0), 0, item);
+        }
+    }
+    item.updatedAt = new Date().toISOString();
     endTaskTemplateDrag();
     saveData();
     refreshTaskTemplatesUi();
@@ -3135,16 +3240,23 @@ function _tplPanelRefreshSubtasks() {
                 'onpointerdown="startTaskTemplateSubtaskHold(event, this, ' + i + ')">' +
             '<div class="flex items-center gap-2 py-1 group">' +
                 '<span class="w-4 h-4 flex items-center justify-center flex-shrink-0"><i class="fas fa-layer-group text-purple-500 text-xs"></i></span>' +
-                '<textarea rows="1" data-subtask-index="' + i + '" placeholder="输入子任务..." ' +
-                    'class="tpl-subtask-input flex-1 bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" ' +
-                    'onkeydown="handleTaskTemplateSubtaskKeydown(event, ' + i + ')" ' +
-                    'oninput="onTaskTemplateSubtaskInput(this, ' + i + ')">' + escapeHtml(st.text || '') + '</textarea>' +
+                '<div class="flex-1 relative min-w-0 subtask-md-wrap">' +
+                    '<textarea rows="1" data-subtask-index="' + i + '" placeholder="输入子任务..." ' +
+                        'class="tpl-subtask-input w-full block bg-transparent border-none outline-none text-theme-primary resize-none overflow-hidden" ' +
+                        'onkeydown="handleTaskTemplateSubtaskKeydown(event, ' + i + ')" ' +
+                        'oninput="onTaskTemplateSubtaskInput(this, ' + i + ')" ' +
+                        'onfocus="_tplSubtaskMdState(this, true)" ' +
+                        'onblur="_tplSubtaskMdState(this, false)">' + escapeHtml(st.text || '') + '</textarea>' +
+                    '<div class="subtask-md-overlay hidden"></div>' +
+                '</div>' +
                 '<button type="button" class="tpl-subtask-delete" onclick="removeTaskTemplatePanelSubtask(' + i + ')" title="删除"><i class="fas fa-trash-alt text-xs"></i></button>' +
             '</div>' +
         '</div>';
     }).join('');
     box.querySelectorAll('textarea').forEach(function (ta) {
         _tplPanelAutoResizeSubtask(ta);
+        // 初始渲染态：未聚焦 → 显示行内 Markdown 渲染结果（与详情面板同一方案A）
+        _tplSubtaskMdState(ta, false);
     });
     _tplPanelUpdateNotesPlaceholder();
 }
@@ -3237,6 +3349,7 @@ function openTaskTemplatePanel(tplId, force) {
     _tplPanelState = {
         mode: tpl ? 'edit' : 'create',
         tplId: tpl ? tpl.id : null,
+        groupId: tpl ? (typeof normalizeGroupId === 'function' ? normalizeGroupId('template', tpl.groupId) : (tpl.groupId || '')) : (_tplPendingNewGroupId || ''),
         draft: _tplPanelBuildDraft(tpl),
         originalRepeat: originalRepeat,
         rangeMode: !!(tpl && tpl.task && _templateNormalizeSuggestedTime(tpl.task.suggestedEndTime)),
@@ -3451,9 +3564,12 @@ function _tplPanelPersist(options) {
         }
         tpl.name = name;
         tpl.task = task;
+        if (state.groupId) tpl.groupId = state.groupId;
+        else delete tpl.groupId;
         tpl.updatedAt = now;
     } else {
         tpl = { id: _templateId(), name: name, createdAt: now, updatedAt: now, task: task };
+        if (state.groupId) tpl.groupId = state.groupId;
         getTaskTemplates().push(tpl);
         state.tplId = tpl.id;
         state.mode = 'edit';
@@ -3733,6 +3849,26 @@ function onTaskTemplateSubtaskInput(el, index) {
     _tplPanelAutoResizeSubtask(el);
     _tplPanelUpdateNotesPlaceholder();
     _tplPanelScheduleAutoSave();
+}
+
+// 模板面板子任务行的行内 Markdown 渲染态切换（与详情面板 _updateSubtaskMdState 同一方案A）：
+// 失焦显示 mdInlineSubtask 渲染结果并隐去源码，聚焦还原源码编辑。
+// Markdown 关闭、或文本为空时退化为普通 textarea，覆盖层保持隐藏。
+function _tplSubtaskMdState(input, focused) {
+    const wrap = input.parentElement;
+    const overlay = wrap && wrap.querySelector('.subtask-md-overlay');
+    if (!overlay) return;
+    const mdOn = (typeof _mdIsMarkdownOn === 'function') ? _mdIsMarkdownOn() : false;
+    if (focused || !mdOn || !(input.value || '').trim()) {
+        overlay.classList.add('hidden');
+        input.classList.remove('subtask-md-source');
+        return;
+    }
+    overlay.innerHTML = (typeof mdInlineSubtask === 'function')
+        ? mdInlineSubtask(input.value)
+        : escapeHtml(input.value);
+    overlay.classList.remove('hidden');
+    input.classList.add('subtask-md-source');
 }
 
 function _tplPanelFocusSubtask(index, caret) {
@@ -4308,6 +4444,15 @@ function _migrateTaskTemplatesPresets() {
 
 function seedTaskTemplatesIfNeeded() {
     let changed = false;
+    // 分组：清理悬空 groupId（指向已删除的分组），回落默认；缺省即默认无需迁移
+    if (typeof normalizeGroupId === 'function') {
+        getTaskTemplates().forEach(function (tpl) {
+            if (tpl && tpl.groupId) {
+                const g = getGroupDefs('template').some(function (x) { return x && x.id === tpl.groupId; });
+                if (!g) { delete tpl.groupId; changed = true; }
+            }
+        });
+    }
     const presetVersion = parseInt(settings.taskTemplatesPresetVersion, 10) || 0;
 
     if (getTaskTemplates().length === 0 && !settings.taskTemplatesSeeded) {

@@ -391,6 +391,8 @@ function _getWeekAggSig() {
         (currentTagIds || []).join(','),
         currentFilter || '',
         currentFilterId || '',
+        currentPersonId || '',
+        currentWaitingFilter ? '1' : '',
         settings.weekStart === 'monday' ? 'mon' : 'sun',
         getWeekConfig().showCompleted !== false ? '1' : '0',
         (typeof isRecurringFutureEnabled === 'function' && isRecurringFutureEnabled('week')) ? '1' : '0',
@@ -1154,6 +1156,8 @@ function handleWeekGridClick(event, dateStr) {
         completed: false,
         createdAt: new Date().toISOString(),
         mode: 'text',
+        peopleIds: [],
+        waitingForIds: [],
         subtasks: [{ id: generateId(), text: '', completed: false, originalOrder: 0, startTime: null, reminders: [] }],
         progress: 0
     };

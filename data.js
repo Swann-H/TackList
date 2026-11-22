@@ -9,6 +9,7 @@ let _savePutQueued = false; // PUT 在途期间又有新保存请求，待其完
 let _savePutQueuedWaiters = []; // 等待排队重发完成的回调（saveDataImmediate 依赖完成时机）
 let _forceNextRefreshRender = false; // 冲突合并后强制下次刷新重渲染，绕过版本号检测
 let _recurringFutureMigrationDirty = false; // 升级迁移删掉了旧配置字段，需写盘落定
+let _peopleMigrationDirty = false; // 人员功能：加载时重算 peopleIds 有变化，需写盘落定
 
 // ==================== IndexedDB 冗余缓存 ====================
 const IDB_NAME = 'tacklistBackup';
@@ -1024,6 +1025,19 @@ const DEFAULT_SETTINGS = {
     holidayApiUrl: '',
     tags: [],
     filters: [],
+    people: [],
+    // 任务模板分组定义（[{id,name}]，数组顺序即显示顺序；groupId 存于 tpl 顶层）
+    templateGroups: [],
+    // 联系人分组定义（[{id,name}]，数组顺序即显示顺序；groupId 存于 person 顶层）
+    peopleGroups: [],
+    // 联系人分组依据：custom | initial | created | lastUsed（默认 custom，旧数据零变化）
+    peopleGroupMode: 'custom',
+    // 自动分组段的折叠状态：{ 'initial:A': true, 'created:2026-11': true, ... }
+    peopleGroupCollapsed: {},
+    // 联系人字段模板：新建联系人时按此顺序预置项目行（[{id,label,builtin?}]，builtin = email | phone | title | company）
+    peopleFieldTemplate: [],
+    // 联系人页底「使用说明」提示条是否隐藏（true = 已点「不再显示」；重开入口在联系人配置面板底部）
+    peopleHelpHidden: false,
     countdowns: [],
     pinnedCountdowns: [],
     // 看板视图配置：分组依据 / 排序依据 / 排序方式 / 是否展开详情 / 标签二级分组
@@ -1138,6 +1152,227 @@ function applySettings(parsed) {
         });
         settings.sidebarItems = out;
     })();
+    // 人员功能（一期）：settings.people 字段补齐与脏数据归一（去重 id / 归一化重名）
+    (function migratePeople() {
+        if (!Array.isArray(settings.people)) settings.people = [];
+        const seenIds = {};
+        const seenNames = {};
+        const now = Date.now();
+        settings.people = settings.people.filter(function (p) {
+            if (!p || typeof p !== 'object' || !p.id || !String(p.name || '').trim()) return false;
+            if (seenIds[p.id]) return false;
+            const key = normalizePersonName(p.name);
+            if (seenNames[key]) return false;
+            seenIds[p.id] = true;
+            seenNames[key] = true;
+            return true;
+        }).map(function (p) {
+            p.name = String(p.name).trim();
+            if (typeof p.email !== 'string') p.email = '';
+            if (typeof p.deviceAccount !== 'string') p.deviceAccount = '';
+            if (typeof p.note !== 'string') p.note = '';
+            if (typeof p.jobTitle !== 'string') p.jobTitle = '';
+            if (typeof p.company !== 'string') p.company = '';
+            // 电话号码可多条：去空、去重、限量
+            const rawPhones = Array.isArray(p.phones) ? p.phones : [];
+            const cleanPhones = [];
+            rawPhones.forEach(function (v) {
+                const phone = String(v == null ? '' : v).trim().slice(0, 60);
+                if (phone && cleanPhones.indexOf(phone) === -1) cleanPhones.push(phone);
+            });
+            p.phones = cleanPhones.slice(0, 10);
+            // 头像：优先认服务端文件 URL（/api/people-avatar/<id>?v=时间戳）；
+            // 兼容早期把压缩图内联进 data.json 的 base64 值（渲染可用，下次编辑保存时改存文件）
+            const _av = typeof p.avatar === 'string' ? p.avatar : '';
+            const _avFile = /^\/api\/people-avatar\/[A-Za-z0-9_-]+(\?[^"']*)?$/.test(_av);
+            const _avData = /^data:image\/(jpeg|png|webp);base64,/.test(_av) && _av.length <= 300000;
+            p.avatar = (_avFile || _avData) ? _av : '';
+            // 自定义信息项（项目名称 + 内容）：字符串化、去空行、限制条数，label 与 value 均需非空
+            const rawCustom = Array.isArray(p.customFields) ? p.customFields : [];
+            p.customFields = rawCustom.map(function (f) {
+                if (!f || typeof f !== 'object') return null;
+                const label = String(f.label == null ? '' : f.label).trim().slice(0, 24);
+                const value = String(f.value == null ? '' : f.value).trim().slice(0, 500);
+                if (!label || !value) return null;
+                return { label: label, value: value };
+            }).filter(Boolean).slice(0, 20);
+            // 别名归一：字符串数组、去空白/去重；与他人正名或别名（含本人正名）冲突的丢弃
+            const rawAliases = Array.isArray(p.aliases) ? p.aliases : [];
+            const cleanAliases = [];
+            rawAliases.forEach(function (a) {
+                const v = String(a == null ? '' : a).trim();
+                if (!v) return;
+                const key = normalizePersonName(v);
+                if (!key || key === normalizePersonName(p.name) || seenNames[key]) return;
+                seenNames[key] = true;
+                cleanAliases.push(v);
+            });
+            p.aliases = cleanAliases;
+            // 内置项目升级：历史以自定义项记录的「职位 / 公司 / 电话」收敛到内置字段，避免出现重复行
+            (function mergeCustomIntoBuiltin() {
+                const remains = [];
+                p.customFields.forEach(function (f) {
+                    if (f.label === '职位' && !p.jobTitle) { p.jobTitle = f.value; return; }
+                    if ((f.label === '所属公司' || f.label === '公司') && !p.company) { p.company = f.value; return; }
+                    const phoneLike = ['电话', '手机', '手机号', '电话号码', '座机'].indexOf(f.label) !== -1;
+                    if (phoneLike && p.phones.length < 10 && p.phones.indexOf(f.value) === -1) { p.phones.push(f.value); return; }
+                    remains.push(f);
+                });
+                p.customFields = remains;
+            })();
+            // 「设备账号」已下线：存量值转为自定义信息项，保留可见与可编辑
+            const legacyAccount = String(p.deviceAccount || '').trim();
+            if (legacyAccount) {
+                const dup = p.customFields.some(function (f) {
+                    return f.label === '设备账号' && f.value === legacyAccount;
+                });
+                if (!dup && p.customFields.length < 20) {
+                    p.customFields.push({ label: '设备账号', value: legacyAccount.slice(0, 500) });
+                }
+                p.deviceAccount = '';
+            }
+            // FR-11 生日与倒计时联动：生日仅接受 YYYY-MM-DD / MM-DD（公历）；失效倒计时引用统一过滤
+            const rawBirthday = typeof p.birthday === 'string' ? p.birthday.trim() : '';
+            p.birthday = (rawBirthday && typeof normalizePersonBirthday === 'function')
+                ? (normalizePersonBirthday(rawBirthday) || '') : '';
+            if (typeof p.countdownId !== 'string') p.countdownId = '';
+            if (p.countdownId && !(settings.countdowns || []).some(function (c) { return c && c.id === p.countdownId; })) {
+                p.countdownId = '';
+            }
+            p.archived = p.archived === true;
+            if (typeof p.lastUsedAt !== 'number') p.lastUsedAt = 0;
+            if (typeof p.createdAt !== 'number') p.createdAt = now;
+            if (typeof p.updatedAt !== 'number') p.updatedAt = p.createdAt;
+            if (typeof p.pinyinAlias !== 'string') p.pinyinAlias = '';
+            return p;
+        });
+    })();
+    // 系统托管全拼别名：为存量联系人按创建顺序补齐（幂等；已有全拼保留以稳定编号）。
+    // 全拼与正名/别名一样默认可提及；重名追加数字后缀。补齐后清理与「他人全拼」冲突的手动别名。
+    (function backfillPeoplePinyin() {
+        if (typeof getPersonFullPinyin !== 'function' || typeof generatePersonPinyinAlias !== 'function') return;
+        const people = settings.people || [];
+        if (!people.length) return;
+        let dirty = false;
+        const assigned = {}; // 本轮已生成的全拼键（含存量），供后续去重
+        people.forEach(function (p) { if (p.pinyinAlias) assigned[normalizePersonName(p.pinyinAlias)] = true; });
+        const ordered = people.slice().sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+        ordered.forEach(function (p) {
+            if (p.pinyinAlias) return; // 存量全拼保留，编号稳定
+            // 占用名 = 其余联系人的全部可提及名 + 已生成全拼（排除自身，自己的别名不应逼迫全拼加后缀）
+            const taken = {};
+            people.forEach(function (q) {
+                if (q === p) return;
+                getPersonAllNames(q).forEach(function (n) { taken[normalizePersonName(n)] = true; });
+            });
+            Object.keys(assigned).forEach(function (k) { taken[k] = true; });
+            const alias = generatePersonPinyinAlias(p.name, taken);
+            if (!alias) return;
+            p.pinyinAlias = alias;
+            assigned[normalizePersonName(alias)] = true;
+            // 与本人全拼重复的手动别名收敛掉（全拼系统托管，避免重复存储）
+            const before = p.aliases.length;
+            p.aliases = p.aliases.filter(function (a) { return normalizePersonName(a) !== normalizePersonName(alias); });
+            if (p.aliases.length !== before) dirty = true;
+            dirty = true;
+        });
+        // 手动别名若与他人系统全拼冲突则丢弃（全拼系统托管优先）
+        people.forEach(function (p) {
+            const before = p.aliases.length;
+            p.aliases = p.aliases.filter(function (a) {
+                const k = normalizePersonName(a);
+                return !people.some(function (q) { return q !== p && q.pinyinAlias && normalizePersonName(q.pinyinAlias) === k; });
+            });
+            if (p.aliases.length !== before) dirty = true;
+        });
+        if (dirty) _peopleMigrationDirty = true;
+    })();
+    // 联系人字段模板：新建联系人时按顺序预置的项目行（含内置 邮箱/设备账号），去空/去重/限量
+    (function migratePeopleFieldTemplate() {
+        const BUILTIN_LABELS = { email: '邮箱', phone: '电话号码', title: '职位', company: '所属公司', staffNo: '工号', birthday: '生日' };
+        const raw = Array.isArray(settings.peopleFieldTemplate) ? settings.peopleFieldTemplate : [];
+        const seen = {};
+        const seenBuiltin = {};
+        const out = [];
+        raw.forEach(function (f) {
+            const obj = (f && typeof f === 'object') ? f : null;
+            const rawBuiltin = (obj && typeof obj.builtin === 'string') ? obj.builtin : '';
+            // 未知的内置项（如已下线的 account）直接丢弃，不降级成同名自定义项
+            if (rawBuiltin && !Object.prototype.hasOwnProperty.call(BUILTIN_LABELS, rawBuiltin)) return;
+            const builtin = rawBuiltin;
+            let label = String(obj ? (obj.label == null ? '' : obj.label) : (f == null ? '' : f)).trim().slice(0, 24);
+            if (builtin) {
+                if (seenBuiltin[builtin]) return; // 同一内置项只保留一条
+                seenBuiltin[builtin] = true;
+                label = BUILTIN_LABELS[builtin];  // 内置项名称固定，忽略历史脏值
+            }
+            if (!label) return;
+            const key = label.toLowerCase();
+            if (seen[key]) return;
+            seen[key] = true;
+            const id = (obj && typeof obj.id === 'string' && obj.id) ? obj.id : ('pf_' + out.length + '_' + Date.now().toString(36));
+            const item = { id: id, label: label };
+            if (builtin) item.builtin = builtin;
+            out.push(item);
+        });
+        settings.peopleFieldTemplate = out.slice(0, 20);
+    })();
+    // 分组定义（任务模板 / 联系人）：id 去重、组名去空去重（大小写不敏感去空格）、限量；
+    // 悬空的 groupId 在读取时由 groups.js:normalizeGroupId 回落默认，这里顺带清理联系人（模板在 seed 阶段清理）。
+    (function migrateGroups() {
+        const clean = function (raw) {
+            if (!Array.isArray(raw)) return [];
+            const seenId = {};
+            const seenName = {};
+            const now = Date.now();
+            return raw.map(function (g, i) {
+                if (!g || typeof g !== 'object' || !g.id) return null;
+                const id = String(g.id).trim();
+                const key = String(g.name == null ? '' : g.name).replace(/\s+/g, '').toLowerCase();
+                if (!key || key === '默认' || seenId[id] || seenName[key]) return null;
+                seenId[id] = true;
+                seenName[key] = true;
+                const item = { id: id, name: String(g.name).trim().slice(0, 20) };
+                if (g.collapsed === true) item.collapsed = true;
+                return item;
+            }).filter(Boolean).slice(0, 50);
+        };
+        settings.templateGroups = clean(settings.templateGroups);
+        settings.peopleGroups = clean(settings.peopleGroups);
+        const validPeople = {};
+        settings.peopleGroups.forEach(function (g) { validPeople[g.id] = true; });
+        (settings.people || []).forEach(function (p) {
+            if (p && p.groupId && !validPeople[p.groupId]) delete p.groupId;
+        });
+    })();
+    // 联系人分组依据：固定枚举，非法值回落 custom；自动段折叠状态按「模式:桶键」白名单保留
+    (function migratePeopleGroupMode() {
+        const MODES = ['custom', 'initial', 'created', 'lastUsed'];
+        if (MODES.indexOf(settings.peopleGroupMode) === -1) settings.peopleGroupMode = 'custom';
+        const raw = settings.peopleGroupCollapsed;
+        const clean = {};
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            Object.keys(raw).forEach(function (k) {
+                if (/^(initial|created|lastUsed):/.test(k) && raw[k] === true) clean[k] = true;
+            });
+        }
+        settings.peopleGroupCollapsed = clean;
+    })();
+    // peopleIds 为派生缓存（正文即事实）：加载时按正文重算，修复缺失/陈旧值（幂等）。
+    // tasks 在 loadData 各分支中先于 applySettings 赋值；设置导入路径同样适用。
+    if (typeof tasks !== 'undefined' && Array.isArray(tasks) && typeof recomputeTaskPeopleIds === 'function') {
+        tasks.forEach(function (t) {
+            // FR-08 waitingForIds：补齐 + 去重；子集裁剪由 recomputeTaskPeopleIds 统一完成
+            const rawW = Array.isArray(t.waitingForIds) ? t.waitingForIds : [];
+            const cleanW = [];
+            rawW.forEach(function (id) { if (typeof id === 'string' && cleanW.indexOf(id) === -1) cleanW.push(id); });
+            if (!Array.isArray(t.waitingForIds) || cleanW.length !== rawW.length) {
+                t.waitingForIds = cleanW;
+                _peopleMigrationDirty = true;
+            }
+            if (recomputeTaskPeopleIds(t)) _peopleMigrationDirty = true;
+        });
+    }
     // 迁移：视图自定义 viewOrder / defaultHomeView
     if (!Array.isArray(settings.viewOrder) || settings.viewOrder.length === 0) {
         settings.viewOrder = [
@@ -1397,6 +1632,10 @@ async function loadData() {
         _recurringFutureMigrationDirty = false;
         saveData();
     }
+    if (_peopleMigrationDirty) {
+        _peopleMigrationDirty = false;
+        saveData();
+    }
 
     if (!_initialLoadDone) {
         // 首次加载：清理上次会话残留的空任务（不关详情面板直接刷新/关页面会留下空白卡片）。
@@ -1419,6 +1658,23 @@ async function loadData() {
             currentFilter = fs.currentFilter || null;
             currentTagIds = fs.currentTagIds || [];
             currentFilterId = fs.currentFilterId || null;
+            // 人员快捷筛选：与清单/标签/过滤器互斥；成员已删除则丢弃
+            currentPersonId = (fs.currentPersonId && getPersonById(fs.currentPersonId)) ? fs.currentPersonId : null;
+            if (currentPersonId) {
+                currentListId = null;
+                currentFilter = null;
+                currentTagIds = [];
+                currentFilterId = null;
+            }
+            // 「我在等谁」快捷筛选（FR-08）：与联系人快捷筛选互斥
+            currentWaitingFilter = fs.currentWaitingFilter === true;
+            if (currentWaitingFilter) {
+                currentPersonId = null;
+                currentListId = null;
+                currentFilter = null;
+                currentTagIds = [];
+                currentFilterId = null;
+            }
             // 互斥归一化兜底：清单 / 标签 / 自定义过滤器 是单选关系，但旧版本 selectList()
             // 未清标签，可能已把「清单+标签」的非法组合持久化下来。恢复时若选中了清单，
             // 则丢弃标签与过滤器；否则 filterTasks 会按 AND 求交集 → 右侧空白且高亮错位。

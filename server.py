@@ -86,6 +86,21 @@ def attachment_find_file(task_id, file_id):
     return None
 
 
+# 联系人头像：attachments/people_avatars/<personId>.jpg
+# 与任务附件同根目录，备份/导出 zip 的「attachments/<目录>/<文件>」遍历口径无需改动；
+# 用单独一层目录而不是 <personId>/ 子目录，避免与任务附件目录语义混淆。
+# 二进制不进 data.json：settings.people[].avatar 只存带版本参数的 URL。
+PEOPLE_AVATAR_DIR = os.path.join(ATTACHMENT_DIR, 'people_avatars')
+PEOPLE_AVATAR_MAX_BYTES = 512 * 1024
+
+
+def people_avatar_path(person_id):
+    safe = attachment_safe_id(person_id)
+    if not safe:
+        return None
+    return os.path.join(PEOPLE_AVATAR_DIR, safe + '.jpg')
+
+
 DEFAULT_DATA = {
     "taskLists": [{"id": "default", "name": "默认", "color": "#3b82f6"}],
     "tasks": [],
@@ -3245,6 +3260,30 @@ class TodoHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # 联系人头像读取：/api/people-avatar/<personId>
+        # 客户端 URL 带 ?v=<上传时间> 破缓存，故可长缓存；文件缺失一律 404（前端回退到首字占位）
+        if path.startswith('/api/people-avatar/'):
+            person_id = attachment_safe_id(urllib.parse.unquote(path[len('/api/people-avatar/'):]))
+            fp = people_avatar_path(person_id) if person_id else None
+            if not fp or not os.path.isfile(fp):
+                self.send_error_json("Avatar not found", 404)
+                return
+            try:
+                with open(fp, 'rb') as f:
+                    body = f.read()
+            except OSError:
+                self.send_error_json("Read avatar failed", 500)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'private, max-age=31536000, immutable')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # 任务附件读取（FR-06）：/api/attachments/<taskId>/<fileId>
         # 图片 inline 展示（Markdown 插图需要），其余一律 attachment 下载 + nosniff，杜绝内联执行
         if path.startswith('/api/attachments/'):
@@ -3632,6 +3671,21 @@ class TodoHandler(BaseHTTPRequestHandler):
                     shutil.rmtree(ATTACHMENT_DIR, ignore_errors=True)
                 self.send_json_response({'success': True})
                 return
+            if path.startswith('/api/people-avatar/'):
+                person_id = attachment_safe_id(urllib.parse.unquote(path[len('/api/people-avatar/'):]))
+                if not person_id:
+                    self.send_error_json("Missing personId", 400)
+                    return
+                fp = people_avatar_path(person_id)
+                if fp and os.path.isfile(fp):
+                    try:
+                        os.remove(fp)
+                    except OSError as e:
+                        self.send_error_json("Delete avatar failed: %s" % str(e), 500)
+                        return
+                self.send_json_response({'success': True})
+                return
+
             if path.startswith('/api/attachments/task/'):
                 task_id = attachment_safe_id(urllib.parse.unquote(path[len('/api/attachments/task/'):]))
                 if not task_id:
@@ -3683,6 +3737,55 @@ class TodoHandler(BaseHTTPRequestHandler):
         try:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
+
+            # 联系人头像上传：POST /api/people-avatar/<personId>
+            # 裸 JPEG 字节体（客户端已用 canvas 压到 128×128 / q0.82），
+            # 落盘 attachments/people_avatars/<personId>.jpg，data.json 里只留 URL。
+            if path.startswith('/api/people-avatar/'):
+                person_id = attachment_safe_id(urllib.parse.unquote(path[len('/api/people-avatar/'):]))
+                if not person_id:
+                    self.send_error_json("Missing personId", 400)
+                    return
+                try:
+                    content_length = int(self.headers.get('Content-Length', 0))
+                except ValueError:
+                    content_length = 0
+                if content_length <= 0:
+                    self.send_error_json("Empty body", 400)
+                    return
+                if content_length > PEOPLE_AVATAR_MAX_BYTES:
+                    self.send_error_json("Avatar too large (max 512KB)", 413)
+                    return
+                mime = (self.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+                if mime != 'image/jpeg':
+                    self.send_error_json("Avatar must be image/jpeg", 415)
+                    return
+                body = self.rfile.read(content_length)
+                if len(body) != content_length or body[:2] != b'\xff\xd8':
+                    self.send_error_json("Invalid image body", 400)
+                    return
+                fp = people_avatar_path(person_id)
+                tmp = fp + '.tmp'
+                try:
+                    os.makedirs(PEOPLE_AVATAR_DIR, exist_ok=True)
+                    with open(tmp, 'wb') as f:
+                        f.write(body)
+                    os.replace(tmp, fp)
+                except OSError as e:
+                    try:
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
+                    except OSError:
+                        pass
+                    self.send_error_json("Write avatar failed: %s" % str(e), 500)
+                    return
+                self.send_json_response({
+                    'ok': True,
+                    'url': '/api/people-avatar/' + person_id,
+                    'version': int(time.time() * 1000),
+                    'size': len(body)
+                })
+                return
 
             # 任务附件上传（FR-06）：POST /api/attachments/upload?taskId=xxx&name=<urlencoded>
             # 直接用裸字节体上传（请求体即文件内容），不走 multipart：

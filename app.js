@@ -15,6 +15,8 @@ async function init() {
     renderTags();
     renderFilters();
     renderView();
+    // 标签胶囊自适应：首次渲染后启动容器尺寸监听与新增行监听
+    if (typeof _initAutoTags === 'function') _initAutoTags();
     updateViewButtons();
     updateSidebarHighlight();
     setupDetailPanelCloseHandler();
@@ -483,6 +485,7 @@ const SIDEBAR_ITEM_SETTING_IDS = {
     recent7days: 'settings-sidebar-recent7days',
     summary: 'settings-sidebar-summary',
     tags: 'settings-sidebar-tags',
+    people: 'settings-sidebar-people',
     filters: 'settings-sidebar-filters',
     trash: 'settings-sidebar-trash'
 };
@@ -596,13 +599,16 @@ function openFuzzyTimePicker(inputEl, pickerId, wordKey) {
     hint.style.cursor = 'default';
     picker.appendChild(hint);
 
-    // 区间内 15 分钟间隔的选项（区间边界均为 15 分钟整倍数，直接按区间裁剪）
+    // 区间内按「任务时间粒度」间隔的选项（settings.commandTimePrefs.timeGranularity，1-120，默认 30；
+    // 此前固定 15 分钟，与粒度设置概念冲突，用户改粒度后会以为没生效）。
     // ⚠️ 右端点 1440（24:00）只是文案边界：<input type="time"> 不接受 24:00，
     //    故选项生成封顶到 1439（晚上区间末项为 23:45）。
-    const startSlot = Math.ceil(cfg.min / 15) * 15;
+    // 步长以区间下限为基准推进（而非向上对齐），保证当前偏好值本身始终是可选槽点。
+    const _gran = (settings.commandTimePrefs && typeof settings.commandTimePrefs.timeGranularity === 'number')
+        ? Math.max(1, Math.min(120, settings.commandTimePrefs.timeGranularity)) : 30;
     const lastSlot = Math.min(cfg.max, 1439);
     const currentValue = inputEl.value;
-    for (let s = startSlot; s <= lastSlot; s += 15) {
+    for (let s = cfg.min; s <= lastSlot; s += _gran) {
         const timeStr = toTime(s);
         const item = document.createElement('div');
         item.className = 'px-3 py-1.5 text-sm cursor-pointer text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition';
